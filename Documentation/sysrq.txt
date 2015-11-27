@@ -63,6 +63,8 @@ On all -  write a character to /proc/sysrq-trigger.  e.g.:
 
 *  What are the 'command' keys?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+'a'	- Used by Jeff Merkey's Kernel Debugger (mdb).
+
 'b'     - Will immediately reboot the system without syncing or unmounting
           your disks.
 

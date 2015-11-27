@@ -2473,6 +2473,9 @@ int vt_kmsg_redirect(int new)
 	else
 		return kmsg_con;
 }
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(vt_kmsg_redirect);
+#endif
 
 /*
  *	Console on virtual terminal

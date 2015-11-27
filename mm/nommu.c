@@ -753,6 +753,9 @@ static int validate_mmap_request(struct file *file,
 	*_capabilities = capabilities;
 	return 0;
 }
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(find_extend_vma);
+#endif
 
 /*
  * we've determined that we can make the mapping, now translate what we

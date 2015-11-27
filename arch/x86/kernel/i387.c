@@ -127,8 +127,13 @@ int init_fpu(struct task_struct *tsk)
 	 * Memory allocation at the first usage of the FPU and other state.
 	 */
 	if (!tsk->thread.xstate) {
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+		tsk->thread.xstate = kmem_cache_alloc(task_xstate_cachep,
+						      GFP_DMA);
+#else
 		tsk->thread.xstate = kmem_cache_alloc(task_xstate_cachep,
 						      GFP_KERNEL);
+#endif
 		if (!tsk->thread.xstate)
 			return -ENOMEM;
 	}

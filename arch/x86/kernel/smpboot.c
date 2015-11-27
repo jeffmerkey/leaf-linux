@@ -73,6 +73,12 @@ u8 apicid_2_node[MAX_APICID];
 static int low_mappings;
 #endif
 
+#ifdef CONFIG_X86_64
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(genapic);
+#endif
+#endif
+
 /* State of each CPU */
 DEFINE_PER_CPU(int, cpu_state) = { 0 };
 

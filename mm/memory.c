@@ -1347,6 +1347,9 @@ out_unlock:
 out:
 	return retval;
 }
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(follow_page);
+#endif
 
 /**
  * vm_insert_page - insert single page into user vma

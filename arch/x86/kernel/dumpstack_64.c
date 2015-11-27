@@ -31,8 +31,13 @@ void printk_address(unsigned long address, int reliable)
 			reliable ? "" : "? ", (void *) address);
 }
 
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+unsigned long *in_exception_stack(unsigned cpu, unsigned long stack,
+					 unsigned *usedp, char **idp)
+#else
 static unsigned long *in_exception_stack(unsigned cpu, unsigned long stack,
-					unsigned *usedp, char **idp)
+ 					 unsigned *usedp, char **idp)
+#endif
 {
 	static char ids[][8] = {
 		[DEBUG_STACK - 1] = "#DB",
@@ -157,6 +162,16 @@ print_context_stack(struct thread_info *tinfo,
 	}
 	return bp;
 }
+
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+unsigned long *get_irq_stack_end(const unsigned cpu)
+{
+     return (unsigned long *)cpu_pda(cpu)->irqstackptr;
+}
+
+EXPORT_SYMBOL(get_irq_stack_end);
+EXPORT_SYMBOL(in_exception_stack);
+#endif
 
 void dump_trace(struct task_struct *task, struct pt_regs *regs,
 		unsigned long *stack, unsigned long bp,

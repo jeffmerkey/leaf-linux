@@ -480,6 +480,7 @@ static void native_machine_power_off(void)
 		pm_power_off();
 	}
 }
+EXPORT_SYMBOL_GPL(machine_emergency_restart);
 
 struct machine_ops machine_ops = {
 	.power_off = native_machine_power_off,

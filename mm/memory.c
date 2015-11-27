@@ -1363,6 +1363,9 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 	} while (nr_pages);
 	return i;
 }
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(follow_page);
+#endif
 
 /**
  * get_user_pages() - pin user pages in memory

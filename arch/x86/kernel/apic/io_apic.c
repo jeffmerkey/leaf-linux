@@ -86,6 +86,8 @@ int nr_ioapic_registers[MAX_IO_APICS];
 struct mpc_ioapic mp_ioapics[MAX_IO_APICS];
 int nr_ioapics;
 
+EXPORT_SYMBOL(nr_ioapics);
+
 /* IO APIC gsi routing info */
 struct mp_ioapic_gsi  mp_gsi_routing[MAX_IO_APICS];
 
@@ -367,12 +369,13 @@ static inline void io_apic_eoi(unsigned int apic, unsigned int vector)
 	writel(vector, &io_apic->eoi);
 }
 
-static inline unsigned int io_apic_read(unsigned int apic, unsigned int reg)
+unsigned int io_apic_read(unsigned int apic, unsigned int reg)
 {
 	struct io_apic __iomem *io_apic = io_apic_base(apic);
 	writel(reg, &io_apic->index);
 	return readl(&io_apic->data);
 }
+EXPORT_SYMBOL(io_apic_read);
 
 static inline void io_apic_write(unsigned int apic, unsigned int reg, unsigned int value)
 {

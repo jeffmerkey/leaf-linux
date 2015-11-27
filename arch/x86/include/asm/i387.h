@@ -484,7 +484,11 @@ static inline int fpu_alloc(struct fpu *fpu)
 {
 	if (fpu_allocated(fpu))
 		return 0;
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+	fpu->state = kmem_cache_alloc(task_xstate_cachep, GFP_DMA);
+#else
 	fpu->state = kmem_cache_alloc(task_xstate_cachep, GFP_KERNEL);
+#endif
 	if (!fpu->state)
 		return -ENOMEM;
 	WARN_ON((unsigned long)fpu->state & 15);

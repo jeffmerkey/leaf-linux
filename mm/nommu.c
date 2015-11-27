@@ -764,6 +764,9 @@ struct vm_area_struct *find_extend_vma(struct mm_struct *mm, unsigned long addr)
 {
 	return find_vma(mm, addr);
 }
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(find_extend_vma);
+#endif
 
 /*
  * expand a stack to a given address

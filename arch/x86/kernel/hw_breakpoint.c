@@ -422,6 +422,12 @@ EXPORT_SYMBOL_GPL(hw_breakpoint_restore);
  * NOTIFY_STOP returned for all other cases
  *
  */
+
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+int disable_hw_bp_interface = 0;
+EXPORT_SYMBOL(disable_hw_bp_interface);
+#endif
+
 static int __kprobes hw_breakpoint_handler(struct die_args *args)
 {
 	int i, cpu, rc = NOTIFY_STOP;
@@ -436,6 +442,12 @@ static int __kprobes hw_breakpoint_handler(struct die_args *args)
 	/* Do an early return if no trap bits are set in DR6 */
 	if ((dr6 & DR_TRAP_BITS) == 0)
 		return NOTIFY_DONE;
+
+        // if MDB is loaded turn off
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+        if (disable_hw_bp_interface)
+                return NOTIFY_DONE;
+#endif
 
 	get_debugreg(dr7, 7);
 	/* Disable breakpoints during exception handling */

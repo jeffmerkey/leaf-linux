@@ -1974,10 +1974,11 @@ static int effective_prio(struct task_struct *p)
  * task_curr - is this task currently executing on a CPU?
  * @p: the task in question.
  */
-inline int task_curr(const struct task_struct *p)
+int task_curr(const struct task_struct *p)
 {
 	return cpu_curr(task_cpu(p)) == p;
 }
+EXPORT_SYMBOL(task_curr);
 
 static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 				       const struct sched_class *prev_class,
@@ -7980,7 +7981,7 @@ void normalize_rt_tasks(void)
 
 #endif /* CONFIG_MAGIC_SYSRQ */
 
-#if defined(CONFIG_IA64) || defined(CONFIG_KGDB_KDB)
+#if defined(CONFIG_IA64) || defined(CONFIG_KGDB_KDB) || defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
 /*
  * These functions are only useful for the IA64 MCA handling, or kdb.
  *
@@ -8001,6 +8002,7 @@ struct task_struct *curr_task(int cpu)
 {
 	return cpu_curr(cpu);
 }
+EXPORT_SYMBOL(curr_task);
 
 #endif /* defined(CONFIG_IA64) || defined(CONFIG_KGDB_KDB) */
 

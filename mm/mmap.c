@@ -1866,6 +1866,10 @@ find_extend_vma(struct mm_struct * mm, unsigned long addr)
 }
 #endif
 
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(find_extend_vma);
+#endif
+
 /*
  * Ok - we have the memory areas we should free on the vma list,
  * so release them, and do the vma updates.

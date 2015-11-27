@@ -502,6 +502,7 @@ static void vmxoff_nmi(int cpu, struct die_args *args)
 {
 	cpu_emergency_vmxoff();
 }
+EXPORT_SYMBOL_GPL(machine_emergency_restart);
 
 /* Use NMIs as IPIs to tell all CPUs to disable virtualization
  */

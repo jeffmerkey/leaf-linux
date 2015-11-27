@@ -477,6 +477,7 @@ void clocksource_resume(void)
 
 	clocksource_resume_watchdog();
 }
+EXPORT_SYMBOL_GPL(clocksource_touch_watchdog);
 
 /**
  * clocksource_touch_watchdog - Update watchdog

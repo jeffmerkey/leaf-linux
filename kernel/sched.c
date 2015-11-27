@@ -1985,10 +1985,11 @@ static void deactivate_task(struct rq *rq, struct task_struct *p, int sleep)
  * task_curr - is this task currently executing on a CPU?
  * @p: the task in question.
  */
-inline int task_curr(const struct task_struct *p)
+int task_curr(const struct task_struct *p)
 {
 	return cpu_curr(task_cpu(p)) == p;
 }
+EXPORT_SYMBOL(task_curr);
 
 static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 				       const struct sched_class *prev_class,
@@ -9802,17 +9803,6 @@ void normalize_rt_tasks(void)
 
 #endif /* CONFIG_MAGIC_SYSRQ */
 
-#ifdef CONFIG_IA64
-/*
- * These functions are only useful for the IA64 MCA handling.
- *
- * They can only be called when the whole system has been
- * stopped - every CPU needs to be quiescent, and no scheduling
- * activity can take place. Using them for anything else would
- * be a serious bug, and as a result, they aren't even visible
- * under any other configuration.
- */
-
 /**
  * curr_task - return the current task for a given cpu.
  * @cpu: the processor in question.
@@ -9823,6 +9813,18 @@ struct task_struct *curr_task(int cpu)
 {
 	return cpu_curr(cpu);
 }
+EXPORT_SYMBOL(curr_task);
+
+#ifdef CONFIG_IA64
+/*
+ * These functions are only useful for the IA64 MCA handling.
+ *
+ * They can only be called when the whole system has been
+ * stopped - every CPU needs to be quiescent, and no scheduling
+ * activity can take place. Using them for anything else would
+ * be a serious bug, and as a result, they aren't even visible
+ * under any other configuration.
+ */
 
 /**
  * set_curr_task - set the current task for a given cpu.

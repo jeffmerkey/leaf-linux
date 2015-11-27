@@ -1359,6 +1359,9 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 	} while (len);
 	return i;
 }
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+EXPORT_SYMBOL(follow_page);
+#endif
 
 int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 		unsigned long start, int len, int write, int force,

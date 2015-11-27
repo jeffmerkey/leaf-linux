@@ -22,6 +22,7 @@
 #include <linux/random.h>
 #include <linux/kallsyms.h>
 #include <linux/dmi.h>
+#include <linux/kdebug.h>
 
 int panic_on_oops;
 static unsigned long tainted_mask;
@@ -68,6 +69,13 @@ NORET_TYPE void panic(const char * fmt, ...)
 	 * preempt to be disabled. No point enabling it later though...
 	 */
 	preempt_disable();
+
+        /* call the notify_die handler for any resident debuggers which
+        * may be active and pass the message string.   On a software
+        * fault return at least some sort of regs for a remote debugger
+        * to look at.
+        */
+	notify_die(DIE_PANIC, buf, get_irq_regs(), 0, -1, SIGTERM);
 
 	bust_spinlocks(1);
 	va_start(args, fmt);

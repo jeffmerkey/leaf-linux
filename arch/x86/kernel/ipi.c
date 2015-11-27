@@ -126,6 +126,7 @@ void send_IPI_mask_bitmask(const struct cpumask *cpumask, int vector)
 	__send_IPI_dest_field(mask, vector);
 	local_irq_restore(flags);
 }
+EXPORT_SYMBOL(send_IPI_mask_bitmask);
 
 void send_IPI_mask_sequence(const struct cpumask *mask, int vector)
 {

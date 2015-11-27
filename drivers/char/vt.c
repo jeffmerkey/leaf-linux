@@ -2426,6 +2426,7 @@ int set_console(int nr)
 
 	return 0;
 }
+EXPORT_SYMBOL(kmsg_redirect);
 
 struct tty_driver *console_driver;
 

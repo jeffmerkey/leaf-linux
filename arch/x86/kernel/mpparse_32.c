@@ -59,6 +59,7 @@ struct mpc_config_intsrc mp_irqs[MAX_IRQ_SOURCES];
 int mp_irq_entries;
 
 int nr_ioapics;
+EXPORT_SYMBOL(nr_ioapics);
 
 int pic_mode;
 unsigned long mp_lapic_addr;

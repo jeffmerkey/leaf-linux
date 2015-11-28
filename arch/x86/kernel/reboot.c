@@ -490,6 +490,10 @@ void machine_emergency_restart(void)
 {
 	machine_ops.emergency_restart();
 }
+EXPORT_SYMBOL_GPL(machine_emergency_restart);
+#if defined(CONFIG_SMP)
+EXPORT_SYMBOL(genapic);
+#endif
 
 void machine_restart(char *cmd)
 {

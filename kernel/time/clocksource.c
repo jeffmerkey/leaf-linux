@@ -242,6 +242,7 @@ void clocksource_touch_watchdog(void)
 {
 	clocksource_resume_watchdog();
 }
+EXPORT_SYMBOL(clocksource_touch_watchdog);
 
 /**
  * clocksource_get_next - Returns the selected clocksource

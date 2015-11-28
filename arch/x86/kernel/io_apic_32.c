@@ -104,12 +104,13 @@ static __attribute_const__ struct io_apic __iomem *io_apic_base(int idx)
 		+ (mp_ioapics[idx].mpc_apicaddr & ~PAGE_MASK);
 }
 
-static inline unsigned int io_apic_read(unsigned int apic, unsigned int reg)
+unsigned int io_apic_read(unsigned int apic, unsigned int reg)
 {
 	struct io_apic __iomem *io_apic = io_apic_base(apic);
 	writel(reg, &io_apic->index);
 	return readl(&io_apic->data);
 }
+EXPORT_SYMBOL(io_apic_read);
 
 static inline void io_apic_write(unsigned int apic, unsigned int reg, unsigned int value)
 {

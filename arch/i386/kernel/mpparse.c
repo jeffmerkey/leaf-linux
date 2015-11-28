@@ -51,6 +51,7 @@ static int mp_current_pci_id;
 
 /* I/O APIC entries */
 struct mpc_config_ioapic mp_ioapics[MAX_IO_APICS];
+EXPORT_SYMBOL(mp_ioapics);
 
 /* # of MP IRQ source entries */
 struct mpc_config_intsrc mp_irqs[MAX_IRQ_SOURCES];
@@ -59,6 +60,7 @@ struct mpc_config_intsrc mp_irqs[MAX_IRQ_SOURCES];
 int mp_irq_entries;
 
 int nr_ioapics;
+EXPORT_SYMBOL(nr_ioapics);
 
 int pic_mode;
 unsigned long mp_lapic_addr;

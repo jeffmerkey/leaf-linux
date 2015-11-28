@@ -229,6 +229,7 @@ const char *kallsyms_lookup(unsigned long addr,
 
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(kallsyms_lookup);
 
 /* Replace "%s" in format with address, or returns -errno. */
 void __print_symbol(const char *fmt, unsigned long address)
@@ -417,5 +418,49 @@ static int __init kallsyms_init(void)
 	return 0;
 }
 __initcall(kallsyms_init);
+
+#if defined(CONFIG_MDB) || defined(CONFIG_MDB_MODULE)
+struct kallsym_iter mdb_iter;
+int mdb_kallsyms(char *str, int (*print)(char *s, ...))
+{
+    register loff_t pos = 0;
+    register struct kallsym_iter *iter = &mdb_iter;
+
+    if (!print)
+       return 0;
+
+    // set to beginning of the kallsyms list
+    reset_iter(iter, 0);
+    while (1)
+    {
+       // search the kallsyms list
+       if (!update_iter(iter, pos++))
+          break;
+
+       if (!iter->name[0])
+	  continue;
+
+       // if an exclusion search was specified, skip non-matching entries
+       if (str && *str && !strstr(iter->name, str))
+          continue;
+
+       if (iter->owner)
+       {
+          if (print("%0*lx %c %s [%s]\n", (int)(2*sizeof(void*)),
+	      iter->value, iter->type, iter->name,
+	      module_name(iter->owner)))
+             return 1;
+       }
+       else
+       {
+          if (print("%0*lx %c %s\n", (int)(2*sizeof(void*)),
+	      iter->value, iter->type, iter->name))
+             return 1;
+       }
+    }
+    return 0;
+}
+EXPORT_SYMBOL_GPL(mdb_kallsyms);
+#endif
 
 EXPORT_SYMBOL(__print_symbol);

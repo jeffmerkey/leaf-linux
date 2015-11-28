@@ -338,6 +338,10 @@ void machine_emergency_restart(void)
 
 	machine_real_restart(jump_to_bios, sizeof(jump_to_bios));
 }
+EXPORT_SYMBOL_GPL(machine_emergency_restart);
+#if defined(CONFIG_SMP)
+EXPORT_SYMBOL(genapic);
+#endif
 
 void machine_restart(char * __unused)
 {

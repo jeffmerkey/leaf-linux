@@ -66,6 +66,8 @@ On all -  write a character to /proc/sysrq-trigger.  eg:
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 'r'     - Turns off keyboard raw mode and sets it to XLATE.
 
+'j'	- Used by Jeff Merkey's Kernel Debugger (mdb).
+
 'k'     - Secure Access Key (SAK) Kills all programs on the current virtual
           console. NOTE: See important comments below in SAK section.
 

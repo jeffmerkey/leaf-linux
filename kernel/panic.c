@@ -19,6 +19,7 @@
 #include <linux/nmi.h>
 #include <linux/kexec.h>
 #include <linux/debug_locks.h>
+#include <linux/kdebug.h>
 
 int panic_on_oops;
 int tainted;
@@ -72,6 +73,11 @@ NORET_TYPE void panic(const char * fmt, ...)
 	 * preempt to be disabled. No point enabling it later though...
 	 */
 	preempt_disable();
+
+        /* call the notify_die handler for any resident debuggers which
+        * may be active and pass the message string.   
+        */
+	notify_die(DIE_PANIC, buf, 0, 0, -1, SIGTERM);
 
 	bust_spinlocks(1);
 	va_start(args, fmt);

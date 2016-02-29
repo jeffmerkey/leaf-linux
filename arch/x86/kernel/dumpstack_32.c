@@ -24,19 +24,21 @@ static void *is_irq_stack(void *p, void *irq)
 }
 
 
-static void *is_hardirq_stack(unsigned long *stack, int cpu)
+void *is_hardirq_stack(unsigned long *stack, int cpu)
 {
 	void *irq = per_cpu(hardirq_stack, cpu);
 
 	return is_irq_stack(stack, irq);
 }
+EXPORT_SYMBOL_GPL(is_hardirq_stack);
 
-static void *is_softirq_stack(unsigned long *stack, int cpu)
+void *is_softirq_stack(unsigned long *stack, int cpu)
 {
 	void *irq = per_cpu(softirq_stack, cpu);
 
 	return is_irq_stack(stack, irq);
 }
+EXPORT_SYMBOL_GPL(is_softirq_stack);
 
 void dump_trace(struct task_struct *task, struct pt_regs *regs,
 		unsigned long *stack, unsigned long bp,

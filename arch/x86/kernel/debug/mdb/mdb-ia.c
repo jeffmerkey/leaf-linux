@@ -6381,10 +6381,13 @@ unsigned long enter_debugger(unsigned long exception,
 		 */
 		if (!atomic_read(&per_cpu(trace_processors, processor)))
 			stop_processors_excl_self(processor);
-
+#if defined(CONFIG_VT)
 		con_debug_enter(vc_cons[fg_console].d);
+#endif
 		debugger_command_entry(processor, exception, dbgframe);
+#if defined(CONFIG_VT)
 		con_debug_leave();
+#endif
 
 		/*  do not release the processors for active trace, ssb, or
 		 *  proceed sessions on a focus processor.

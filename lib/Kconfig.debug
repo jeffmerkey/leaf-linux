@@ -690,7 +690,6 @@ config MDB
 	select MAGIC_SYSRQ
 	select KALLSYMS
 	select KALLSYMS_ALL
-	depends on VT
 	depends on TTY
 	default m
 	help

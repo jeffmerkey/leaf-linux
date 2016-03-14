@@ -38,6 +38,7 @@
 #define DR_RW_EXECUTE (0x0)   /* Settings for the access types to trap on */
 #define DR_RW_WRITE (0x1)
 #define DR_RW_READ (0x3)
+#define DR_RW_MASK (0x3) /* mask for breakpoint type field */
 
 #define DR_LEN_1 (0x0) /* Settings for data length to trap on */
 #define DR_LEN_2 (0x4)

@@ -23,7 +23,6 @@ do {								\
 		     "i" (sizeof(struct bug_entry)));		\
 	unreachable();						\
 } while (0)
-
 #else
 #define BUG()							\
 do {								\
@@ -31,6 +30,14 @@ do {								\
 	unreachable();						\
 } while (0)
 #endif
+
+#define HAVE_ARCH_BREAK
+#define breakcheck()
+#define BREAK()							\
+do {								\
+	asm volatile("int3");					\
+	breakcheck();						\
+} while (0)
 
 #include <asm-generic/bug.h>
 

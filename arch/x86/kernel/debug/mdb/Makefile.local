@@ -1,0 +1,104 @@
+
+DISTFILES= mdb-base.c mdb-ia-apic.c mdb-ia.c mdb-ia-support.c mdb-list.c \
+		mdb-logic.c mdb-main.c mdb-os.c
+
+INCLUDES= ansidecl_32.h ansidecl_64.h ansidecl.h bfd_32.h \
+		bfd_64.h bfd.h mdb-base.h mdb.h mdb-ia.h mdb-ia-proc.h \
+		mdb-ia-support.h mdb-keyboard.h mdb-list.h mdb-os.h \
+		mdb-proc.h
+
+KVERS ?= $(shell uname -r)
+	KPSUB := $(shell echo $(KVERS) | sed -e 's/\([^\.]*\)\.\([^\.]*\)\..*/\1\2/')
+
+# distros use different paths for kernel include files
+
+KBUILD  ?= /lib/modules/$(KVERS)/build
+KSRC ?= $(shell if \
+	[ -f /lib/modules/$(KVERS)/source/include/linux/kernel.h ]; then \
+		echo /lib/modules/$(KVERS)/source ; \
+	else \
+		echo $(KBUILD); \
+	fi)
+
+ifdef DIST_DESTDIR
+DESTDIR = $(DIST_DESTDIR)
+else
+DESTDIR ?= /
+endif
+
+INST_DIR ?= $(shell echo $(DESTDIR)/lib/modules/$(KVERS)/kernel/arch/x86/kernel/debug/mdb | sed 's^//^/^g')
+
+SRC_DIR=$(shell pwd)
+
+-include $(KBUILD)/.config
+
+CFLAGS += $(shell [ -f $(KSRC)/include/linux/modversions.h ] && \
+		echo -DEXPORT_SYMTAB -DMODVERSIONS \
+		-include $(KSRC)/include/linux/modversions.h)
+
+# user utility build flags
+ifeq ($(KPSUB),24)
+U_CFLAGS = -g
+U_CFLAGSP = -g
+U_CFLAGS_LIB = -g -c
+U_CFLAGS_LIBP = -g -c
+else
+U_CFLAGS = -Wno-pointer-sign -g
+U_CFLAGSP = -g
+U_CFLAGS_LIB = -Wno-pointer-sign -g -c
+U_CFLAGS_LIBP = -g -c -fPIC
+endif
+U_CC = gcc
+U_CCP = g++
+LD = ld
+AR = ar
+
+.PHONY: clean install stack_check
+
+all : default
+
+OBJS := mdb-base.o mdb-ia-apic.o mdb-ia.o mdb-ia-support.o mdb-list.o \
+		mdb-logic.o mdb-main.o mdb-os.o
+
+clean:
+	rm -rf $(MODULE) *.o $(OBJS) .*.ko.unsigned.cmd .*.ko.cmd .*.o.cmd *.unsigned \
+		mdb.mod.[oc] *~ .tmp_versions modules.order Module.symvers Module.markers $(UTILFILES)
+
+ifeq ($(KPSUB),24)
+
+MODULE := mdb.o
+CFLAGS  += -DLINUX -D__KERNEL__ -DMODULE -I$(KSRC)/include \
+	   -Wall -Wstrict-prototypes -fomit-frame-pointer    \
+	   -fno-strict-aliasing -O2
+
+ifneq ($(CONFIG_X86_64),y)
+	CFLAGS += -mpreferred-stack-boundary=2
+endif
+
+default: $(OBJS)
+	$(LD) -r -o $(MODULE) $(OBJS)
+else
+
+MODULE := mdb.ko
+obj-m := mdb.o
+mdb-objs := $(OBJS)
+
+default:
+	$(MAKE) -C $(KBUILD) SUBDIRS=$(SRC_DIR)
+
+endif
+
+
+UTILFILES=
+utilities: $(UTILFILES)
+
+install: default
+	echo $(INST_DIR)
+	mkdir -p $(INST_DIR)
+	install -m 0644 $(MODULE) $(INST_DIR)
+	-@/bin/rm -rf $(SRC_DIR)/.tmp_versions
+
+depmod:
+ifndef DIST_DESTDIR
+	-/sbin/depmod -a $(KVERS) -b $(DESTDIR)
+endif

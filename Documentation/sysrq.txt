@@ -78,7 +78,7 @@ On all -  write a character to /proc/sysrq-trigger.  e.g.:
 'f'	- Will call the oom killer to kill a memory hog process, but do not
 	  panic if nothing can be killed.
 
-'g'	- Used by kgdb (kernel debugger)
+'g'	- Used by kgdb, kdb and mdb (kernel debuggers)
 
 'h'     - Will display help (actually any other key than those listed
           here will display help. but 'h' is easy to remember :-)

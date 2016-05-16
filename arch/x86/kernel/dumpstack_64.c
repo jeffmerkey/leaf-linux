@@ -31,8 +31,14 @@ static char x86_stack_ids[][8] = {
 #endif
 };
 
-static unsigned long *in_exception_stack(unsigned cpu, unsigned long stack,
-					 unsigned *usedp, char **idp)
+#if IS_ENABLED(CONFIG_MDB)
+unsigned long *in_exception_stack(unsigned int cpu, unsigned long stack,
+				  unsigned int *usedp, char **idp)
+#else
+static unsigned long *in_exception_stack(unsigned int cpu, unsigned long stack,
+					 unsigned int *usedp, char **idp)
+#endif
+
 {
 	unsigned k;
 
@@ -96,6 +102,10 @@ static unsigned long *in_exception_stack(unsigned cpu, unsigned long stack,
 	return NULL;
 }
 
+#if IS_ENABLED(CONFIG_MDB)
+EXPORT_SYMBOL(in_exception_stack);
+#endif
+
 static inline int
 in_irq_stack(unsigned long *stack, unsigned long *irq_stack,
 	     unsigned long *irq_stack_end)
@@ -147,6 +157,14 @@ analyze_stack(int cpu, struct task_struct *task, unsigned long *stack,
  * interrupt stack
  * severe exception (double fault, nmi, stack fault, debug, mce) hardware stack
  */
+
+#if IS_ENABLED(CONFIG_MDB)
+unsigned long *get_irq_stack_end(const unsigned int cpu)
+{
+	return (unsigned long *)per_cpu(irq_stack_ptr, cpu);
+}
+EXPORT_SYMBOL(get_irq_stack_end);
+#endif
 
 void dump_trace(struct task_struct *task, struct pt_regs *regs,
 		unsigned long *stack, unsigned long bp,

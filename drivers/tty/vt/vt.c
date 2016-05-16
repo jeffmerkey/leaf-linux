@@ -2531,6 +2531,10 @@ int vt_kmsg_redirect(int new)
 		return kmsg_con;
 }
 
+#if IS_ENABLED(CONFIG_MDB)
+EXPORT_SYMBOL(vt_kmsg_redirect);
+#endif
+
 /*
  *	Console on virtual terminal
  *

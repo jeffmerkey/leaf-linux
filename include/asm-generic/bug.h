@@ -51,6 +51,10 @@ struct bug_entry {
 } while (0)
 #endif
 
+#ifndef HAVE_ARCH_BREAK
+#define BREAK() do {} while (0)
+#endif
+
 #ifndef HAVE_ARCH_BUG_ON
 #define BUG_ON(condition) do { if (unlikely(condition)) BUG(); } while (0)
 #endif

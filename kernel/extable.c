@@ -65,6 +65,7 @@ static inline int init_kernel_text(unsigned long addr)
 		return 1;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(__kernel_text_address);
 
 int core_kernel_text(unsigned long addr)
 {

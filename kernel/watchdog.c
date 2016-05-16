@@ -286,8 +286,10 @@ void touch_softlockup_watchdog_sync(void)
 	__this_cpu_write(softlockup_touch_sync, true);
 	__this_cpu_write(watchdog_touch_ts, 0);
 }
+EXPORT_SYMBOL(touch_softlockup_watchdog_sync);
 
 #ifdef CONFIG_HARDLOCKUP_DETECTOR
+
 /* watchdog detector functions */
 static bool is_hardlockup(void)
 {
@@ -299,6 +301,13 @@ static bool is_hardlockup(void)
 	__this_cpu_write(hrtimer_interrupts_saved, hrint);
 	return false;
 }
+
+void touch_hardlockup_watchdog(void)
+{
+	__this_cpu_write(hrtimer_interrupts_saved, 0);
+}
+EXPORT_SYMBOL_GPL(touch_hardlockup_watchdog);
+
 #endif
 
 static int is_softlockup(unsigned long touch_ts)
@@ -357,7 +366,9 @@ static void watchdog_overflow_callback(struct perf_event *event,
 			show_regs(regs);
 		else
 			dump_stack();
-
+#if IS_ENABLED(CONFIG_DEBUG_LOCKUPS)
+		BREAK();
+#endif
 		/*
 		 * Perform all-CPU dump only once to avoid multiple hardlockups
 		 * generating interleaving traces
@@ -477,7 +488,9 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 			show_regs(regs);
 		else
 			dump_stack();
-
+#if IS_ENABLED(CONFIG_DEBUG_LOCKUPS)
+		BREAK();
+#endif
 		if (softlockup_all_cpu_backtrace) {
 			/* Avoid generating two back traces for current
 			 * given that one is already made above

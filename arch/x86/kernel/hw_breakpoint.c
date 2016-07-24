@@ -9,10 +9,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
- *
  * Copyright (C) 2007 Alan Stern
  * Copyright (C) 2009 IBM Corporation
  * Copyright (C) 2009 Frederic Weisbecker <fweisbec@gmail.com>
@@ -57,6 +53,10 @@ static DEFINE_PER_CPU(unsigned long, cpu_debugreg[HBP_NUM]);
  */
 static DEFINE_PER_CPU(struct perf_event *, bp_per_reg[HBP_NUM]);
 
+#if IS_ENABLED(CONFIG_MDB_DIRECT_MODE)
+int disable_hw_bp_interface;
+EXPORT_SYMBOL_GPL(disable_hw_bp_interface);
+#endif
 
 static inline unsigned long
 __encode_dr7(int drnum, unsigned int len, unsigned int type)
@@ -108,6 +108,11 @@ int arch_install_hw_breakpoint(struct perf_event *bp)
 	unsigned long *dr7;
 	int i;
 
+#if IS_ENABLED(CONFIG_MDB_DIRECT_MODE)
+	if (disable_hw_bp_interface)
+		return -EBUSY;
+#endif
+
 	for (i = 0; i < HBP_NUM; i++) {
 		struct perf_event **slot = this_cpu_ptr(&bp_per_reg[i]);
 
@@ -132,6 +137,7 @@ int arch_install_hw_breakpoint(struct perf_event *bp)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(arch_install_hw_breakpoint);
 
 /*
  * Uninstall the breakpoint contained in the given counter.
@@ -147,6 +153,11 @@ void arch_uninstall_hw_breakpoint(struct perf_event *bp)
 	struct arch_hw_breakpoint *info = counter_arch_bp(bp);
 	unsigned long *dr7;
 	int i;
+
+#if IS_ENABLED(CONFIG_MDB_DIRECT_MODE)
+	if (disable_hw_bp_interface)
+		return;
+#endif
 
 	for (i = 0; i < HBP_NUM; i++) {
 		struct perf_event **slot = this_cpu_ptr(&bp_per_reg[i]);
@@ -167,6 +178,7 @@ void arch_uninstall_hw_breakpoint(struct perf_event *bp)
 	if (info->mask)
 		set_dr_addr_mask(0, i);
 }
+EXPORT_SYMBOL_GPL(arch_uninstall_hw_breakpoint);
 
 /*
  * Check for virtual address in kernel space.
@@ -231,7 +243,6 @@ int arch_bp_generic_fields(int x86_len, int x86_type,
 
 	return 0;
 }
-
 
 static int arch_build_bp_info(struct perf_event *bp)
 {
@@ -327,7 +338,6 @@ int arch_validate_hwbkpt_settings(struct perf_event *bp)
 	unsigned int align;
 	int ret;
 
-
 	ret = arch_build_bp_info(bp);
 	if (ret)
 		return ret;
@@ -418,6 +428,10 @@ void flush_ptrace_hw_breakpoint(struct task_struct *tsk)
 
 void hw_breakpoint_restore(void)
 {
+#if IS_ENABLED(CONFIG_MDB_DIRECT_MODE)
+	if (disable_hw_bp_interface)
+		return;
+#endif
 	set_debugreg(__this_cpu_read(cpu_debugreg[0]), 0);
 	set_debugreg(__this_cpu_read(cpu_debugreg[1]), 1);
 	set_debugreg(__this_cpu_read(cpu_debugreg[2]), 2);
@@ -426,6 +440,16 @@ void hw_breakpoint_restore(void)
 	set_debugreg(__this_cpu_read(cpu_dr7), 7);
 }
 EXPORT_SYMBOL_GPL(hw_breakpoint_restore);
+
+void hw_breakpoint_enable(void)
+{
+	set_debugreg(__this_cpu_read(cpu_debugreg[0]), 0);
+	set_debugreg(__this_cpu_read(cpu_debugreg[1]), 1);
+	set_debugreg(__this_cpu_read(cpu_debugreg[2]), 2);
+	set_debugreg(__this_cpu_read(cpu_debugreg[3]), 3);
+	set_debugreg(__this_cpu_read(cpu_dr7), 7);
+}
+EXPORT_SYMBOL_GPL(hw_breakpoint_enable);
 
 /*
  * Handle debug exception notifications.
@@ -446,10 +470,14 @@ EXPORT_SYMBOL_GPL(hw_breakpoint_restore);
 static int hw_breakpoint_handler(struct die_args *args)
 {
 	int i, cpu, rc = NOTIFY_STOP;
-	struct perf_event *bp;
+	struct perf_event *bp = NULL;
 	unsigned long dr7, dr6;
 	unsigned long *dr6_p;
 
+#if IS_ENABLED(CONFIG_MDB_DIRECT_MODE)
+	if (disable_hw_bp_interface)
+		return NOTIFY_DONE;
+#endif
 	/* The DR6 value is pointed by args->err */
 	dr6_p = (unsigned long *)ERR_PTR(args->err);
 	dr6 = *dr6_p;
@@ -479,6 +507,14 @@ static int hw_breakpoint_handler(struct die_args *args)
 			continue;
 
 		/*
+		 * Check if we got an execute breakpoint, if so
+		 * set the resume flag to avoid int1 recursion.
+		 */
+		if (((dr7 >> ((i * DR_CONTROL_SIZE) + DR_CONTROL_SHIFT))
+		     & DR_RW_MASK) == DR_RW_EXECUTE)
+			args->regs->flags |= X86_EFLAGS_RF;
+
+		/*
 		 * The counter may be concurrently released but that can only
 		 * occur from a call_rcu() path. We can then safely fetch
 		 * the breakpoint, use its callback, touch its counter
@@ -505,7 +541,8 @@ static int hw_breakpoint_handler(struct die_args *args)
 
 		/*
 		 * Set up resume flag to avoid breakpoint recursion when
-		 * returning back to origin.
+		 * returning back to origin.  perf_bp_event may
+		 * change the flags so check twice.
 		 */
 		if (bp->hw.info.type == X86_BREAKPOINT_EXECUTE)
 			args->regs->flags |= X86_EFLAGS_RF;
@@ -521,6 +558,18 @@ static int hw_breakpoint_handler(struct die_args *args)
 	    (dr6 & (~DR_TRAP_BITS)))
 		rc = NOTIFY_DONE;
 
+	/*
+	 * if we are about to signal to
+	 * do_debug() to stop further processing
+	 * and we have not ascertained the source
+	 * of the breakpoint, log it as spurious.
+	 */
+	if (rc == NOTIFY_STOP && !bp) {
+		printk_ratelimited(KERN_INFO
+				   "INFO: spurious INT1 exception dr6: 0x%lX dr7: 0x%lX\n",
+				   dr6, dr7);
+	}
+
 	set_debugreg(dr7, 7);
 	put_cpu();
 
@@ -530,8 +579,8 @@ static int hw_breakpoint_handler(struct die_args *args)
 /*
  * Handle debug exception notifications.
  */
-int hw_breakpoint_exceptions_notify(
-		struct notifier_block *unused, unsigned long val, void *data)
+int hw_breakpoint_exceptions_notify(struct notifier_block *unused,
+				    unsigned long val, void *data)
 {
 	if (val != DIE_DEBUG)
 		return NOTIFY_DONE;

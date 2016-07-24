@@ -718,6 +718,72 @@ config KCOV
 
 	  For more details, see Documentation/kcov.txt.
 
+config MDB
+	tristate "Minimal Kernel Debugger (MDB)"
+	depends on DEBUG_KERNEL && X86
+	select MAGIC_SYSRQ
+	select KALLSYMS
+	select KALLSYMS_ALL
+	depends on TTY
+	default m
+	help
+	  Kernel Debugger for Linux written to be used as a loadable
+	  module.  'echo g > /proc/sysrq-trigger' will activate the
+	  debugger from the text based Linux Console, and the 'g'
+	  character (alt-printscreen/sysrq + 'g') with MAGIC_SYSRQ
+	  enabled to enter the debugger.  X Windows is not supported.
+	  This debugger is minimal and text based.  Excellent help can
+	  be obtained from the debugger by typing "Help Help" or
+	  "help" from the debugger command console.  If you compiled
+	  MDB as a module you may need to load the debugger with
+	  the 'modprobe mdb' before you can access the debugger
+	  from the Linux Console.  To enable the MAGIC-SYSRQ key
+	  type 'echo 1 > /proc/sys/kernel/sysrq'.  Use 'modinfo mdb'
+	  to display params for setting a serial port address for remote
+	  operations over serial link.
+
+config MDB_CONSOLE_REDIRECTION
+	bool "MDB Console Redirection Support"
+	depends on MDB
+	default y
+	help
+	  Reset any Console Redirection to default system settings (0)
+	  when the MDB debugger is active.  The Debugger will restore
+	  the redirection to the custom settings when the debugger
+	  is exited.  This feature is useful on systems which by default
+	  redirect printk output and the screen debugger output to a log
+	  file or system device, which can prevent the debugger screen from
+	  being visible.  Enabling this feature does not affect or disable
+	  remote operations via serial port.  It is recommended to enable
+	  this feature by default to prevent the system console from
+	  being redirected during debugging.
+
+config MDB_DIRECT_MODE
+	bool "MDB Direct Mode"
+	depends on MDB
+	default n
+	help
+	  Disable the default hardware breakpoint facility in Linux
+	  and allow MDB to control the debugger registers directly.
+	  This feature will disable KGBD, KDB-KGDB, and Ptrace but
+	  will still allow the userspace GDB debugger to function
+	  concurrently with MDB.  Use this option if you want to
+	  disable other kernel debugging facilities other than
+	  mdb.  Not recommended unless you really know what you
+	  are doing.
+
+config DEBUG_LOCKUPS
+	bool "Set Breakpoints for Kernel Hard/Soft Lockup Detector"
+	depends on DEBUG_KERNEL && MDB
+	default y
+	help
+	  Say Y here to enable the kernel to emit a breakpoint instruction
+	  into the hard and soft lockup detector and trigger a breakpoint
+	  if a hard or soft lockup is detected.
+
+	  This option is used for triggering the OS to try enter a debugger
+	  if one is presently installed on the system.
+
 config DEBUG_SHIRQ
 	bool "Debug shared IRQ handlers"
 	depends on DEBUG_KERNEL

@@ -499,6 +499,7 @@ static void emergency_vmx_disable_all(void)
 void __attribute__((weak)) mach_reboot_fixups(void)
 {
 }
+EXPORT_SYMBOL_GPL(machine_emergency_restart);
 
 /*
  * To the best of our knowledge Windows compatible x86 hardware expects

@@ -3905,6 +3905,49 @@ static unsigned long mod_find_symname(struct module *mod, const char *name)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_MDB)
+int mdb_modules(char *str, int (*print)(char *s, ...))
+{
+	struct module *mod;
+#if IS_ENABLED(CONFIG_MODULE_UNLOAD)
+	struct module_use *use;
+#endif
+	if (!print)
+		return 0;
+
+	list_for_each_entry(mod, &modules, list) {
+		if (str && *str && !strstr(mod->name, str))
+			continue;
+
+		print(" 0x%08p ", mod->core_layout.base);
+		print("%s", mod->name);
+#if IS_ENABLED(CONFIG_MODULE_UNLOAD)
+		print(" %lu %02u ",
+		      mod->init_layout.size + mod->core_layout.size,
+		      module_refcount(mod));
+#else
+		print(" %lu ", mod->init_layout.size +
+		      mod->core_layout.size);
+#endif
+
+#if IS_ENABLED(CONFIG_MODULE_UNLOAD)
+		list_for_each_entry(use, &mod->source_list, source_list)
+			print("%s,", use->source->name);
+		if (mod->init && !mod->exit)
+			print("[permanent],");
+		print(" %s ",
+		      mod->state == MODULE_STATE_GOING ? "Unloading" :
+		      mod->state == MODULE_STATE_COMING ? "Loading" :
+		      "Live");
+#endif
+		if (print("\n"))
+			return 1;
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mdb_modules);
+#endif
+
 /* Look for this name: can be of form module:name. */
 unsigned long module_kallsyms_lookup_name(const char *name)
 {

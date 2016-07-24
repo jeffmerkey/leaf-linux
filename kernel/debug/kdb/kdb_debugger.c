@@ -55,7 +55,7 @@ int kdb_stub(struct kgdb_state *ks)
 	int error = 0;
 	kdb_bp_t *bp;
 	unsigned long addr = kgdb_arch_pc(ks->ex_vector, ks->linux_regs);
-	kdb_reason_t reason = KDB_REASON_OOPS;
+	kdb_reason_t reason = KDB_REASON_KEYBOARD;
 	kdb_dbtrap_t db_result = KDB_DB_NOBPT;
 	int i;
 

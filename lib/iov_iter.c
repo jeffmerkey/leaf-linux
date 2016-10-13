@@ -396,8 +396,7 @@ int iov_iter_fault_in_readable(struct iov_iter *i, size_t bytes)
 
 	if (!(i->type & (ITER_BVEC|ITER_KVEC))) {
 		iterate_iovec(i, bytes, v, iov, skip, ({
-			err = fault_in_multipages_readable(v.iov_base,
-					v.iov_len);
+			err = fault_in_pages_readable(v.iov_base, v.iov_len);
 			if (unlikely(err))
 			return err;
 		0;}))
@@ -834,13 +833,13 @@ static inline size_t __pipe_get_pages(struct iov_iter *i,
 				size_t *start)
 {
 	struct pipe_inode_info *pipe = i->pipe;
-	size_t n = push_pipe(i, maxsize, &idx, start);
+	ssize_t n = push_pipe(i, maxsize, &idx, start);
 	if (!n)
 		return -EFAULT;
 
 	maxsize = n;
 	n += *start;
-	while (n >= PAGE_SIZE) {
+	while (n > 0) {
 		get_page(*pages++ = pipe->bufs[idx].page);
 		idx = next_idx(idx, pipe);
 		n -= PAGE_SIZE;

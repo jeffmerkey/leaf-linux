@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ENIC_CLSF_H_
 #define _ENIC_CLSF_H_
 
@@ -19,9 +20,8 @@ void enic_flow_may_expire(unsigned long data);
 
 static inline void enic_rfs_timer_start(struct enic *enic)
 {
-	init_timer(&enic->rfs_h.rfs_may_expire);
-	enic->rfs_h.rfs_may_expire.function = enic_flow_may_expire;
-	enic->rfs_h.rfs_may_expire.data = (unsigned long)enic;
+	setup_timer(&enic->rfs_h.rfs_may_expire, enic_flow_may_expire,
+		    (unsigned long)enic);
 	mod_timer(&enic->rfs_h.rfs_may_expire, jiffies + HZ/4);
 }
 

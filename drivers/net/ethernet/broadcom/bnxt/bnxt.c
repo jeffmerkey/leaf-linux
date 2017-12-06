@@ -3368,6 +3368,7 @@ static int bnxt_hwrm_do_send_msg(struct bnxt *bp, void *msg, u32 msg_len,
 	u16 cp_ring_id, len = 0;
 	struct hwrm_err_output *resp = bp->hwrm_cmd_resp_addr;
 	u16 max_req_len = BNXT_HWRM_MAX_REQ_LEN;
+	struct hwrm_short_input short_input = {0};
 
 	req->seq_id = cpu_to_le16(bp->hwrm_cmd_seq++);
 	memset(resp, 0, PAGE_SIZE);
@@ -3376,7 +3377,6 @@ static int bnxt_hwrm_do_send_msg(struct bnxt *bp, void *msg, u32 msg_len,
 
 	if (bp->flags & BNXT_FLAG_SHORT_CMD) {
 		void *short_cmd_req = bp->hwrm_short_cmd_req_addr;
-		struct hwrm_short_input short_input = {0};
 
 		memcpy(short_cmd_req, req, msg_len);
 		memset(short_cmd_req + msg_len, 0, BNXT_HWRM_MAX_REQ_LEN -
@@ -6962,9 +6962,9 @@ static void bnxt_poll_controller(struct net_device *dev)
 }
 #endif
 
-static void bnxt_timer(unsigned long data)
+static void bnxt_timer(struct timer_list *t)
 {
-	struct bnxt *bp = (struct bnxt *)data;
+	struct bnxt *bp = from_timer(bp, t, timer);
 	struct net_device *dev = bp->dev;
 
 	if (!netif_running(dev))
@@ -7236,7 +7236,7 @@ static int bnxt_init_board(struct pci_dev *pdev, struct net_device *dev)
 
 	bnxt_init_dflt_coal(bp);
 
-	setup_timer(&bp->timer, bnxt_timer, (unsigned long)bp);
+	timer_setup(&bp->timer, bnxt_timer, 0);
 	bp->current_interval = BNXT_TIMER_INTERVAL;
 
 	clear_bit(BNXT_STATE_OPEN, &bp->state);
@@ -8263,8 +8263,9 @@ static void bnxt_shutdown(struct pci_dev *pdev)
 	if (netif_running(dev))
 		dev_close(dev);
 
+	bnxt_ulp_shutdown(bp);
+
 	if (system_state == SYSTEM_POWER_OFF) {
-		bnxt_ulp_shutdown(bp);
 		bnxt_clear_int_mode(bp);
 		pci_wake_from_d3(pdev, bp->wol);
 		pci_set_power_state(pdev, PCI_D3hot);

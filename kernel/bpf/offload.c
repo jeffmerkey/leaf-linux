@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2017 Netronome Systems, Inc.
+ *
+ * This software is licensed under the GNU General License Version 2,
+ * June 1991 as shown in the file COPYING in the top-level directory of this
+ * source tree.
+ *
+ * THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS"
+ * WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING,
+ * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE
+ * OF THE PROGRAM IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME
+ * THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+ */
+
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/bug.h>
@@ -14,8 +29,9 @@ int bpf_prog_offload_init(struct bpf_prog *prog, union bpf_attr *attr)
 	struct net *net = current->nsproxy->net_ns;
 	struct bpf_dev_offload *offload;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+	if (attr->prog_type != BPF_PROG_TYPE_SCHED_CLS &&
+	    attr->prog_type != BPF_PROG_TYPE_XDP)
+		return -EINVAL;
 
 	if (attr->prog_flags)
 		return -EINVAL;
@@ -28,7 +44,7 @@ int bpf_prog_offload_init(struct bpf_prog *prog, union bpf_attr *attr)
 	init_waitqueue_head(&offload->verifier_done);
 
 	rtnl_lock();
-	offload->netdev = __dev_get_by_index(net, attr->prog_target_ifindex);
+	offload->netdev = __dev_get_by_index(net, attr->prog_ifindex);
 	if (!offload->netdev) {
 		rtnl_unlock();
 		kfree(offload);
@@ -84,6 +100,10 @@ static void __bpf_prog_offload_destroy(struct bpf_prog *prog)
 {
 	struct bpf_dev_offload *offload = prog->aux->offload;
 	struct netdev_bpf data = {};
+
+	/* Caution - if netdev is destroyed before the program, this function
+	 * will be called twice.
+	 */
 
 	data.offload.prog = prog;
 
@@ -144,18 +164,6 @@ int bpf_prog_offload_compile(struct bpf_prog *prog)
 	return bpf_prog_offload_translate(prog);
 }
 
-u32 bpf_prog_offload_ifindex(struct bpf_prog *prog)
-{
-	struct bpf_dev_offload *offload = prog->aux->offload;
-	u32 ifindex;
-
-	rtnl_lock();
-	ifindex = offload->netdev ? offload->netdev->ifindex : 0;
-	rtnl_unlock();
-
-	return ifindex;
-}
-
 const struct bpf_prog_ops bpf_offload_prog_ops = {
 };
 
@@ -169,6 +177,10 @@ static int bpf_offload_notification(struct notifier_block *notifier,
 
 	switch (event) {
 	case NETDEV_UNREGISTER:
+		/* ignore namespace changes */
+		if (netdev->reg_state != NETREG_UNREGISTERING)
+			break;
+
 		list_for_each_entry_safe(offload, tmp, &bpf_prog_offload_devs,
 					 offloads) {
 			if (offload->netdev == netdev)

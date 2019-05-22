@@ -16,8 +16,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA
  *
- * Data sheet available (5/2010) at
- * http://www.sensirion.com/en/pdf/product_information/Datasheet-humidity-sensor-SHT21.pdf
+ * Data sheet available at http://www.sensirion.com/file/datasheet_sht21
  */
 
 #include <linux/module.h>
@@ -41,7 +40,7 @@
 
 /**
  * struct sht21 - SHT21 device specific data
- * @hwmon_dev: device registered with hwmon
+ * @client: I2C client device
  * @lock: mutex to protect measurement values
  * @last_update: time of last update (jiffies)
  * @temperature: cached temperature measurement value
@@ -136,9 +135,9 @@ out:
  * Will be called on read access to temp1_input sysfs attribute.
  * Returns number of bytes written into buffer, negative errno on error.
  */
-static ssize_t sht21_show_temperature(struct device *dev,
-	struct device_attribute *attr,
-	char *buf)
+static ssize_t sht21_temperature_show(struct device *dev,
+				      struct device_attribute *attr,
+				      char *buf)
 {
 	struct sht21 *sht21 = dev_get_drvdata(dev);
 	int ret;
@@ -158,9 +157,8 @@ static ssize_t sht21_show_temperature(struct device *dev,
  * Will be called on read access to humidity1_input sysfs attribute.
  * Returns number of bytes written into buffer, negative errno on error.
  */
-static ssize_t sht21_show_humidity(struct device *dev,
-	struct device_attribute *attr,
-	char *buf)
+static ssize_t sht21_humidity_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
 {
 	struct sht21 *sht21 = dev_get_drvdata(dev);
 	int ret;
@@ -252,10 +250,8 @@ static ssize_t eic_show(struct device *dev,
 }
 
 /* sysfs attributes */
-static SENSOR_DEVICE_ATTR(temp1_input, S_IRUGO, sht21_show_temperature,
-	NULL, 0);
-static SENSOR_DEVICE_ATTR(humidity1_input, S_IRUGO, sht21_show_humidity,
-	NULL, 0);
+static SENSOR_DEVICE_ATTR_RO(temp1_input, sht21_temperature, 0);
+static SENSOR_DEVICE_ATTR_RO(humidity1_input, sht21_humidity, 0);
 static DEVICE_ATTR_RO(eic);
 
 static struct attribute *sht21_attrs[] = {

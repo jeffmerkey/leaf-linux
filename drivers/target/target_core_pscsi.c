@@ -179,20 +179,20 @@ out_free:
 static void
 pscsi_set_inquiry_info(struct scsi_device *sdev, struct t10_wwn *wwn)
 {
-	unsigned char *buf;
-
 	if (sdev->inquiry_len < INQUIRY_LEN)
 		return;
-
-	buf = sdev->inquiry;
-	if (!buf)
-		return;
 	/*
-	 * Use sdev->inquiry from drivers/scsi/scsi_scan.c:scsi_alloc_sdev()
+	 * Use sdev->inquiry data from drivers/scsi/scsi_scan.c:scsi_add_lun()
 	 */
-	memcpy(&wwn->vendor[0], &buf[8], sizeof(wwn->vendor));
-	memcpy(&wwn->model[0], &buf[16], sizeof(wwn->model));
-	memcpy(&wwn->revision[0], &buf[32], sizeof(wwn->revision));
+	BUILD_BUG_ON(sizeof(wwn->vendor) != INQUIRY_VENDOR_LEN + 1);
+	snprintf(wwn->vendor, sizeof(wwn->vendor),
+		 "%." __stringify(INQUIRY_VENDOR_LEN) "s", sdev->vendor);
+	BUILD_BUG_ON(sizeof(wwn->model) != INQUIRY_MODEL_LEN + 1);
+	snprintf(wwn->model, sizeof(wwn->model),
+		 "%." __stringify(INQUIRY_MODEL_LEN) "s", sdev->model);
+	BUILD_BUG_ON(sizeof(wwn->revision) != INQUIRY_REVISION_LEN + 1);
+	snprintf(wwn->revision, sizeof(wwn->revision),
+		 "%." __stringify(INQUIRY_REVISION_LEN) "s", sdev->rev);
 }
 
 static int
@@ -689,8 +689,29 @@ after_mode_sense:
 	}
 after_mode_select:
 
-	if (scsi_status == SAM_STAT_CHECK_CONDITION)
+	if (scsi_status == SAM_STAT_CHECK_CONDITION) {
 		transport_copy_sense_to_cmd(cmd, req_sense);
+
+		/*
+		 * check for TAPE device reads with
+		 * FM/EOM/ILI set, so that we can get data
+		 * back despite framework assumption that a
+		 * check condition means there is no data
+		 */
+		if (sd->type == TYPE_TAPE &&
+		    cmd->data_direction == DMA_FROM_DEVICE) {
+			/*
+			 * is sense data valid, fixed format,
+			 * and have FM, EOM, or ILI set?
+			 */
+			if (req_sense[0] == 0xf0 &&	/* valid, fixed format */
+			    req_sense[2] & 0xe0 &&	/* FM, EOM, or ILI */
+			    (req_sense[2] & 0xf) == 0) { /* key==NO_SENSE */
+				pr_debug("Tape FM/EOM/ILI status detected. Treat as normal read.\n");
+				cmd->se_cmd_flags |= SCF_TREAT_READ_AS_NORMAL;
+			}
+		}
+	}
 }
 
 enum {
@@ -790,7 +811,6 @@ static ssize_t pscsi_show_configfs_dev_params(struct se_device *dev, char *b)
 	struct scsi_device *sd = pdv->pdv_sd;
 	unsigned char host_id[16];
 	ssize_t bl;
-	int i;
 
 	if (phv->phv_mode == PHV_VIRTUAL_HOST_ID)
 		snprintf(host_id, 16, "%d", pdv->pdv_host_id);
@@ -803,29 +823,12 @@ static ssize_t pscsi_show_configfs_dev_params(struct se_device *dev, char *b)
 		host_id);
 
 	if (sd) {
-		bl += sprintf(b + bl, "        ");
-		bl += sprintf(b + bl, "Vendor: ");
-		for (i = 0; i < 8; i++) {
-			if (ISPRINT(sd->vendor[i]))   /* printable character? */
-				bl += sprintf(b + bl, "%c", sd->vendor[i]);
-			else
-				bl += sprintf(b + bl, " ");
-		}
-		bl += sprintf(b + bl, " Model: ");
-		for (i = 0; i < 16; i++) {
-			if (ISPRINT(sd->model[i]))   /* printable character ? */
-				bl += sprintf(b + bl, "%c", sd->model[i]);
-			else
-				bl += sprintf(b + bl, " ");
-		}
-		bl += sprintf(b + bl, " Rev: ");
-		for (i = 0; i < 4; i++) {
-			if (ISPRINT(sd->rev[i]))   /* printable character ? */
-				bl += sprintf(b + bl, "%c", sd->rev[i]);
-			else
-				bl += sprintf(b + bl, " ");
-		}
-		bl += sprintf(b + bl, "\n");
+		bl += sprintf(b + bl, "        Vendor: %."
+			__stringify(INQUIRY_VENDOR_LEN) "s", sd->vendor);
+		bl += sprintf(b + bl, " Model: %."
+			__stringify(INQUIRY_MODEL_LEN) "s", sd->model);
+		bl += sprintf(b + bl, " Rev: %."
+			__stringify(INQUIRY_REVISION_LEN) "s\n", sd->rev);
 	}
 	return bl;
 }
@@ -890,6 +893,7 @@ pscsi_map_sg(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 			bytes = min(bytes, data_len);
 
 			if (!bio) {
+new_bio:
 				nr_vecs = min_t(int, BIO_MAX_PAGES, nr_pages);
 				nr_pages -= nr_vecs;
 				/*
@@ -920,7 +924,7 @@ pscsi_map_sg(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 					" %d i: %d bio: %p, allocating another"
 					" bio\n", bio->bi_vcnt, i, bio);
 
-				rc = blk_rq_append_bio(req, bio);
+				rc = blk_rq_append_bio(req, &bio);
 				if (rc) {
 					pr_err("pSCSI: failed to append bio\n");
 					goto fail;
@@ -931,6 +935,7 @@ pscsi_map_sg(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 				 * be allocated with pscsi_get_bio() above.
 				 */
 				bio = NULL;
+				goto new_bio;
 			}
 
 			data_len -= bytes;
@@ -938,7 +943,7 @@ pscsi_map_sg(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 	}
 
 	if (bio) {
-		rc = blk_rq_append_bio(req, bio);
+		rc = blk_rq_append_bio(req, &bio);
 		if (rc) {
 			pr_err("pSCSI: failed to append bio\n");
 			goto fail;
@@ -984,8 +989,7 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 
 	req = blk_get_request(pdv->pdv_sd->request_queue,
 			cmd->data_direction == DMA_TO_DEVICE ?
-			REQ_OP_SCSI_OUT : REQ_OP_SCSI_IN,
-			GFP_KERNEL);
+			REQ_OP_SCSI_OUT : REQ_OP_SCSI_IN, 0);
 	if (IS_ERR(req)) {
 		pr_err("PSCSI: blk_get_request() failed\n");
 		ret = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
@@ -1061,7 +1065,8 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 
 	switch (host_byte(result)) {
 	case DID_OK:
-		target_complete_cmd(cmd, scsi_status);
+		target_complete_cmd_with_length(cmd, scsi_status,
+			cmd->data_length - scsi_req(req)->resid_len);
 		break;
 	default:
 		pr_debug("PSCSI Host Byte exception at cmd: %p CDB:"
@@ -1071,7 +1076,7 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 		break;
 	}
 
-	__blk_put_request(req->q, req);
+	blk_put_request(req);
 	kfree(pt);
 }
 

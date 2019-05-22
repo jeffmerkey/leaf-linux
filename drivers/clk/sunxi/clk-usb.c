@@ -16,6 +16,7 @@
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/reset-controller.h>
@@ -122,7 +123,7 @@ static void __init sunxi_usb_clk_setup(struct device_node *node,
 	if (!clk_data)
 		return;
 
-	clk_data->clks = kzalloc((qty+1) * sizeof(struct clk *), GFP_KERNEL);
+	clk_data->clks = kcalloc(qty + 1, sizeof(struct clk *), GFP_KERNEL);
 	if (!clk_data->clks) {
 		kfree(clk_data);
 		return;

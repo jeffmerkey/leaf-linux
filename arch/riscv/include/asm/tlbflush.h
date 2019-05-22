@@ -15,9 +15,8 @@
 #ifndef _ASM_RISCV_TLBFLUSH_H
 #define _ASM_RISCV_TLBFLUSH_H
 
-#ifdef CONFIG_MMU
-
 #include <linux/mm_types.h>
+#include <asm/smp.h>
 
 /*
  * Flush entire local TLB.  'sfence.vma' implicitly fences with the instruction
@@ -38,24 +37,37 @@ static inline void local_flush_tlb_page(unsigned long addr)
 
 #define flush_tlb_all() local_flush_tlb_all()
 #define flush_tlb_page(vma, addr) local_flush_tlb_page(addr)
-#define flush_tlb_range(vma, start, end) local_flush_tlb_all()
+
+static inline void flush_tlb_range(struct vm_area_struct *vma,
+		unsigned long start, unsigned long end)
+{
+	local_flush_tlb_all();
+}
+
+#define flush_tlb_mm(mm) flush_tlb_all()
 
 #else /* CONFIG_SMP */
 
 #include <asm/sbi.h>
 
-#define flush_tlb_all() sbi_remote_sfence_vma(0, 0, -1)
+static inline void remote_sfence_vma(struct cpumask *cmask, unsigned long start,
+				     unsigned long size)
+{
+	struct cpumask hmask;
+
+	cpumask_clear(&hmask);
+	riscv_cpuid_to_hartid_mask(cmask, &hmask);
+	sbi_remote_sfence_vma(hmask.bits, start, size);
+}
+
+#define flush_tlb_all() sbi_remote_sfence_vma(NULL, 0, -1)
 #define flush_tlb_page(vma, addr) flush_tlb_range(vma, addr, 0)
 #define flush_tlb_range(vma, start, end) \
-	sbi_remote_sfence_vma(0, start, (end) - (start))
+	remote_sfence_vma(mm_cpumask((vma)->vm_mm), start, (end) - (start))
+#define flush_tlb_mm(mm) \
+	remote_sfence_vma(mm_cpumask(mm), 0, -1)
 
 #endif /* CONFIG_SMP */
-
-/* Flush the TLB entries of the specified mm context */
-static inline void flush_tlb_mm(struct mm_struct *mm)
-{
-	flush_tlb_all();
-}
 
 /* Flush a range of kernel pages */
 static inline void flush_tlb_kernel_range(unsigned long start,
@@ -63,7 +75,5 @@ static inline void flush_tlb_kernel_range(unsigned long start,
 {
 	flush_tlb_all();
 }
-
-#endif /* CONFIG_MMU */
 
 #endif /* _ASM_RISCV_TLBFLUSH_H */

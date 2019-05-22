@@ -41,19 +41,13 @@
 #include <linux/workqueue.h>
 #include <linux/sysfs.h>
 
-struct idletimer_tg_attr {
-	struct attribute attr;
-	ssize_t	(*show)(struct kobject *kobj,
-			struct attribute *attr, char *buf);
-};
-
 struct idletimer_tg {
 	struct list_head entry;
 	struct timer_list timer;
 	struct work_struct work;
 
 	struct kobject *kobj;
-	struct idletimer_tg_attr attr;
+	struct device_attribute attr;
 
 	unsigned int refcnt;
 };
@@ -68,8 +62,6 @@ struct idletimer_tg *__idletimer_tg_find_by_label(const char *label)
 {
 	struct idletimer_tg *entry;
 
-	BUG_ON(!label);
-
 	list_for_each_entry(entry, &idletimer_tg_list, entry) {
 		if (!strcmp(label, entry->attr.attr.name))
 			return entry;
@@ -78,15 +70,15 @@ struct idletimer_tg *__idletimer_tg_find_by_label(const char *label)
 	return NULL;
 }
 
-static ssize_t idletimer_tg_show(struct kobject *kobj, struct attribute *attr,
-				 char *buf)
+static ssize_t idletimer_tg_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
 {
 	struct idletimer_tg *timer;
 	unsigned long expires = 0;
 
 	mutex_lock(&list_mutex);
 
-	timer =	__idletimer_tg_find_by_label(attr->name);
+	timer =	__idletimer_tg_find_by_label(attr->attr.name);
 	if (timer)
 		expires = timer->timer.expires;
 
@@ -116,6 +108,22 @@ static void idletimer_tg_expired(struct timer_list *t)
 	schedule_work(&timer->work);
 }
 
+static int idletimer_check_sysfs_name(const char *name, unsigned int size)
+{
+	int ret;
+
+	ret = xt_check_proc_name(name, size);
+	if (ret < 0)
+		return ret;
+
+	if (!strcmp(name, "power") ||
+	    !strcmp(name, "subsystem") ||
+	    !strcmp(name, "uevent"))
+		return -EINVAL;
+
+	return 0;
+}
+
 static int idletimer_tg_create(struct idletimer_tg_info *info)
 {
 	int ret;
@@ -126,13 +134,17 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 		goto out;
 	}
 
+	ret = idletimer_check_sysfs_name(info->label, sizeof(info->label));
+	if (ret < 0)
+		goto out_free_timer;
+
 	sysfs_attr_init(&info->timer->attr.attr);
 	info->timer->attr.attr.name = kstrdup(info->label, GFP_KERNEL);
 	if (!info->timer->attr.attr.name) {
 		ret = -ENOMEM;
 		goto out_free_timer;
 	}
-	info->timer->attr.attr.mode = S_IRUGO;
+	info->timer->attr.attr.mode = 0444;
 	info->timer->attr.show = idletimer_tg_show;
 
 	ret = sysfs_create_file(idletimer_tg_kobj, &info->timer->attr.attr);
@@ -146,10 +158,10 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 	timer_setup(&info->timer->timer, idletimer_tg_expired, 0);
 	info->timer->refcnt = 1;
 
+	INIT_WORK(&info->timer->work, idletimer_tg_work);
+
 	mod_timer(&info->timer->timer,
 		  msecs_to_jiffies(info->timeout * 1000) + jiffies);
-
-	INIT_WORK(&info->timer->work, idletimer_tg_work);
 
 	return 0;
 
@@ -172,8 +184,6 @@ static unsigned int idletimer_tg_target(struct sk_buff *skb,
 	pr_debug("resetting timer %s, timeout period %u\n",
 		 info->label, info->timeout);
 
-	BUG_ON(!info->timer);
-
 	mod_timer(&info->timer->timer,
 		  msecs_to_jiffies(info->timeout * 1000) + jiffies);
 
@@ -191,7 +201,10 @@ static int idletimer_tg_checkentry(const struct xt_tgchk_param *par)
 		pr_debug("timeout value is zero\n");
 		return -EINVAL;
 	}
-
+	if (info->timeout >= INT_MAX / 1000) {
+		pr_debug("timeout value is too big\n");
+		return -EINVAL;
+	}
 	if (info->label[0] == '\0' ||
 	    strnlen(info->label,
 		    MAX_IDLETIMER_LABEL_SIZE) == MAX_IDLETIMER_LABEL_SIZE) {
@@ -252,6 +265,7 @@ static struct xt_target idletimer_tg __read_mostly = {
 	.family		= NFPROTO_UNSPEC,
 	.target		= idletimer_tg_target,
 	.targetsize     = sizeof(struct idletimer_tg_info),
+	.usersize	= offsetof(struct idletimer_tg_info, timer),
 	.checkentry	= idletimer_tg_checkentry,
 	.destroy        = idletimer_tg_destroy,
 	.me		= THIS_MODULE,

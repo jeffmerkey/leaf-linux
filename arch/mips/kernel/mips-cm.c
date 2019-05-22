@@ -292,7 +292,6 @@ void mips_cm_lock_other(unsigned int cluster, unsigned int core,
 				  *this_cpu_ptr(&cm_core_lock_flags));
 	} else {
 		WARN_ON(cluster != 0);
-		WARN_ON(vp != 0);
 		WARN_ON(block != CM_GCR_Cx_OTHER_BLOCK_LOCAL);
 
 		/*
@@ -383,8 +382,8 @@ void mips_cm_error_report(void)
 				 sc_bit ? "True" : "False",
 				 cm2_cmd[cmd_bits], sport_bits);
 		}
-			pr_err("CM_ERROR=%08llx %s <%s>\n", cm_error,
-			       cm2_causes[cause], buf);
+		pr_err("CM_ERROR=%08llx %s <%s>\n", cm_error,
+		       cm2_causes[cause], buf);
 		pr_err("CM_ADDR =%08llx\n", cm_addr);
 		pr_err("CM_OTHER=%08llx %s\n", cm_other, cm2_causes[ocause]);
 	} else { /* CM3 */
@@ -458,5 +457,5 @@ void mips_cm_error_report(void)
 	}
 
 	/* reprime cause register */
-	write_gcr_error_cause(0);
+	write_gcr_error_cause(cm_error);
 }

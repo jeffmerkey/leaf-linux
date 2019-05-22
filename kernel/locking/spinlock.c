@@ -22,6 +22,13 @@
 #include <linux/debug_locks.h>
 #include <linux/export.h>
 
+#ifdef CONFIG_MMIOWB
+#ifndef arch_mmiowb_state
+DEFINE_PER_CPU(struct mmiowb_state, __mmiowb_state);
+EXPORT_PER_CPU_SYMBOL(__mmiowb_state);
+#endif
+#endif
+
 /*
  * If lockdep is enabled then we use the non-preemption spin-ops
  * even on CONFIG_PREEMPT, because lockdep assumes that interrupts are
@@ -66,12 +73,8 @@ void __lockfunc __raw_##op##_lock(locktype##_t *lock)			\
 			break;						\
 		preempt_enable();					\
 									\
-		if (!(lock)->break_lock)				\
-			(lock)->break_lock = 1;				\
-		while ((lock)->break_lock)				\
-			arch_##op##_relax(&lock->raw_lock);		\
+		arch_##op##_relax(&lock->raw_lock);			\
 	}								\
-	(lock)->break_lock = 0;						\
 }									\
 									\
 unsigned long __lockfunc __raw_##op##_lock_irqsave(locktype##_t *lock)	\
@@ -86,12 +89,9 @@ unsigned long __lockfunc __raw_##op##_lock_irqsave(locktype##_t *lock)	\
 		local_irq_restore(flags);				\
 		preempt_enable();					\
 									\
-		if (!(lock)->break_lock)				\
-			(lock)->break_lock = 1;				\
-		while ((lock)->break_lock)				\
-			arch_##op##_relax(&lock->raw_lock);		\
+		arch_##op##_relax(&lock->raw_lock);			\
 	}								\
-	(lock)->break_lock = 0;						\
+									\
 	return flags;							\
 }									\
 									\

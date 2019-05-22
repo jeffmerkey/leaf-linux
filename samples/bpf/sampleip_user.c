@@ -9,7 +9,6 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
@@ -22,6 +21,7 @@
 #include "libbpf.h"
 #include "bpf_load.h"
 #include "perf-sys.h"
+#include "trace_helpers.h"
 
 #define DEFAULT_FREQ	99
 #define DEFAULT_SECS	5
@@ -109,6 +109,11 @@ static void print_ip_map(int fd)
 	for (i = 0; i < max; i++) {
 		if (counts[i].ip > PAGE_OFFSET) {
 			sym = ksym_search(counts[i].ip);
+			if (!sym) {
+				printf("ksym not found. Is kallsyms loaded?\n");
+				continue;
+			}
+
 			printf("0x%-17llx %-32s %u\n", counts[i].ip, sym->name,
 			       counts[i].count);
 		} else {

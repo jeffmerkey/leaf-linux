@@ -75,6 +75,7 @@ int mcp89_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gf100_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gf108_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gk104_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
+int gk110_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gk20a_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gm107_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gm200_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
@@ -82,6 +83,7 @@ int gm20b_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gp100_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gp102_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 int gp10b_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
+int gv100_fb_new(struct nvkm_device *, int, struct nvkm_fb **);
 
 #include <subdev/bios.h>
 #include <subdev/bios/ramcfg.h>
@@ -103,7 +105,10 @@ enum nvkm_ram_type {
 	NVKM_RAM_TYPE_GDDR2,
 	NVKM_RAM_TYPE_GDDR3,
 	NVKM_RAM_TYPE_GDDR4,
-	NVKM_RAM_TYPE_GDDR5
+	NVKM_RAM_TYPE_GDDR5,
+	NVKM_RAM_TYPE_GDDR5X,
+	NVKM_RAM_TYPE_GDDR6,
+	NVKM_RAM_TYPE_HBM2,
 };
 
 struct nvkm_ram {

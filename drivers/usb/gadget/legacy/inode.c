@@ -1209,36 +1209,36 @@ dev_release (struct inode *inode, struct file *fd)
 	return 0;
 }
 
-static unsigned int
+static __poll_t
 ep0_poll (struct file *fd, poll_table *wait)
 {
        struct dev_data         *dev = fd->private_data;
-       int                     mask = 0;
+       __poll_t                mask = 0;
 
 	if (dev->state <= STATE_DEV_OPENED)
 		return DEFAULT_POLLMASK;
 
-       poll_wait(fd, &dev->wait, wait);
+	poll_wait(fd, &dev->wait, wait);
 
-       spin_lock_irq (&dev->lock);
+	spin_lock_irq(&dev->lock);
 
-       /* report fd mode change before acting on it */
-       if (dev->setup_abort) {
-               dev->setup_abort = 0;
-               mask = POLLHUP;
-               goto out;
-       }
+	/* report fd mode change before acting on it */
+	if (dev->setup_abort) {
+		dev->setup_abort = 0;
+		mask = EPOLLHUP;
+		goto out;
+	}
 
-       if (dev->state == STATE_DEV_SETUP) {
-               if (dev->setup_in || dev->setup_can_stall)
-                       mask = POLLOUT;
-       } else {
-               if (dev->ev_next != 0)
-                       mask = POLLIN;
-       }
+	if (dev->state == STATE_DEV_SETUP) {
+		if (dev->setup_in || dev->setup_can_stall)
+			mask = EPOLLOUT;
+	} else {
+		if (dev->ev_next != 0)
+			mask = EPOLLIN;
+	}
 out:
-       spin_unlock_irq(&dev->lock);
-       return mask;
+	spin_unlock_irq(&dev->lock);
+	return mask;
 }
 
 static long dev_ioctl (struct file *fd, unsigned code, unsigned long value)
@@ -1470,7 +1470,6 @@ delegate:
 			dev->setup_wLength = w_length;
 			dev->setup_out_ready = 0;
 			dev->setup_out_error = 0;
-			value = 0;
 
 			/* read DATA stage for OUT right away */
 			if (unlikely (!dev->setup_in && w_length)) {

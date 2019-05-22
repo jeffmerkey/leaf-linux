@@ -653,6 +653,12 @@ static int max732x_probe(struct i2c_client *client,
 		chip->client_group_a = client;
 		if (nr_port > 8) {
 			c = i2c_new_dummy(client->adapter, addr_b);
+			if (!c) {
+				dev_err(&client->dev,
+					"Failed to allocate I2C device\n");
+				ret = -ENODEV;
+				goto out_failed;
+			}
 			chip->client_group_b = chip->client_dummy = c;
 		}
 		break;
@@ -660,6 +666,12 @@ static int max732x_probe(struct i2c_client *client,
 		chip->client_group_b = client;
 		if (nr_port > 8) {
 			c = i2c_new_dummy(client->adapter, addr_a);
+			if (!c) {
+				dev_err(&client->dev,
+					"Failed to allocate I2C device\n");
+				ret = -ENODEV;
+				goto out_failed;
+			}
 			chip->client_group_a = chip->client_dummy = c;
 		}
 		break;
@@ -709,8 +721,7 @@ static int max732x_probe(struct i2c_client *client,
 	return 0;
 
 out_failed:
-	if (chip->client_dummy)
-		i2c_unregister_device(chip->client_dummy);
+	i2c_unregister_device(chip->client_dummy);
 	return ret;
 }
 
@@ -734,8 +745,7 @@ static int max732x_remove(struct i2c_client *client)
 	gpiochip_remove(&chip->gpio_chip);
 
 	/* unregister any dummy i2c_client */
-	if (chip->client_dummy)
-		i2c_unregister_device(chip->client_dummy);
+	i2c_unregister_device(chip->client_dummy);
 
 	return 0;
 }

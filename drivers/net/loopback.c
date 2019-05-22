@@ -59,12 +59,6 @@
 #include <net/net_namespace.h>
 #include <linux/u64_stats_sync.h>
 
-struct pcpu_lstats {
-	u64			packets;
-	u64			bytes;
-	struct u64_stats_sync	syncp;
-};
-
 /* The higher levels take care of making this non-reentrant (it's
  * called with bh's disabled).
  */
@@ -75,6 +69,10 @@ static netdev_tx_t loopback_xmit(struct sk_buff *skb,
 	int len;
 
 	skb_tx_timestamp(skb);
+
+	/* do not fool net_timestamp_check() with various clock bases */
+	skb->tstamp = 0;
+
 	skb_orphan(skb);
 
 	/* Before queueing this packet to netif_rx(),
@@ -130,21 +128,9 @@ static u32 always_on(struct net_device *dev)
 	return 1;
 }
 
-static int loopback_get_ts_info(struct net_device *netdev,
-				struct ethtool_ts_info *ts_info)
-{
-	ts_info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
-				   SOF_TIMESTAMPING_RX_SOFTWARE |
-				   SOF_TIMESTAMPING_SOFTWARE;
-
-	ts_info->phc_index = -1;
-
-	return 0;
-};
-
 static const struct ethtool_ops loopback_ethtool_ops = {
 	.get_link		= always_on,
-	.get_ts_info		= loopback_get_ts_info,
+	.get_ts_info		= ethtool_op_get_ts_info,
 };
 
 static int loopback_dev_init(struct net_device *dev)

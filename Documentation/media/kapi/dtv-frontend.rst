@@ -1,3 +1,5 @@
+.. SPDX-License-Identifier: GPL-2.0
+
 Digital TV Frontend kABI
 ------------------------
 
@@ -8,7 +10,7 @@ The Digital TV Frontend kABI defines a driver-internal interface for
 registering low-level, hardware specific driver to a hardware independent
 frontend layer. It is only of interest for Digital TV device driver writers.
 The header file for this API is named ``dvb_frontend.h`` and located in
-``drivers/media/dvb-core``.
+``include/media/``.
 
 Demodulator driver
 ^^^^^^^^^^^^^^^^^^
@@ -17,7 +19,7 @@ The demodulator driver is responsible to talk with the decoding part of the
 hardware. Such driver should implement :c:type:`dvb_frontend_ops`, with
 tells what type of digital TV standards are supported, and points to a
 series of functions that allow the DVB core to command the hardware via
-the code under ``drivers/media/dvb-core/dvb_frontend.c``.
+the code under ``include/media/dvb_frontend.c``.
 
 A typical example of such struct in a driver ``foo`` is::
 
@@ -118,7 +120,7 @@ Satellite TV reception is::
 
 .. |delta|   unicode:: U+00394
 
-The ``drivers/media/dvb-core/dvb_frontend.c`` has a kernel thread with is
+The ``include/media/dvb_frontend.c`` has a kernel thread with is
 responsible for tuning the device. It supports multiple algorithms to
 detect a channel, as defined at enum :c:func:`dvbfe_algo`.
 
@@ -326,7 +328,7 @@ Statistics collect
 
 On almost all frontend hardware, the bit and byte counts are stored by
 the hardware after a certain amount of time or after the total bit/block
-counter reaches a certain value (usually programable), for example, on
+counter reaches a certain value (usually programmable), for example, on
 every 1000 ms or after receiving 1,000,000 bits.
 
 So, if you read the registers too soon, you'll end by reading the same
@@ -440,4 +442,4 @@ monotonic stats at the right time.
 Digital TV Frontend functions and types
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. kernel-doc:: drivers/media/dvb-core/dvb_frontend.h
+.. kernel-doc:: include/media/dvb_frontend.h

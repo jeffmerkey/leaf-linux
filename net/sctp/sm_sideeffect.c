@@ -52,7 +52,7 @@
 #include <net/sctp/sm.h>
 #include <net/sctp/stream_sched.h>
 
-static int sctp_cmd_interpreter(enum sctp_event event_type,
+static int sctp_cmd_interpreter(enum sctp_event_type event_type,
 				union sctp_subtype subtype,
 				enum sctp_state state,
 				struct sctp_endpoint *ep,
@@ -61,7 +61,7 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 				enum sctp_disposition status,
 				struct sctp_cmd_seq *commands,
 				gfp_t gfp);
-static int sctp_side_effects(enum sctp_event event_type,
+static int sctp_side_effects(enum sctp_event_type event_type,
 			     union sctp_subtype subtype,
 			     enum sctp_state state,
 			     struct sctp_endpoint *ep,
@@ -623,7 +623,7 @@ static void sctp_cmd_init_failed(struct sctp_cmd_seq *commands,
 /* Worker routine to handle SCTP_CMD_ASSOC_FAILED.  */
 static void sctp_cmd_assoc_failed(struct sctp_cmd_seq *commands,
 				  struct sctp_association *asoc,
-				  enum sctp_event event_type,
+				  enum sctp_event_type event_type,
 				  union sctp_subtype subtype,
 				  struct sctp_chunk *chunk,
 				  unsigned int error)
@@ -632,7 +632,7 @@ static void sctp_cmd_assoc_failed(struct sctp_cmd_seq *commands,
 	struct sctp_chunk *abort;
 
 	/* Cancel any partial delivery in progress. */
-	sctp_ulpq_abort_pd(&asoc->ulpq, GFP_ATOMIC);
+	asoc->stream.si->abort_pd(&asoc->ulpq, GFP_ATOMIC);
 
 	if (event_type == SCTP_EVENT_T_CHUNK && subtype.chunk == SCTP_CID_ABORT)
 		event = sctp_ulpevent_make_assoc_change(asoc, 0, SCTP_COMM_LOST,
@@ -878,12 +878,12 @@ static void sctp_cmd_new_state(struct sctp_cmd_seq *cmds,
 		 * successfully completed a connect() call.
 		 */
 		if (sctp_state(asoc, ESTABLISHED) && sctp_sstate(sk, CLOSED))
-			sk->sk_state = SCTP_SS_ESTABLISHED;
+			inet_sk_set_state(sk, SCTP_SS_ESTABLISHED);
 
 		/* Set the RCV_SHUTDOWN flag when a SHUTDOWN is received. */
 		if (sctp_state(asoc, SHUTDOWN_RECEIVED) &&
 		    sctp_sstate(sk, ESTABLISHED)) {
-			sk->sk_state = SCTP_SS_CLOSING;
+			inet_sk_set_state(sk, SCTP_SS_CLOSING);
 			sk->sk_shutdown |= RCV_SHUTDOWN;
 		}
 	}
@@ -972,7 +972,7 @@ static void sctp_cmd_process_operr(struct sctp_cmd_seq *cmds,
 		if (!ev)
 			return;
 
-		sctp_ulpq_tail_event(&asoc->ulpq, ev);
+		asoc->stream.si->enqueue_event(&asoc->ulpq, ev);
 
 		switch (err_hdr->cause) {
 		case SCTP_ERROR_UNKNOWN_CHUNK:
@@ -1004,18 +1004,6 @@ static void sctp_cmd_process_operr(struct sctp_cmd_seq *cmds,
 		default:
 			break;
 		}
-	}
-}
-
-/* Process variable FWDTSN chunk information. */
-static void sctp_cmd_process_fwdtsn(struct sctp_ulpq *ulpq,
-				    struct sctp_chunk *chunk)
-{
-	struct sctp_fwdtsn_skip *skip;
-
-	/* Walk through all the skipped SSNs */
-	sctp_walk_fwdtsn(skip, chunk) {
-		sctp_ulpq_skip(ulpq, ntohs(skip->stream), ntohs(skip->ssn));
 	}
 }
 
@@ -1058,7 +1046,17 @@ static void sctp_cmd_assoc_change(struct sctp_cmd_seq *commands,
 					    asoc->c.sinit_max_instreams,
 					    NULL, GFP_ATOMIC);
 	if (ev)
-		sctp_ulpq_tail_event(&asoc->ulpq, ev);
+		asoc->stream.si->enqueue_event(&asoc->ulpq, ev);
+}
+
+static void sctp_cmd_peer_no_auth(struct sctp_cmd_seq *commands,
+				  struct sctp_association *asoc)
+{
+	struct sctp_ulpevent *ev;
+
+	ev = sctp_ulpevent_make_authkey(asoc, 0, SCTP_AUTH_NO_AUTH, GFP_ATOMIC);
+	if (ev)
+		asoc->stream.si->enqueue_event(&asoc->ulpq, ev);
 }
 
 /* Helper function to generate an adaptation indication event */
@@ -1070,7 +1068,7 @@ static void sctp_cmd_adaptation_ind(struct sctp_cmd_seq *commands,
 	ev = sctp_ulpevent_make_adaptation_indication(asoc, GFP_ATOMIC);
 
 	if (ev)
-		sctp_ulpq_tail_event(&asoc->ulpq, ev);
+		asoc->stream.si->enqueue_event(&asoc->ulpq, ev);
 }
 
 
@@ -1114,32 +1112,6 @@ static void sctp_cmd_send_msg(struct sctp_association *asoc,
 }
 
 
-/* Sent the next ASCONF packet currently stored in the association.
- * This happens after the ASCONF_ACK was succeffully processed.
- */
-static void sctp_cmd_send_asconf(struct sctp_association *asoc)
-{
-	struct net *net = sock_net(asoc->base.sk);
-
-	/* Send the next asconf chunk from the addip chunk
-	 * queue.
-	 */
-	if (!list_empty(&asoc->addip_chunk_list)) {
-		struct list_head *entry = asoc->addip_chunk_list.next;
-		struct sctp_chunk *asconf = list_entry(entry,
-						struct sctp_chunk, list);
-		list_del_init(entry);
-
-		/* Hold the chunk until an ASCONF_ACK is received. */
-		sctp_chunk_hold(asconf);
-		if (sctp_primitive_ASCONF(net, asoc, asconf))
-			sctp_chunk_free(asconf);
-		else
-			asoc->addip_last_asconf = asconf;
-	}
-}
-
-
 /* These three macros allow us to pull the debugging code out of the
  * main flow of sctp_do_sm() to keep attention focused on the real
  * functionality there.
@@ -1164,7 +1136,7 @@ static void sctp_cmd_send_asconf(struct sctp_association *asoc)
  * If you want to understand all of lksctp, this is a
  * good place to start.
  */
-int sctp_do_sm(struct net *net, enum sctp_event event_type,
+int sctp_do_sm(struct net *net, enum sctp_event_type event_type,
 	       union sctp_subtype subtype, enum sctp_state state,
 	       struct sctp_endpoint *ep, struct sctp_association *asoc,
 	       void *event_arg, gfp_t gfp)
@@ -1201,7 +1173,7 @@ int sctp_do_sm(struct net *net, enum sctp_event event_type,
 /*****************************************************************
  * This the master state function side effect processing function.
  *****************************************************************/
-static int sctp_side_effects(enum sctp_event event_type,
+static int sctp_side_effects(enum sctp_event_type event_type,
 			     union sctp_subtype subtype,
 			     enum sctp_state state,
 			     struct sctp_endpoint *ep,
@@ -1287,7 +1259,7 @@ bail:
  ********************************************************************/
 
 /* This is the side-effect interpreter.  */
-static int sctp_cmd_interpreter(enum sctp_event event_type,
+static int sctp_cmd_interpreter(enum sctp_event_type event_type,
 				union sctp_subtype subtype,
 				enum sctp_state state,
 				struct sctp_endpoint *ep,
@@ -1368,18 +1340,12 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 			break;
 
 		case SCTP_CMD_REPORT_FWDTSN:
-			/* Move the Cumulattive TSN Ack ahead. */
-			sctp_tsnmap_skip(&asoc->peer.tsn_map, cmd->obj.u32);
-
-			/* purge the fragmentation queue */
-			sctp_ulpq_reasm_flushtsn(&asoc->ulpq, cmd->obj.u32);
-
-			/* Abort any in progress partial delivery. */
-			sctp_ulpq_abort_pd(&asoc->ulpq, GFP_ATOMIC);
+			asoc->stream.si->report_ftsn(&asoc->ulpq, cmd->obj.u32);
 			break;
 
 		case SCTP_CMD_PROCESS_FWDTSN:
-			sctp_cmd_process_fwdtsn(&asoc->ulpq, cmd->obj.chunk);
+			asoc->stream.si->handle_ftsn(&asoc->ulpq,
+						     cmd->obj.chunk);
 			break;
 
 		case SCTP_CMD_GEN_SACK:
@@ -1483,8 +1449,9 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 			pr_debug("%s: sm_sideff: chunk_up:%p, ulpq:%p\n",
 				 __func__, cmd->obj.chunk, &asoc->ulpq);
 
-			sctp_ulpq_tail_data(&asoc->ulpq, cmd->obj.chunk,
-					    GFP_ATOMIC);
+			asoc->stream.si->ulpevent_data(&asoc->ulpq,
+						       cmd->obj.chunk,
+						       GFP_ATOMIC);
 			break;
 
 		case SCTP_CMD_EVENT_ULP:
@@ -1492,7 +1459,8 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 			pr_debug("%s: sm_sideff: event_up:%p, ulpq:%p\n",
 				 __func__, cmd->obj.ulpevent, &asoc->ulpq);
 
-			sctp_ulpq_tail_event(&asoc->ulpq, cmd->obj.ulpevent);
+			asoc->stream.si->enqueue_event(&asoc->ulpq,
+						       cmd->obj.ulpevent);
 			break;
 
 		case SCTP_CMD_REPLY:
@@ -1729,12 +1697,13 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 			break;
 
 		case SCTP_CMD_PART_DELIVER:
-			sctp_ulpq_partial_delivery(&asoc->ulpq, GFP_ATOMIC);
+			asoc->stream.si->start_pd(&asoc->ulpq, GFP_ATOMIC);
 			break;
 
 		case SCTP_CMD_RENEGE:
-			sctp_ulpq_renege(&asoc->ulpq, cmd->obj.chunk,
-					 GFP_ATOMIC);
+			asoc->stream.si->renege_events(&asoc->ulpq,
+						       cmd->obj.chunk,
+						       GFP_ATOMIC);
 			break;
 
 		case SCTP_CMD_SETUP_T4:
@@ -1770,6 +1739,9 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 		case SCTP_CMD_ADAPTATION_IND:
 			sctp_cmd_adaptation_ind(commands, asoc);
 			break;
+		case SCTP_CMD_PEER_NO_AUTH:
+			sctp_cmd_peer_no_auth(commands, asoc);
+			break;
 
 		case SCTP_CMD_ASSOC_SHKEY:
 			error = sctp_auth_asoc_init_active_key(asoc,
@@ -1784,9 +1756,6 @@ static int sctp_cmd_interpreter(enum sctp_event event_type,
 				local_cork = 1;
 			}
 			sctp_cmd_send_msg(asoc, cmd->obj.msg, gfp);
-			break;
-		case SCTP_CMD_SEND_NEXT_ASCONF:
-			sctp_cmd_send_asconf(asoc);
 			break;
 		case SCTP_CMD_PURGE_ASCONF_QUEUE:
 			sctp_asconf_queue_teardown(asoc);
@@ -1829,4 +1798,3 @@ nomem:
 	error = -ENOMEM;
 	goto out;
 }
-

@@ -1128,7 +1128,13 @@ static int context_add_buffer(struct context *ctx)
 		return -ENOMEM;
 
 	offset = (void *)&desc->buffer - (void *)desc;
-	desc->buffer_size = PAGE_SIZE - offset;
+	/*
+	 * Some controllers, like JMicron ones, always issue 0x20-byte DMA reads
+	 * for descriptors, even 0x10-byte ones. This can cause page faults when
+	 * an IOMMU is in use and the oversized read crosses a page boundary.
+	 * Work around this by always leaving at least 0x10 bytes of padding.
+	 */
+	desc->buffer_size = PAGE_SIZE - offset - 0x10;
 	desc->buffer_bus = bus_addr + offset;
 	desc->used = 0;
 
@@ -2933,7 +2939,6 @@ static void set_multichannel_mask(struct fw_ohci *ohci, u64 channels)
 	reg_write(ohci, OHCI1394_IRMultiChanMaskLoClear, ~lo);
 	reg_write(ohci, OHCI1394_IRMultiChanMaskHiSet, hi);
 	reg_write(ohci, OHCI1394_IRMultiChanMaskLoSet, lo);
-	mmiowb();
 	ohci->mc_channels = channels;
 }
 

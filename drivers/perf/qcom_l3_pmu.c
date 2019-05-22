@@ -468,7 +468,7 @@ static bool qcom_l3_cache__validate_event_group(struct perf_event *event)
 	counters = event_num_counters(event);
 	counters += event_num_counters(leader);
 
-	list_for_each_entry(sibling, &leader->sibling_list, group_entry) {
+	for_each_sibling_event(sibling, leader) {
 		if (is_software_event(sibling))
 			continue;
 		if (sibling->pmu != event->pmu)
@@ -493,13 +493,6 @@ static int qcom_l3_cache__event_init(struct perf_event *event)
 	 */
 	if (event->attr.type != event->pmu->type)
 		return -ENOENT;
-
-	/*
-	 * There are no per-counter mode filters in the PMU.
-	 */
-	if (event->attr.exclude_user || event->attr.exclude_kernel ||
-	    event->attr.exclude_hv || event->attr.exclude_idle)
-		return -EINVAL;
 
 	/*
 	 * Sampling not supported since these events are not core-attributable.
@@ -777,6 +770,7 @@ static int qcom_l3_cache_pmu_probe(struct platform_device *pdev)
 		.read		= qcom_l3_cache__event_read,
 
 		.attr_groups	= qcom_l3_cache_pmu_attr_grps,
+		.capabilities	= PERF_PMU_CAP_NO_EXCLUDE,
 	};
 
 	memrc = platform_get_resource(pdev, IORESOURCE_MEM, 0);

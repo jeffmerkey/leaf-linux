@@ -28,14 +28,14 @@
 #include <linux/mtd/physmap.h>
 #include <linux/mtd/partitions.h>
 #include <linux/regulator/machine.h>
-#include <linux/i2c/pxa-i2c.h>
+#include <linux/platform_data/i2c-pxa.h>
 
 #include <asm/types.h>
 #include <asm/setup.h>
 #include <asm/memory.h>
 #include <asm/mach-types.h>
 #include <asm/irq.h>
-#include <asm/sizes.h>
+#include <linux/sizes.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -355,9 +355,6 @@ static struct pxamci_platform_data trizeps4_mci_platform_data = {
 	.exit		= trizeps4_mci_exit,
 	.get_ro		= NULL,	/* write-protection not supported */
 	.setpower 	= NULL,	/* power-switching not supported */
-	.gpio_card_detect = -1,
-	.gpio_card_ro	= -1,
-	.gpio_power	= -1,
 };
 
 /****************************************************************************

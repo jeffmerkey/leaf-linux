@@ -435,7 +435,7 @@ static int saa7134_go7007_init(struct saa7134_dev *dev)
 
 	go->board_id = GO7007_BOARDID_PCI_VOYAGER;
 	snprintf(go->bus_info, sizeof(go->bus_info), "PCI:%s", pci_name(dev->pci));
-	strlcpy(go->name, saa7134_boards[dev->board].name, sizeof(go->name));
+	strscpy(go->name, saa7134_boards[dev->board].name, sizeof(go->name));
 	go->hpi_ops = &saa7134_go7007_hpi_ops;
 	go->hpi_context = saa;
 	saa->dev = dev;
@@ -444,7 +444,7 @@ static int saa7134_go7007_init(struct saa7134_dev *dev)
 	sd = &saa->sd;
 	v4l2_subdev_init(sd, &saa7134_go7007_sd_ops);
 	v4l2_set_subdevdata(sd, saa);
-	strncpy(sd->name, "saa7134-go7007", sizeof(sd->name));
+	strscpy(sd->name, "saa7134-go7007", sizeof(sd->name));
 
 	/* Allocate a couple pages for receiving the compressed stream */
 	saa->top = (u8 *)get_zeroed_page(GFP_KERNEL);

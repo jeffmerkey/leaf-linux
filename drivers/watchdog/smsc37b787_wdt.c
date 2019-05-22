@@ -366,7 +366,7 @@ static int wb_smsc_wdt_open(struct inode *inode, struct file *file)
 	pr_info("Watchdog enabled. Timeout set to %d %s\n",
 		timeout, (unit == UNIT_SECOND) ? "second(s)" : "minute(s)");
 
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 /* close => shut off the timer */
@@ -478,7 +478,7 @@ static long wb_smsc_wdt_ioctl(struct file *file,
 			return -EINVAL;
 		timeout = new_timeout;
 		wb_smsc_wdt_set_timeout(timeout);
-		/* fall through and return the new timeout... */
+		/* fall through - and return the new timeout... */
 	case WDIOC_GETTIMEOUT:
 		new_timeout = timeout;
 		if (unit == UNIT_MINUTE)

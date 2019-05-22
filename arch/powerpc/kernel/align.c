@@ -131,8 +131,7 @@ static int emulate_spe(struct pt_regs *regs, unsigned int reg,
 
 	/* Verify the address of the operand */
 	if (unlikely(user_mode(regs) &&
-		     !access_ok((flags & ST ? VERIFY_WRITE : VERIFY_READ),
-				addr, nb)))
+		     !access_ok(addr, nb)))
 		return -EFAULT;
 
 	/* userland only */
@@ -339,7 +338,7 @@ int fix_alignment(struct pt_regs *regs)
 	if (r < 0)
 		return -EINVAL;
 
-	type = op.type & INSTR_TYPE_MASK;
+	type = GETTYPE(op.type);
 	if (!OP_IS_LOAD_STORE(type)) {
 		if (op.type != CACHEOP + DCBZ)
 			return -EINVAL;

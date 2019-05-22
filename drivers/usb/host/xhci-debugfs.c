@@ -8,6 +8,7 @@
  */
 
 #include <linux/slab.h>
+#include <linux/uaccess.h>
 
 #include "xhci.h"
 #include "xhci-debugfs.h"
@@ -162,7 +163,7 @@ static void xhci_debugfs_extcap_regset(struct xhci_hcd *xhci, int cap_id,
 static int xhci_ring_enqueue_show(struct seq_file *s, void *unused)
 {
 	dma_addr_t		dma;
-	struct xhci_ring	*ring = s->private;
+	struct xhci_ring	*ring = *(struct xhci_ring **)s->private;
 
 	dma = xhci_trb_virt_to_dma(ring->enq_seg, ring->enqueue);
 	seq_printf(s, "%pad\n", &dma);
@@ -173,7 +174,7 @@ static int xhci_ring_enqueue_show(struct seq_file *s, void *unused)
 static int xhci_ring_dequeue_show(struct seq_file *s, void *unused)
 {
 	dma_addr_t		dma;
-	struct xhci_ring	*ring = s->private;
+	struct xhci_ring	*ring = *(struct xhci_ring **)s->private;
 
 	dma = xhci_trb_virt_to_dma(ring->deq_seg, ring->dequeue);
 	seq_printf(s, "%pad\n", &dma);
@@ -183,7 +184,7 @@ static int xhci_ring_dequeue_show(struct seq_file *s, void *unused)
 
 static int xhci_ring_cycle_show(struct seq_file *s, void *unused)
 {
-	struct xhci_ring	*ring = s->private;
+	struct xhci_ring	*ring = *(struct xhci_ring **)s->private;
 
 	seq_printf(s, "%d\n", ring->cycle_state);
 
@@ -211,7 +212,7 @@ static void xhci_ring_dump_segment(struct seq_file *s,
 static int xhci_ring_trb_show(struct seq_file *s, void *unused)
 {
 	int			i;
-	struct xhci_ring	*ring = s->private;
+	struct xhci_ring	*ring = *(struct xhci_ring **)s->private;
 	struct xhci_segment	*seg = ring->first_seg;
 
 	for (i = 0; i < ring->num_segs; i++) {
@@ -333,6 +334,67 @@ static const struct file_operations xhci_context_fops = {
 	.release		= single_release,
 };
 
+
+
+static int xhci_portsc_show(struct seq_file *s, void *unused)
+{
+	struct xhci_port	*port = s->private;
+	u32			portsc;
+
+	portsc = readl(port->addr);
+	seq_printf(s, "%s\n", xhci_decode_portsc(portsc));
+
+	return 0;
+}
+
+static int xhci_port_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, xhci_portsc_show, inode->i_private);
+}
+
+static ssize_t xhci_port_write(struct file *file,  const char __user *ubuf,
+			       size_t count, loff_t *ppos)
+{
+	struct seq_file         *s = file->private_data;
+	struct xhci_port	*port = s->private;
+	struct xhci_hcd		*xhci = hcd_to_xhci(port->rhub->hcd);
+	char                    buf[32];
+	u32			portsc;
+	unsigned long		flags;
+
+	if (copy_from_user(&buf, ubuf, min_t(size_t, sizeof(buf) - 1, count)))
+		return -EFAULT;
+
+	if (!strncmp(buf, "compliance", 10)) {
+		/* If CTC is clear, compliance is enabled by default */
+		if (!HCC2_CTC(xhci->hcc_params2))
+			return count;
+		spin_lock_irqsave(&xhci->lock, flags);
+		/* compliance mode can only be enabled on ports in RxDetect */
+		portsc = readl(port->addr);
+		if ((portsc & PORT_PLS_MASK) != XDEV_RXDETECT) {
+			spin_unlock_irqrestore(&xhci->lock, flags);
+			return -EPERM;
+		}
+		portsc = xhci_port_state_to_neutral(portsc);
+		portsc &= ~PORT_PLS_MASK;
+		portsc |= PORT_LINK_STROBE | XDEV_COMP_MODE;
+		writel(portsc, port->addr);
+		spin_unlock_irqrestore(&xhci->lock, flags);
+	} else {
+		return -EINVAL;
+	}
+	return count;
+}
+
+static const struct file_operations port_fops = {
+	.open			= xhci_port_open,
+	.write                  = xhci_port_write,
+	.read			= seq_read,
+	.llseek			= seq_lseek,
+	.release		= single_release,
+};
+
 static void xhci_debugfs_create_files(struct xhci_hcd *xhci,
 				      struct xhci_file_map *files,
 				      size_t nentries, void *data,
@@ -346,7 +408,7 @@ static void xhci_debugfs_create_files(struct xhci_hcd *xhci,
 }
 
 static struct dentry *xhci_debugfs_create_ring_dir(struct xhci_hcd *xhci,
-						   struct xhci_ring *ring,
+						   struct xhci_ring **ring,
 						   const char *name,
 						   struct dentry *parent)
 {
@@ -387,7 +449,7 @@ void xhci_debugfs_create_endpoint(struct xhci_hcd *xhci,
 
 	snprintf(epriv->name, sizeof(epriv->name), "ep%02d", ep_index);
 	epriv->root = xhci_debugfs_create_ring_dir(xhci,
-						   dev->eps[ep_index].new_ring,
+						   &dev->eps[ep_index].ring,
 						   epriv->name,
 						   spriv->root);
 	spriv->eps[ep_index] = epriv;
@@ -423,7 +485,7 @@ void xhci_debugfs_create_slot(struct xhci_hcd *xhci, int slot_id)
 	priv->dev = dev;
 	dev->debugfs_private = priv;
 
-	xhci_debugfs_create_ring_dir(xhci, dev->eps[0].ring,
+	xhci_debugfs_create_ring_dir(xhci, &dev->eps[0].ring,
 				     "ep00", priv->root);
 
 	xhci_debugfs_create_context_files(xhci, priv->root, slot_id);
@@ -447,6 +509,27 @@ void xhci_debugfs_remove_slot(struct xhci_hcd *xhci, int slot_id)
 
 	kfree(priv);
 	dev->debugfs_private = NULL;
+}
+
+static void xhci_debugfs_create_ports(struct xhci_hcd *xhci,
+				      struct dentry *parent)
+{
+	unsigned int		num_ports;
+	char			port_name[8];
+	struct xhci_port	*port;
+	struct dentry		*dir;
+
+	num_ports = HCS_MAX_PORTS(xhci->hcs_params1);
+
+	parent = debugfs_create_dir("ports", parent);
+
+	while (num_ports--) {
+		scnprintf(port_name, sizeof(port_name), "port%02d",
+			  num_ports + 1);
+		dir = debugfs_create_dir(port_name, parent);
+		port = &xhci->hw_ports[num_ports];
+		debugfs_create_file("portsc", 0644, dir, port, &port_fops);
+	}
 }
 
 void xhci_debugfs_init(struct xhci_hcd *xhci)
@@ -488,15 +571,17 @@ void xhci_debugfs_init(struct xhci_hcd *xhci)
 				   ARRAY_SIZE(xhci_extcap_dbc),
 				   "reg-ext-dbc");
 
-	xhci_debugfs_create_ring_dir(xhci, xhci->cmd_ring,
+	xhci_debugfs_create_ring_dir(xhci, &xhci->cmd_ring,
 				     "command-ring",
 				     xhci->debugfs_root);
 
-	xhci_debugfs_create_ring_dir(xhci, xhci->event_ring,
+	xhci_debugfs_create_ring_dir(xhci, &xhci->event_ring,
 				     "event-ring",
 				     xhci->debugfs_root);
 
 	xhci->debugfs_slots = debugfs_create_dir("devices", xhci->debugfs_root);
+
+	xhci_debugfs_create_ports(xhci, xhci->debugfs_root);
 }
 
 void xhci_debugfs_exit(struct xhci_hcd *xhci)

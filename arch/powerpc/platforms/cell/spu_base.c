@@ -50,11 +50,11 @@ struct cbe_spu_info cbe_spu_info[MAX_NUMNODES];
 EXPORT_SYMBOL_GPL(cbe_spu_info);
 
 /*
- * The spufs fault-handling code needs to call force_sig_info to raise signals
+ * The spufs fault-handling code needs to call force_sig_fault to raise signals
  * on DMA errors. Export it here to avoid general kernel-wide access to this
  * function
  */
-EXPORT_SYMBOL_GPL(force_sig_info);
+EXPORT_SYMBOL_GPL(force_sig_fault);
 
 /*
  * Protects cbe_spu_info and spu->number.
@@ -194,7 +194,7 @@ static int __spu_trap_data_map(struct spu *spu, unsigned long ea, u64 dsisr)
 	 * faults need to be deferred to process context.
 	 */
 	if ((dsisr & MFC_DSISR_PTE_NOT_FOUND) &&
-	    (REGION_ID(ea) != USER_REGION_ID)) {
+	    (get_region_id(ea) != USER_REGION_ID)) {
 
 		spin_unlock(&spu->register_lock);
 		ret = hash_page(ea,
@@ -224,7 +224,7 @@ static void __spu_kernel_slb(void *addr, struct copro_slb *slb)
 	unsigned long ea = (unsigned long)addr;
 	u64 llp;
 
-	if (REGION_ID(ea) == KERNEL_REGION_ID)
+	if (get_region_id(ea) == LINEAR_MAP_REGION_ID)
 		llp = mmu_psize_defs[mmu_linear_psize].sllp;
 	else
 		llp = mmu_psize_defs[mmu_virtual_psize].sllp;

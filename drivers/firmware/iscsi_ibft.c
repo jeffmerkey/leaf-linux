@@ -425,7 +425,7 @@ static ssize_t ibft_attr_show_acpitbl(void *data, int type, char *buf)
 
 	switch (type) {
 	case ISCSI_BOOT_ACPITBL_SIGNATURE:
-		str += sprintf_string(str, ACPI_NAME_SIZE,
+		str += sprintf_string(str, ACPI_NAMESEG_SIZE,
 				      entry->header->header.signature);
 		break;
 	case ISCSI_BOOT_ACPITBL_OEM_ID:
@@ -542,6 +542,7 @@ static umode_t __init ibft_check_tgt_for(void *data, int type)
 	case ISCSI_BOOT_TGT_NIC_ASSOC:
 	case ISCSI_BOOT_TGT_CHAP_TYPE:
 		rc = S_IRUGO;
+		break;
 	case ISCSI_BOOT_TGT_NAME:
 		if (tgt->tgt_name_len)
 			rc = S_IRUGO;
@@ -719,8 +720,9 @@ static int __init ibft_create_kobject(struct acpi_table_ibft *header,
 		* executes only devices which are in domain 0. Furthermore, the
 		* iBFT spec doesn't have a domain id field :-(
 		*/
-		pci_dev = pci_get_bus_and_slot((nic->pci_bdf & 0xff00) >> 8,
-					       (nic->pci_bdf & 0xff));
+		pci_dev = pci_get_domain_bus_and_slot(0,
+						(nic->pci_bdf & 0xff00) >> 8,
+						(nic->pci_bdf & 0xff));
 		if (pci_dev) {
 			rc = sysfs_create_link(&boot_kobj->kobj,
 					       &pci_dev->dev.kobj, "device");

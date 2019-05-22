@@ -129,6 +129,7 @@
 #define USB_UPS_CTRL		0xd800
 #define USB_POWER_CUT		0xd80a
 #define USB_MISC_0		0xd81a
+#define USB_MISC_1		0xd81f
 #define USB_AFE_CTRL2		0xd824
 #define USB_UPS_CFG		0xd842
 #define USB_UPS_FLAGS		0xd848
@@ -555,6 +556,8 @@ enum spd_duplex {
 
 /* MAC PASSTHRU */
 #define AD_MASK			0xfee0
+#define BND_MASK		0x0004
+#define BD_MASK			0x0001
 #define EFUSE			0xcfdb
 #define PASS_THRU_MASK		0x1
 
@@ -606,6 +609,7 @@ enum rtl8152_flags {
 	PHY_RESET,
 	SCHEDULE_NAPI,
 	GREEN_ETHERNET,
+	DELL_TB_RX_AGG_BUG,
 };
 
 /* Define these values to match your device */
@@ -1149,7 +1153,7 @@ out1:
 	return ret;
 }
 
-/* Devices containing RTL8153-AD can support a persistent
+/* Devices containing proper chips can support a persistent
  * host system provided MAC address.
  * Examples of this are Dell TB15 and Dell WD15 docks
  */
@@ -1164,13 +1168,23 @@ static int vendor_mac_passthru_addr_read(struct r8152 *tp, struct sockaddr *sa)
 
 	/* test for -AD variant of RTL8153 */
 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_MISC_0);
-	if ((ocp_data & AD_MASK) != 0x1000)
-		return -ENODEV;
-
-	/* test for MAC address pass-through bit */
-	ocp_data = ocp_read_byte(tp, MCU_TYPE_USB, EFUSE);
-	if ((ocp_data & PASS_THRU_MASK) != 1)
-		return -ENODEV;
+	if ((ocp_data & AD_MASK) == 0x1000) {
+		/* test for MAC address pass-through bit */
+		ocp_data = ocp_read_byte(tp, MCU_TYPE_USB, EFUSE);
+		if ((ocp_data & PASS_THRU_MASK) != 1) {
+			netif_dbg(tp, probe, tp->netdev,
+				  "No efuse for RTL8153-AD MAC pass through\n");
+			return -ENODEV;
+		}
+	} else {
+		/* test for RTL8153-BND and RTL8153-BD */
+		ocp_data = ocp_read_byte(tp, MCU_TYPE_USB, USB_MISC_1);
+		if ((ocp_data & BND_MASK) == 0 && (ocp_data & BD_MASK) == 0) {
+			netif_dbg(tp, probe, tp->netdev,
+				  "Invalid variant for MAC pass through\n");
+			return -ENODEV;
+		}
+	}
 
 	/* returns _AUXMAC_#AABBCCDDEEFF# */
 	status = acpi_evaluate_object(NULL, "\\_SB.AMAC", NULL, &buffer);
@@ -1198,12 +1212,44 @@ static int vendor_mac_passthru_addr_read(struct r8152 *tp, struct sockaddr *sa)
 		goto amacout;
 	}
 	memcpy(sa->sa_data, buf, 6);
-	ether_addr_copy(tp->netdev->dev_addr, sa->sa_data);
 	netif_info(tp, probe, tp->netdev,
 		   "Using pass-thru MAC addr %pM\n", sa->sa_data);
 
 amacout:
 	kfree(obj);
+	return ret;
+}
+
+static int determine_ethernet_addr(struct r8152 *tp, struct sockaddr *sa)
+{
+	struct net_device *dev = tp->netdev;
+	int ret;
+
+	sa->sa_family = dev->type;
+
+	if (tp->version == RTL_VER_01) {
+		ret = pla_ocp_read(tp, PLA_IDR, 8, sa->sa_data);
+	} else {
+		/* if device doesn't support MAC pass through this will
+		 * be expected to be non-zero
+		 */
+		ret = vendor_mac_passthru_addr_read(tp, sa);
+		if (ret < 0)
+			ret = pla_ocp_read(tp, PLA_BACKUP, 8, sa->sa_data);
+	}
+
+	if (ret < 0) {
+		netif_err(tp, probe, dev, "Get ether addr fail\n");
+	} else if (!is_valid_ether_addr(sa->sa_data)) {
+		netif_err(tp, probe, dev, "Invalid ether addr %pM\n",
+			  sa->sa_data);
+		eth_hw_addr_random(dev);
+		ether_addr_copy(sa->sa_data, dev->dev_addr);
+		netif_info(tp, probe, dev, "Random ether addr %pM\n",
+			   sa->sa_data);
+		return 0;
+	}
+
 	return ret;
 }
 
@@ -1213,34 +1259,14 @@ static int set_ethernet_addr(struct r8152 *tp)
 	struct sockaddr sa;
 	int ret;
 
-	if (tp->version == RTL_VER_01) {
-		ret = pla_ocp_read(tp, PLA_IDR, 8, sa.sa_data);
-	} else {
-		/* if this is not an RTL8153-AD, no eFuse mac pass thru set,
-		 * or system doesn't provide valid _SB.AMAC this will be
-		 * be expected to non-zero
-		 */
-		ret = vendor_mac_passthru_addr_read(tp, &sa);
-		if (ret < 0)
-			ret = pla_ocp_read(tp, PLA_BACKUP, 8, sa.sa_data);
-	}
+	ret = determine_ethernet_addr(tp, &sa);
+	if (ret < 0)
+		return ret;
 
-	if (ret < 0) {
-		netif_err(tp, probe, dev, "Get ether addr fail\n");
-	} else if (!is_valid_ether_addr(sa.sa_data)) {
-		netif_err(tp, probe, dev, "Invalid ether addr %pM\n",
-			  sa.sa_data);
-		eth_hw_addr_random(dev);
-		ether_addr_copy(sa.sa_data, dev->dev_addr);
+	if (tp->version == RTL_VER_01)
+		ether_addr_copy(dev->dev_addr, sa.sa_data);
+	else
 		ret = rtl8152_set_mac_address(dev, &sa);
-		netif_info(tp, probe, dev, "Random ether addr %pM\n",
-			   sa.sa_data);
-	} else {
-		if (tp->version == RTL_VER_01)
-			ether_addr_copy(dev->dev_addr, sa.sa_data);
-		else
-			ret = rtl8152_set_mac_address(dev, &sa);
-	}
 
 	return ret;
 }
@@ -1251,6 +1277,7 @@ static void read_bulk_callback(struct urb *urb)
 	int status = urb->status;
 	struct rx_agg *agg;
 	struct r8152 *tp;
+	unsigned long flags;
 
 	agg = urb->context;
 	if (!agg)
@@ -1280,9 +1307,9 @@ static void read_bulk_callback(struct urb *urb)
 		if (urb->actual_length < ETH_ZLEN)
 			break;
 
-		spin_lock(&tp->rx_lock);
+		spin_lock_irqsave(&tp->rx_lock, flags);
 		list_add_tail(&agg->list, &tp->rx_done);
-		spin_unlock(&tp->rx_lock);
+		spin_unlock_irqrestore(&tp->rx_lock, flags);
 		napi_schedule(&tp->napi);
 		return;
 	case -ESHUTDOWN:
@@ -1310,6 +1337,7 @@ static void write_bulk_callback(struct urb *urb)
 	struct net_device *netdev;
 	struct tx_agg *agg;
 	struct r8152 *tp;
+	unsigned long flags;
 	int status = urb->status;
 
 	agg = urb->context;
@@ -1331,9 +1359,9 @@ static void write_bulk_callback(struct urb *urb)
 		stats->tx_bytes += agg->skb_len;
 	}
 
-	spin_lock(&tp->tx_lock);
+	spin_lock_irqsave(&tp->tx_lock, flags);
 	list_add_tail(&agg->list, &tp->tx_free);
-	spin_unlock(&tp->tx_lock);
+	spin_unlock_irqrestore(&tp->tx_lock, flags);
 
 	usb_autopm_put_interface_async(tp->intf);
 
@@ -1373,6 +1401,7 @@ static void intr_callback(struct urb *urb)
 	case -ECONNRESET:	/* unlink */
 	case -ESHUTDOWN:
 		netif_device_detach(tp->netdev);
+		/* fall through */
 	case -ENOENT:
 	case -EPROTO:
 		netif_info(tp, intr, tp->netdev,
@@ -1793,11 +1822,14 @@ static int r8152_tx_agg_fill(struct r8152 *tp, struct tx_agg *agg)
 
 		tx_data += len;
 		agg->skb_len += len;
-		agg->skb_num++;
+		agg->skb_num += skb_shinfo(skb)->gso_segs ?: 1;
 
 		dev_kfree_skb_any(skb);
 
 		remain = agg_buf_sz - (int)(tx_agg_align(tx_data) - agg->head);
+
+		if (test_bit(DELL_TB_RX_AGG_BUG, &tp->flags))
+			break;
 	}
 
 	if (!skb_queue_empty(&skb_head)) {
@@ -1844,11 +1876,9 @@ static u8 r8152_rx_csum(struct r8152 *tp, struct rx_desc *rx_desc)
 	if (opts2 & RD_IPV4_CS) {
 		if (opts3 & IPF)
 			checksum = CHECKSUM_NONE;
-		else if ((opts2 & RD_UDP_CS) && (opts3 & UDPF))
-			checksum = CHECKSUM_NONE;
-		else if ((opts2 & RD_TCP_CS) && (opts3 & TCPF))
-			checksum = CHECKSUM_NONE;
-		else
+		else if ((opts2 & RD_UDP_CS) && !(opts3 & UDPF))
+			checksum = CHECKSUM_UNNECESSARY;
+		else if ((opts2 & RD_TCP_CS) && !(opts3 & TCPF))
 			checksum = CHECKSUM_UNNECESSARY;
 	} else if (opts2 & RD_IPV6_CS) {
 		if ((opts2 & RD_UDP_CS) && !(opts3 & UDPF))
@@ -2737,6 +2767,7 @@ static void r8153b_ups_en(struct r8152 *tp, bool enable)
 			r8152_mdio_write(tp, MII_BMCR, data);
 
 			data = r8153_phy_status(tp, PHY_STAT_LAN_ON);
+			/* fall through */
 
 		default:
 			if (data != PHY_STAT_LAN_ON)
@@ -3793,11 +3824,12 @@ static void set_carrier(struct r8152 *tp)
 	if (speed & LINK_STATUS) {
 		if (!netif_carrier_ok(netdev)) {
 			tp->rtl_ops.enable(tp);
-			set_bit(RTL8152_SET_RX_MODE, &tp->flags);
 			netif_stop_queue(netdev);
 			napi_disable(napi);
 			netif_carrier_on(netdev);
 			rtl_start_rx(tp);
+			clear_bit(RTL8152_SET_RX_MODE, &tp->flags);
+			_rtl8152_set_rx_mode(netdev);
 			napi_enable(&tp->napi);
 			netif_wake_queue(netdev);
 			netif_info(tp, link, netdev, "carrier on\n");
@@ -3959,7 +3991,8 @@ static int rtl8152_close(struct net_device *netdev)
 #ifdef CONFIG_PM_SLEEP
 	unregister_pm_notifier(&tp->pm_notifier);
 #endif
-	napi_disable(&tp->napi);
+	if (!test_bit(RTL8152_UNPLUG, &tp->flags))
+		napi_disable(&tp->napi);
 	clear_bit(WORK_ENABLE, &tp->flags);
 	usb_kill_urb(tp->intr_urb);
 	cancel_delayed_work_sync(&tp->schedule);
@@ -4133,6 +4166,9 @@ static void r8153_init(struct r8152 *tp)
 	/* rx aggregation */
 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_USB_CTRL);
 	ocp_data &= ~(RX_AGG_DISABLE | RX_ZERO_EN);
+	if (test_bit(DELL_TB_RX_AGG_BUG, &tp->flags))
+		ocp_data |= RX_AGG_DISABLE;
+
 	ocp_write_word(tp, MCU_TYPE_USB, USB_USB_CTRL, ocp_data);
 
 	rtl_tally_reset(tp);
@@ -4241,9 +4277,17 @@ static int rtl8152_post_reset(struct usb_interface *intf)
 {
 	struct r8152 *tp = usb_get_intfdata(intf);
 	struct net_device *netdev;
+	struct sockaddr sa;
 
 	if (!tp)
 		return 0;
+
+	/* reset the MAC adddress in case of policy change */
+	if (determine_ethernet_addr(tp, &sa) >= 0) {
+		rtnl_lock();
+		dev_set_mac_address (tp->netdev, &sa, NULL);
+		rtnl_unlock();
+	}
 
 	netdev = tp->netdev;
 	if (!netif_running(netdev))
@@ -4254,7 +4298,7 @@ static int rtl8152_post_reset(struct usb_interface *intf)
 		mutex_lock(&tp->control);
 		tp->rtl_ops.enable(tp);
 		rtl_start_rx(tp);
-		rtl8152_set_rx_mode(netdev);
+		_rtl8152_set_rx_mode(netdev);
 		mutex_unlock(&tp->control);
 	}
 
@@ -4404,7 +4448,6 @@ out1:
 static int rtl8152_system_suspend(struct r8152 *tp)
 {
 	struct net_device *netdev = tp->netdev;
-	int ret = 0;
 
 	netif_device_detach(netdev);
 
@@ -4419,7 +4462,7 @@ static int rtl8152_system_suspend(struct r8152 *tp)
 		napi_enable(napi);
 	}
 
-	return ret;
+	return 0;
 }
 
 static int rtl8152_suspend(struct usb_interface *intf, pm_message_t message)
@@ -4495,6 +4538,9 @@ static int rtl8152_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 
 	if (!rtl_can_wakeup(tp))
 		return -EOPNOTSUPP;
+
+	if (wol->wolopts & ~WAKE_ANY)
+		return -EINVAL;
 
 	ret = usb_autopm_get_interface(tp->intf);
 	if (ret < 0)
@@ -5205,6 +5251,12 @@ static int rtl8152_probe(struct usb_interface *intf,
 	if (tp->version == RTL_VER_01) {
 		netdev->features &= ~NETIF_F_RXCSUM;
 		netdev->hw_features &= ~NETIF_F_RXCSUM;
+	}
+
+	if (le16_to_cpu(udev->descriptor.bcdDevice) == 0x3011 && udev->serial &&
+	    (!strcmp(udev->serial, "000001000000") || !strcmp(udev->serial, "000002000000"))) {
+		dev_info(&udev->dev, "Dell TB16 Dock, disable RX aggregation");
+		set_bit(DELL_TB_RX_AGG_BUG, &tp->flags);
 	}
 
 	netdev->ethtool_ops = &ops;

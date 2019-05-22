@@ -16,9 +16,6 @@
 #include <asm/auxvec.h>
 #include <asm/byteorder.h>
 
-/* TODO: Move definition into include/uapi/linux/elf-em.h */
-#define EM_RISCV	0xF3
-
 /*
  * These are used to set parameters in the core dumps.
  */
@@ -30,13 +27,7 @@
 #define ELF_CLASS	ELFCLASS32
 #endif
 
-#if defined(__LITTLE_ENDIAN)
 #define ELF_DATA	ELFDATA2LSB
-#elif defined(__BIG_ENDIAN)
-#define ELF_DATA	ELFDATA2MSB
-#else
-#error "Unknown endianness"
-#endif
 
 /*
  * This is used to ensure we don't load something for the wrong architecture.

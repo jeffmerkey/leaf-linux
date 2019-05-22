@@ -22,7 +22,7 @@
  */
 
 #include <linux/init.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/platform_device.h>
 #include <linux/irq.h>
 #include <linux/io.h>
@@ -229,7 +229,6 @@ static int timbgpio_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct gpio_chip *gc;
 	struct timbgpio *tgpio;
-	struct resource *iomem;
 	struct timbgpio_platform_data *pdata = dev_get_platdata(&pdev->dev);
 	int irq = platform_get_irq(pdev, 0);
 
@@ -238,17 +237,15 @@ static int timbgpio_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	tgpio = devm_kzalloc(dev, sizeof(struct timbgpio), GFP_KERNEL);
-	if (!tgpio) {
-		dev_err(dev, "Memory alloc failed\n");
+	tgpio = devm_kzalloc(dev, sizeof(*tgpio), GFP_KERNEL);
+	if (!tgpio)
 		return -EINVAL;
-	}
+
 	tgpio->irq_base = pdata->irq_base;
 
 	spin_lock_init(&tgpio->lock);
 
-	iomem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	tgpio->membase = devm_ioremap_resource(dev, iomem);
+	tgpio->membase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(tgpio->membase))
 		return PTR_ERR(tgpio->membase);
 

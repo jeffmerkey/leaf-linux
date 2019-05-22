@@ -87,7 +87,7 @@ static void qedi_process_text_resp(struct qedi_ctx *qedi,
 {
 	struct iscsi_conn *conn = qedi_conn->cls_conn->dd_data;
 	struct iscsi_session *session = conn->session;
-	struct iscsi_task_context *task_ctx;
+	struct e4_iscsi_task_context *task_ctx;
 	struct iscsi_text_rsp *resp_hdr_ptr;
 	struct iscsi_text_response_hdr *cqe_text_response;
 	struct qedi_cmd *cmd;
@@ -155,12 +155,10 @@ static void qedi_tmf_resp_work(struct work_struct *work)
 	struct iscsi_conn *conn = qedi_conn->cls_conn->dd_data;
 	struct iscsi_session *session = conn->session;
 	struct iscsi_tm_rsp *resp_hdr_ptr;
-	struct iscsi_cls_session *cls_sess;
 	int rval = 0;
 
 	set_bit(QEDI_CONN_FW_CLEANUP, &qedi_conn->flags);
 	resp_hdr_ptr =  (struct iscsi_tm_rsp *)qedi_cmd->tmf_resp_buf;
-	cls_sess = iscsi_conn_to_session(qedi_conn->cls_conn);
 
 	iscsi_block_session(session->cls_session);
 	rval = qedi_cleanup_all_io(qedi, qedi_conn, qedi_cmd->task, true);
@@ -198,7 +196,7 @@ static void qedi_process_tmf_resp(struct qedi_ctx *qedi,
 	cqe_tmp_response = &cqe->cqe_common.iscsi_hdr.tmf_response;
 
 	qedi_cmd = task->dd_data;
-	qedi_cmd->tmf_resp_buf = kzalloc(sizeof(*resp_hdr_ptr), GFP_KERNEL);
+	qedi_cmd->tmf_resp_buf = kzalloc(sizeof(*resp_hdr_ptr), GFP_ATOMIC);
 	if (!qedi_cmd->tmf_resp_buf) {
 		QEDI_ERR(&qedi->dbg_ctx,
 			 "Failed to allocate resp buf, cid=0x%x\n",
@@ -260,7 +258,7 @@ static void qedi_process_login_resp(struct qedi_ctx *qedi,
 {
 	struct iscsi_conn *conn = qedi_conn->cls_conn->dd_data;
 	struct iscsi_session *session = conn->session;
-	struct iscsi_task_context *task_ctx;
+	struct e4_iscsi_task_context *task_ctx;
 	struct iscsi_login_rsp *resp_hdr_ptr;
 	struct iscsi_login_response_hdr *cqe_login_response;
 	struct qedi_cmd *cmd;
@@ -326,7 +324,7 @@ static void qedi_get_rq_bdq_buf(struct qedi_ctx *qedi,
 		  (qedi->bdq_prod_idx % qedi->rq_num_entries));
 
 	/* Obtain buffer address from rqe_opaque */
-	idx = cqe->rqe_opaque.lo;
+	idx = cqe->rqe_opaque;
 	if (idx > (QEDI_BDQ_NUM - 1)) {
 		QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_CONN,
 			  "wrong idx %d returned by FW, dropping the unsolicited pkt\n",
@@ -335,8 +333,7 @@ static void qedi_get_rq_bdq_buf(struct qedi_ctx *qedi,
 	}
 
 	QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_CONN,
-		  "rqe_opaque.lo [0x%p], rqe_opaque.hi [0x%p], idx [%d]\n",
-		  cqe->rqe_opaque.lo, cqe->rqe_opaque.hi, idx);
+		  "rqe_opaque [0x%p], idx [%d]\n", cqe->rqe_opaque, idx);
 
 	QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_CONN,
 		  "unsol_cqe_type = %d\n", cqe->unsol_cqe_type);
@@ -363,7 +360,7 @@ static void qedi_put_rq_bdq_buf(struct qedi_ctx *qedi,
 	struct scsi_bd *pbl;
 
 	/* Obtain buffer address from rqe_opaque */
-	idx = cqe->rqe_opaque.lo;
+	idx = cqe->rqe_opaque;
 	if (idx > (QEDI_BDQ_NUM - 1)) {
 		QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_CONN,
 			  "wrong idx %d returned by FW, dropping the unsolicited pkt\n",
@@ -378,8 +375,10 @@ static void qedi_put_rq_bdq_buf(struct qedi_ctx *qedi,
 	QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_CONN,
 		  "pbl [0x%p] pbl->address hi [0x%llx] lo [0x%llx] idx [%d]\n",
 		  pbl, pbl->address.hi, pbl->address.lo, idx);
-	pbl->opaque.hi = 0;
-	pbl->opaque.lo = cpu_to_le32(QEDI_U64_LO(idx));
+	pbl->opaque.iscsi_opaque.reserved_zero[0] = 0;
+	pbl->opaque.iscsi_opaque.reserved_zero[1] = 0;
+	pbl->opaque.iscsi_opaque.reserved_zero[2] = 0;
+	pbl->opaque.iscsi_opaque.opaque = cpu_to_le32(idx);
 
 	/* Increment producer to let f/w know we've handled the frame */
 	qedi->bdq_prod_idx += count;
@@ -615,13 +614,6 @@ static void qedi_scsi_completion(struct qedi_ctx *qedi,
 		goto error;
 	}
 
-	if (!sc_cmd->request->special) {
-		QEDI_WARN(&qedi->dbg_ctx,
-			  "request->special is NULL so request not valid, sc_cmd=%p.\n",
-			  sc_cmd);
-		goto error;
-	}
-
 	if (!sc_cmd->request->q) {
 		QEDI_WARN(&qedi->dbg_ctx,
 			  "request->q is NULL so request is not valid, sc_cmd=%p.\n",
@@ -761,6 +753,11 @@ static void qedi_process_cmd_cleanup_resp(struct qedi_ctx *qedi,
 
 	iscsi_cid = cqe->conn_id;
 	qedi_conn = qedi->cid_que.conn_cid_tbl[iscsi_cid];
+	if (!qedi_conn) {
+		QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_INFO,
+			  "icid not found 0x%x\n", cqe->conn_id);
+		return;
+	}
 
 	/* Based on this itt get the corresponding qedi_cmd */
 	spin_lock_bh(&qedi_conn->tmf_work_lock);
@@ -986,7 +983,6 @@ static void qedi_ring_doorbell(struct qedi_conn *qedi_conn)
 	 * others they are two different assembly operations.
 	 */
 	wmb();
-	mmiowb();
 	QEDI_INFO(&qedi_conn->qedi->dbg_ctx, QEDI_LOG_MP_REQ,
 		  "prod_idx=0x%x, fw_prod_idx=0x%x, cid=0x%x\n",
 		  qedi_conn->ep->sq_prod_idx, qedi_conn->ep->fw_sq_prod_idx,
@@ -1017,7 +1013,7 @@ int qedi_send_iscsi_login(struct qedi_conn *qedi_conn,
 	struct scsi_sgl_task_params tx_sgl_task_params;
 	struct scsi_sgl_task_params rx_sgl_task_params;
 	struct iscsi_task_params task_params;
-	struct iscsi_task_context *fw_task_ctx;
+	struct e4_iscsi_task_context *fw_task_ctx;
 	struct qedi_ctx *qedi = qedi_conn->qedi;
 	struct iscsi_login_req *login_hdr;
 	struct scsi_sge *resp_sge = NULL;
@@ -1037,8 +1033,9 @@ int qedi_send_iscsi_login(struct qedi_conn *qedi_conn,
 		return -ENOMEM;
 
 	fw_task_ctx =
-	     (struct iscsi_task_context *)qedi_get_task_mem(&qedi->tasks, tid);
-	memset(fw_task_ctx, 0, sizeof(struct iscsi_task_context));
+	     (struct e4_iscsi_task_context *)qedi_get_task_mem(&qedi->tasks,
+							       tid);
+	memset(fw_task_ctx, 0, sizeof(struct e4_iscsi_task_context));
 
 	qedi_cmd->task_id = tid;
 
@@ -1119,7 +1116,7 @@ int qedi_send_iscsi_logout(struct qedi_conn *qedi_conn,
 	struct scsi_sgl_task_params tx_sgl_task_params;
 	struct scsi_sgl_task_params rx_sgl_task_params;
 	struct iscsi_task_params task_params;
-	struct iscsi_task_context *fw_task_ctx;
+	struct e4_iscsi_task_context *fw_task_ctx;
 	struct iscsi_logout *logout_hdr = NULL;
 	struct qedi_ctx *qedi = qedi_conn->qedi;
 	struct qedi_cmd *qedi_cmd;
@@ -1137,8 +1134,9 @@ int qedi_send_iscsi_logout(struct qedi_conn *qedi_conn,
 		return -ENOMEM;
 
 	fw_task_ctx =
-	     (struct iscsi_task_context *)qedi_get_task_mem(&qedi->tasks, tid);
-	memset(fw_task_ctx, 0, sizeof(struct iscsi_task_context));
+	     (struct e4_iscsi_task_context *)qedi_get_task_mem(&qedi->tasks,
+							       tid);
+	memset(fw_task_ctx, 0, sizeof(struct e4_iscsi_task_context));
 
 	qedi_cmd->task_id = tid;
 
@@ -1366,7 +1364,6 @@ static void qedi_tmf_work(struct work_struct *work)
 	struct qedi_conn *qedi_conn = qedi_cmd->conn;
 	struct qedi_ctx *qedi = qedi_conn->qedi;
 	struct iscsi_conn *conn = qedi_conn->cls_conn->dd_data;
-	struct iscsi_cls_session *cls_sess;
 	struct qedi_work_map *list_work = NULL;
 	struct iscsi_task *mtask;
 	struct qedi_cmd *cmd;
@@ -1377,7 +1374,6 @@ static void qedi_tmf_work(struct work_struct *work)
 
 	mtask = qedi_cmd->task;
 	tmf_hdr = (struct iscsi_tm *)mtask->hdr;
-	cls_sess = iscsi_conn_to_session(qedi_conn->cls_conn);
 	set_bit(QEDI_CONN_FW_CLEANUP, &qedi_conn->flags);
 
 	ctask = iscsi_itt_to_task(conn, tmf_hdr->rtt);
@@ -1467,7 +1463,7 @@ static int qedi_send_iscsi_tmf(struct qedi_conn *qedi_conn,
 	struct iscsi_tmf_request_hdr tmf_pdu_header;
 	struct iscsi_task_params task_params;
 	struct qedi_ctx *qedi = qedi_conn->qedi;
-	struct iscsi_task_context *fw_task_ctx;
+	struct e4_iscsi_task_context *fw_task_ctx;
 	struct iscsi_conn *conn = qedi_conn->cls_conn->dd_data;
 	struct iscsi_task *ctask;
 	struct iscsi_tm *tmf_hdr;
@@ -1490,8 +1486,9 @@ static int qedi_send_iscsi_tmf(struct qedi_conn *qedi_conn,
 		return -ENOMEM;
 
 	fw_task_ctx =
-	     (struct iscsi_task_context *)qedi_get_task_mem(&qedi->tasks, tid);
-	memset(fw_task_ctx, 0, sizeof(struct iscsi_task_context));
+	     (struct e4_iscsi_task_context *)qedi_get_task_mem(&qedi->tasks,
+							       tid);
+	memset(fw_task_ctx, 0, sizeof(struct e4_iscsi_task_context));
 
 	qedi_cmd->task_id = tid;
 
@@ -1605,7 +1602,7 @@ int qedi_send_iscsi_text(struct qedi_conn *qedi_conn,
 	struct scsi_sgl_task_params tx_sgl_task_params;
 	struct scsi_sgl_task_params rx_sgl_task_params;
 	struct iscsi_task_params task_params;
-	struct iscsi_task_context *fw_task_ctx;
+	struct e4_iscsi_task_context *fw_task_ctx;
 	struct qedi_ctx *qedi = qedi_conn->qedi;
 	struct iscsi_text *text_hdr;
 	struct scsi_sge *req_sge = NULL;
@@ -1627,8 +1624,9 @@ int qedi_send_iscsi_text(struct qedi_conn *qedi_conn,
 		return -ENOMEM;
 
 	fw_task_ctx =
-	     (struct iscsi_task_context *)qedi_get_task_mem(&qedi->tasks, tid);
-	memset(fw_task_ctx, 0, sizeof(struct iscsi_task_context));
+	     (struct e4_iscsi_task_context *)qedi_get_task_mem(&qedi->tasks,
+							       tid);
+	memset(fw_task_ctx, 0, sizeof(struct e4_iscsi_task_context));
 
 	qedi_cmd->task_id = tid;
 
@@ -1705,7 +1703,7 @@ int qedi_send_iscsi_nopout(struct qedi_conn *qedi_conn,
 	struct scsi_sgl_task_params rx_sgl_task_params;
 	struct iscsi_task_params task_params;
 	struct qedi_ctx *qedi = qedi_conn->qedi;
-	struct iscsi_task_context *fw_task_ctx;
+	struct e4_iscsi_task_context *fw_task_ctx;
 	struct iscsi_nopout *nopout_hdr;
 	struct scsi_sge *resp_sge = NULL;
 	struct qedi_cmd *qedi_cmd;
@@ -1725,8 +1723,9 @@ int qedi_send_iscsi_nopout(struct qedi_conn *qedi_conn,
 		return -ENOMEM;
 
 	fw_task_ctx =
-	     (struct iscsi_task_context *)qedi_get_task_mem(&qedi->tasks, tid);
-	memset(fw_task_ctx, 0, sizeof(struct iscsi_task_context));
+	     (struct e4_iscsi_task_context *)qedi_get_task_mem(&qedi->tasks,
+							       tid);
+	memset(fw_task_ctx, 0, sizeof(struct e4_iscsi_task_context));
 
 	qedi_cmd->task_id = tid;
 
@@ -1871,7 +1870,7 @@ static int qedi_map_scsi_sg(struct qedi_ctx *qedi, struct qedi_cmd *cmd)
 		bd[bd_count].sge_len = (u16)sg_len;
 
 		QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_IO,
-			  "single-cashed-sgl: bd_count:%d addr=%llx, len=%x",
+			  "single-cached-sgl: bd_count:%d addr=%llx, len=%x",
 			  sg_count, addr, sg_len);
 
 		return ++bd_count;
@@ -2046,7 +2045,7 @@ int qedi_iscsi_send_ioreq(struct iscsi_task *task)
 	struct iscsi_task_params task_params;
 	struct iscsi_conn_params conn_params;
 	struct scsi_initiator_cmd_params cmd_params;
-	struct iscsi_task_context *fw_task_ctx;
+	struct e4_iscsi_task_context *fw_task_ctx;
 	struct iscsi_cls_conn *cls_conn;
 	struct iscsi_scsi_req *hdr = (struct iscsi_scsi_req *)task->hdr;
 	enum iscsi_task_type task_type = MAX_ISCSI_TASK_TYPE;
@@ -2069,8 +2068,9 @@ int qedi_iscsi_send_ioreq(struct iscsi_task *task)
 		return -ENOMEM;
 
 	fw_task_ctx =
-	     (struct iscsi_task_context *)qedi_get_task_mem(&qedi->tasks, tid);
-	memset(fw_task_ctx, 0, sizeof(struct iscsi_task_context));
+	     (struct e4_iscsi_task_context *)qedi_get_task_mem(&qedi->tasks,
+							       tid);
+	memset(fw_task_ctx, 0, sizeof(struct e4_iscsi_task_context));
 
 	cmd->task_id = tid;
 

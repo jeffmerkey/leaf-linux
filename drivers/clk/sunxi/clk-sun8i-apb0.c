@@ -16,6 +16,7 @@
 
 #include <linux/clk-provider.h>
 #include <linux/init.h>
+#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
@@ -98,10 +99,7 @@ static int sun8i_a23_apb0_clk_probe(struct platform_device *pdev)
 		return PTR_ERR(reg);
 
 	clk = sun8i_a23_apb0_register(np, reg);
-	if (IS_ERR(clk))
-		return PTR_ERR(clk);
-
-	return 0;
+	return PTR_ERR_OR_ZERO(clk);
 }
 
 static const struct of_device_id sun8i_a23_apb0_clk_dt_ids[] = {

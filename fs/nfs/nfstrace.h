@@ -9,6 +9,7 @@
 #define _TRACE_NFS_H
 
 #include <linux/tracepoint.h>
+#include <linux/iversion.h>
 
 #define nfs_show_file_type(ftype) \
 	__print_symbolic(ftype, \
@@ -61,7 +62,7 @@ DECLARE_EVENT_CLASS(nfs_inode_event,
 			__entry->dev = inode->i_sb->s_dev;
 			__entry->fileid = nfsi->fileid;
 			__entry->fhandle = nfs_fhandle_hash(&nfsi->fh);
-			__entry->version = inode->i_version;
+			__entry->version = inode_peek_iversion_raw(inode);
 		),
 
 		TP_printk(
@@ -100,7 +101,7 @@ DECLARE_EVENT_CLASS(nfs_inode_event_done,
 			__entry->fileid = nfsi->fileid;
 			__entry->fhandle = nfs_fhandle_hash(&nfsi->fh);
 			__entry->type = nfs_umode_to_dtype(inode->i_mode);
-			__entry->version = inode->i_version;
+			__entry->version = inode_peek_iversion_raw(inode);
 			__entry->size = i_size_read(inode);
 			__entry->nfsi_flags = nfsi->flags;
 			__entry->cache_validity = nfsi->cache_validity;
@@ -796,15 +797,15 @@ TRACE_EVENT(nfs_readpage_done,
 		)
 );
 
-/*
- * XXX: I tried using NFS_UNSTABLE and friends in this table, but they
- * all evaluate to 0 for some reason, even if I include linux/nfs.h.
- */
+TRACE_DEFINE_ENUM(NFS_UNSTABLE);
+TRACE_DEFINE_ENUM(NFS_DATA_SYNC);
+TRACE_DEFINE_ENUM(NFS_FILE_SYNC);
+
 #define nfs_show_stable(stable) \
 	__print_symbolic(stable, \
-			{ 0, " (UNSTABLE)" }, \
-			{ 1, " (DATA_SYNC)" }, \
-			{ 2, " (FILE_SYNC)" })
+			{ NFS_UNSTABLE, "UNSTABLE" }, \
+			{ NFS_DATA_SYNC, "DATA_SYNC" }, \
+			{ NFS_FILE_SYNC, "FILE_SYNC" })
 
 TRACE_EVENT(nfs_initiate_write,
 		TP_PROTO(
@@ -837,12 +838,12 @@ TRACE_EVENT(nfs_initiate_write,
 
 		TP_printk(
 			"fileid=%02x:%02x:%llu fhandle=0x%08x "
-			"offset=%lld count=%lu stable=%d%s",
+			"offset=%lld count=%lu stable=%s",
 			MAJOR(__entry->dev), MINOR(__entry->dev),
 			(unsigned long long)__entry->fileid,
 			__entry->fhandle,
 			__entry->offset, __entry->count,
-			__entry->stable, nfs_show_stable(__entry->stable)
+			nfs_show_stable(__entry->stable)
 		)
 );
 
@@ -881,13 +882,13 @@ TRACE_EVENT(nfs_writeback_done,
 
 		TP_printk(
 			"fileid=%02x:%02x:%llu fhandle=0x%08x "
-			"offset=%lld status=%d stable=%d%s "
+			"offset=%lld status=%d stable=%s "
 			"verifier 0x%016llx",
 			MAJOR(__entry->dev), MINOR(__entry->dev),
 			(unsigned long long)__entry->fileid,
 			__entry->fhandle,
 			__entry->offset, __entry->status,
-			__entry->stable, nfs_show_stable(__entry->stable),
+			nfs_show_stable(__entry->stable),
 			__entry->verifier
 		)
 );
@@ -965,6 +966,91 @@ TRACE_EVENT(nfs_commit_done,
 			__entry->fhandle,
 			__entry->offset, __entry->status,
 			__entry->verifier
+		)
+);
+
+TRACE_DEFINE_ENUM(NFS_OK);
+TRACE_DEFINE_ENUM(NFSERR_PERM);
+TRACE_DEFINE_ENUM(NFSERR_NOENT);
+TRACE_DEFINE_ENUM(NFSERR_IO);
+TRACE_DEFINE_ENUM(NFSERR_NXIO);
+TRACE_DEFINE_ENUM(NFSERR_ACCES);
+TRACE_DEFINE_ENUM(NFSERR_EXIST);
+TRACE_DEFINE_ENUM(NFSERR_XDEV);
+TRACE_DEFINE_ENUM(NFSERR_NODEV);
+TRACE_DEFINE_ENUM(NFSERR_NOTDIR);
+TRACE_DEFINE_ENUM(NFSERR_ISDIR);
+TRACE_DEFINE_ENUM(NFSERR_INVAL);
+TRACE_DEFINE_ENUM(NFSERR_FBIG);
+TRACE_DEFINE_ENUM(NFSERR_NOSPC);
+TRACE_DEFINE_ENUM(NFSERR_ROFS);
+TRACE_DEFINE_ENUM(NFSERR_MLINK);
+TRACE_DEFINE_ENUM(NFSERR_NAMETOOLONG);
+TRACE_DEFINE_ENUM(NFSERR_NOTEMPTY);
+TRACE_DEFINE_ENUM(NFSERR_DQUOT);
+TRACE_DEFINE_ENUM(NFSERR_STALE);
+TRACE_DEFINE_ENUM(NFSERR_REMOTE);
+TRACE_DEFINE_ENUM(NFSERR_WFLUSH);
+TRACE_DEFINE_ENUM(NFSERR_BADHANDLE);
+TRACE_DEFINE_ENUM(NFSERR_NOT_SYNC);
+TRACE_DEFINE_ENUM(NFSERR_BAD_COOKIE);
+TRACE_DEFINE_ENUM(NFSERR_NOTSUPP);
+TRACE_DEFINE_ENUM(NFSERR_TOOSMALL);
+TRACE_DEFINE_ENUM(NFSERR_SERVERFAULT);
+TRACE_DEFINE_ENUM(NFSERR_BADTYPE);
+TRACE_DEFINE_ENUM(NFSERR_JUKEBOX);
+
+#define nfs_show_status(x) \
+	__print_symbolic(x, \
+			{ NFS_OK, "OK" }, \
+			{ NFSERR_PERM, "PERM" }, \
+			{ NFSERR_NOENT, "NOENT" }, \
+			{ NFSERR_IO, "IO" }, \
+			{ NFSERR_NXIO, "NXIO" }, \
+			{ NFSERR_ACCES, "ACCES" }, \
+			{ NFSERR_EXIST, "EXIST" }, \
+			{ NFSERR_XDEV, "XDEV" }, \
+			{ NFSERR_NODEV, "NODEV" }, \
+			{ NFSERR_NOTDIR, "NOTDIR" }, \
+			{ NFSERR_ISDIR, "ISDIR" }, \
+			{ NFSERR_INVAL, "INVAL" }, \
+			{ NFSERR_FBIG, "FBIG" }, \
+			{ NFSERR_NOSPC, "NOSPC" }, \
+			{ NFSERR_ROFS, "ROFS" }, \
+			{ NFSERR_MLINK, "MLINK" }, \
+			{ NFSERR_NAMETOOLONG, "NAMETOOLONG" }, \
+			{ NFSERR_NOTEMPTY, "NOTEMPTY" }, \
+			{ NFSERR_DQUOT, "DQUOT" }, \
+			{ NFSERR_STALE, "STALE" }, \
+			{ NFSERR_REMOTE, "REMOTE" }, \
+			{ NFSERR_WFLUSH, "WFLUSH" }, \
+			{ NFSERR_BADHANDLE, "BADHANDLE" }, \
+			{ NFSERR_NOT_SYNC, "NOTSYNC" }, \
+			{ NFSERR_BAD_COOKIE, "BADCOOKIE" }, \
+			{ NFSERR_NOTSUPP, "NOTSUPP" }, \
+			{ NFSERR_TOOSMALL, "TOOSMALL" }, \
+			{ NFSERR_SERVERFAULT, "REMOTEIO" }, \
+			{ NFSERR_BADTYPE, "BADTYPE" }, \
+			{ NFSERR_JUKEBOX, "JUKEBOX" })
+
+TRACE_EVENT(nfs_xdr_status,
+		TP_PROTO(
+			int error
+		),
+
+		TP_ARGS(error),
+
+		TP_STRUCT__entry(
+			__field(int, error)
+		),
+
+		TP_fast_assign(
+			__entry->error = error;
+		),
+
+		TP_printk(
+			"error=%d (%s)",
+			__entry->error, nfs_show_status(__entry->error)
 		)
 );
 

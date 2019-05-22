@@ -560,7 +560,7 @@ static inline void uv_clear_nmi(int cpu)
 	}
 }
 
-/* Ping non-responding CPU's attemping to force them into the NMI handler */
+/* Ping non-responding CPU's attempting to force them into the NMI handler */
 static void uv_nmi_nr_cpus_ping(void)
 {
 	int cpu;
@@ -905,7 +905,7 @@ static inline void uv_call_kgdb_kdb(int cpu, struct pt_regs *regs, int master)
 /*
  * UV NMI handler
  */
-int uv_handle_nmi(unsigned int reason, struct pt_regs *regs)
+static int uv_handle_nmi(unsigned int reason, struct pt_regs *regs)
 {
 	struct uv_hub_nmi_s *hub_nmi = uv_hub_nmi;
 	int cpu = smp_processor_id();
@@ -1013,7 +1013,7 @@ void uv_nmi_init(void)
 }
 
 /* Setup HUB NMI info */
-void __init uv_nmi_setup_common(bool hubbed)
+static void __init uv_nmi_setup_common(bool hubbed)
 {
 	int size = sizeof(void *) * (1 << NODES_SHIFT);
 	int cpu;

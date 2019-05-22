@@ -14,7 +14,6 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/module.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
@@ -302,6 +301,4 @@ static int __init init_cgroup_netprio(void)
 	register_netdevice_notifier(&netprio_device_notifier);
 	return 0;
 }
-
 subsys_initcall(init_cgroup_netprio);
-MODULE_LICENSE("GPL v2");

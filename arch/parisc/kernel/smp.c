@@ -155,6 +155,7 @@ ipi_interrupt(int irq, void *dev_id)
 
 			case IPI_CALL_FUNC:
 				smp_debug(100, KERN_DEBUG "CPU%d IPI_CALL_FUNC\n", this_cpu);
+				inc_irq_stat(irq_call_count);
 				generic_smp_call_function_interrupt();
 				break;
 
@@ -292,9 +293,14 @@ smp_cpu_init(int cpunum)
  * Slaves start using C here. Indirectly called from smp_slave_stext.
  * Do what start_kernel() and main() do for boot strap processor (aka monarch)
  */
-void __init smp_callin(void)
+void __init smp_callin(unsigned long pdce_proc)
 {
 	int slave_id = cpu_now_booting;
+
+#ifdef CONFIG_64BIT
+	WARN_ON(((unsigned long)(PAGE0->mem_pdc_hi) << 32
+			| PAGE0->mem_pdc) != pdce_proc);
+#endif
 
 	smp_cpu_init(slave_id);
 	preempt_disable();
@@ -418,8 +424,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 }
 
 #ifdef CONFIG_PROC_FS
-int __init
-setup_profiling_timer(unsigned int multiplier)
+int setup_profiling_timer(unsigned int multiplier)
 {
 	return -EINVAL;
 }

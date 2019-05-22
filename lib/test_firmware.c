@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This module provides an interface to trigger and test firmware loading.
  *
@@ -21,6 +22,7 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 #include <linux/kthread.h>
+#include <linux/vmalloc.h>
 
 #define TEST_FIRMWARE_NAME	"test-firmware.bin"
 #define TEST_FIRMWARE_NUM_REQS	4
@@ -96,7 +98,7 @@ struct test_config {
 			    struct device *device);
 };
 
-struct test_config *test_fw_config;
+static struct test_config *test_fw_config;
 
 static ssize_t test_fw_misc_read(struct file *f, char __user *buf,
 				 size_t size, loff_t *offset)
@@ -359,7 +361,7 @@ static ssize_t config_name_show(struct device *dev,
 {
 	return config_test_show_str(buf, test_fw_config->name);
 }
-static DEVICE_ATTR(config_name, 0644, config_name_show, config_name_store);
+static DEVICE_ATTR_RW(config_name);
 
 static ssize_t config_num_requests_store(struct device *dev,
 					 struct device_attribute *attr,
@@ -371,6 +373,7 @@ static ssize_t config_num_requests_store(struct device *dev,
 	if (test_fw_config->reqs) {
 		pr_err("Must call release_all_firmware prior to changing config\n");
 		rc = -EINVAL;
+		mutex_unlock(&test_fw_mutex);
 		goto out;
 	}
 	mutex_unlock(&test_fw_mutex);
@@ -388,8 +391,7 @@ static ssize_t config_num_requests_show(struct device *dev,
 {
 	return test_dev_config_show_u8(buf, test_fw_config->num_requests);
 }
-static DEVICE_ATTR(config_num_requests, 0644, config_num_requests_show,
-		   config_num_requests_store);
+static DEVICE_ATTR_RW(config_num_requests);
 
 static ssize_t config_sync_direct_store(struct device *dev,
 					struct device_attribute *attr,
@@ -411,8 +413,7 @@ static ssize_t config_sync_direct_show(struct device *dev,
 {
 	return test_dev_config_show_bool(buf, test_fw_config->sync_direct);
 }
-static DEVICE_ATTR(config_sync_direct, 0644, config_sync_direct_show,
-		   config_sync_direct_store);
+static DEVICE_ATTR_RW(config_sync_direct);
 
 static ssize_t config_send_uevent_store(struct device *dev,
 					struct device_attribute *attr,
@@ -428,8 +429,7 @@ static ssize_t config_send_uevent_show(struct device *dev,
 {
 	return test_dev_config_show_bool(buf, test_fw_config->send_uevent);
 }
-static DEVICE_ATTR(config_send_uevent, 0644, config_send_uevent_show,
-		   config_send_uevent_store);
+static DEVICE_ATTR_RW(config_send_uevent);
 
 static ssize_t config_read_fw_idx_store(struct device *dev,
 					struct device_attribute *attr,
@@ -445,8 +445,7 @@ static ssize_t config_read_fw_idx_show(struct device *dev,
 {
 	return test_dev_config_show_u8(buf, test_fw_config->read_fw_idx);
 }
-static DEVICE_ATTR(config_read_fw_idx, 0644, config_read_fw_idx_show,
-		   config_read_fw_idx_store);
+static DEVICE_ATTR_RW(config_read_fw_idx);
 
 
 static ssize_t trigger_request_store(struct device *dev,
@@ -620,8 +619,9 @@ static ssize_t trigger_batched_requests_store(struct device *dev,
 
 	mutex_lock(&test_fw_mutex);
 
-	test_fw_config->reqs = vzalloc(sizeof(struct test_batched_req) *
-				       test_fw_config->num_requests * 2);
+	test_fw_config->reqs =
+		vzalloc(array3_size(sizeof(struct test_batched_req),
+				    test_fw_config->num_requests, 2));
 	if (!test_fw_config->reqs) {
 		rc = -ENOMEM;
 		goto out_unlock;
@@ -632,11 +632,6 @@ static ssize_t trigger_batched_requests_store(struct device *dev,
 
 	for (i = 0; i < test_fw_config->num_requests; i++) {
 		req = &test_fw_config->reqs[i];
-		if (!req) {
-			WARN_ON(1);
-			rc = -ENOMEM;
-			goto out_bail;
-		}
 		req->fw = NULL;
 		req->idx = i;
 		req->name = test_fw_config->name;
@@ -722,8 +717,9 @@ ssize_t trigger_batched_requests_async_store(struct device *dev,
 
 	mutex_lock(&test_fw_mutex);
 
-	test_fw_config->reqs = vzalloc(sizeof(struct test_batched_req) *
-				       test_fw_config->num_requests * 2);
+	test_fw_config->reqs =
+		vzalloc(array3_size(sizeof(struct test_batched_req),
+				    test_fw_config->num_requests, 2));
 	if (!test_fw_config->reqs) {
 		rc = -ENOMEM;
 		goto out;
@@ -737,10 +733,6 @@ ssize_t trigger_batched_requests_async_store(struct device *dev,
 
 	for (i = 0; i < test_fw_config->num_requests; i++) {
 		req = &test_fw_config->reqs[i];
-		if (!req) {
-			WARN_ON(1);
-			goto out_bail;
-		}
 		req->name = test_fw_config->name;
 		req->fw = NULL;
 		req->idx = i;
@@ -837,6 +829,7 @@ static ssize_t read_firmware_show(struct device *dev,
 	if (req->fw->size > PAGE_SIZE) {
 		pr_err("Testing interface must use PAGE_SIZE firmware for now\n");
 		rc = -EINVAL;
+		goto out;
 	}
 	memcpy(buf, req->fw->data, req->fw->size);
 

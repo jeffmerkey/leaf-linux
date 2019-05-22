@@ -35,7 +35,7 @@ struct cx18_api_info {
 	u32 cmd;
 	u8 flags;		/* Flags, see above */
 	u8 rpu;			/* Processing unit */
-	const char *name; 	/* The name of the command */
+	const char *name;	/* The name of the command */
 };
 
 #define API_ENTRY(rpu, x, f) { (x), (f), (rpu), #x }
@@ -43,9 +43,9 @@ struct cx18_api_info {
 static const struct cx18_api_info api_info[] = {
 	/* MPEG encoder API */
 	API_ENTRY(CPU, CX18_CPU_SET_CHANNEL_TYPE,		0),
-	API_ENTRY(CPU, CX18_EPU_DEBUG, 				0),
-	API_ENTRY(CPU, CX18_CREATE_TASK, 			0),
-	API_ENTRY(CPU, CX18_DESTROY_TASK, 			0),
+	API_ENTRY(CPU, CX18_EPU_DEBUG,				0),
+	API_ENTRY(CPU, CX18_CREATE_TASK,			0),
+	API_ENTRY(CPU, CX18_DESTROY_TASK,			0),
 	API_ENTRY(CPU, CX18_CPU_CAPTURE_START,                  API_SLOW),
 	API_ENTRY(CPU, CX18_CPU_CAPTURE_STOP,                   API_SLOW),
 	API_ENTRY(CPU, CX18_CPU_CAPTURE_PAUSE,                  0),
@@ -197,7 +197,7 @@ static void cx18_mdl_send_to_videobuf(struct cx18_stream *s,
 	}
 
 	if (dispatch) {
-		v4l2_get_timestamp(&vb_buf->vb.ts);
+		vb_buf->vb.ts = ktime_get_ns();
 		list_del(&vb_buf->vb.queue);
 		vb_buf->vb.state = VIDEOBUF_DONE;
 		wake_up(&vb_buf->vb.done);

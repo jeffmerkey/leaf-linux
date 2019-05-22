@@ -31,6 +31,7 @@
 
 #include <asm/machdep.h>
 #include <asm/mce.h>
+#include <asm/nmi.h>
 
 static DEFINE_PER_CPU(int, mce_nest_count);
 static DEFINE_PER_CPU(struct machine_check_event[MAX_MC_EVT], mce_event);
@@ -111,6 +112,7 @@ void save_mce_event(struct pt_regs *regs, long handled,
 	mce->srr1 = regs->msr;
 	mce->gpr3 = regs->gpr[3];
 	mce->in_use = 1;
+	mce->cpu = get_paca()->paca_index;
 
 	/* Mark it recovered if we have handled it and MSR(RI=1). */
 	if (handled && (regs->msr & MSR_RI))
@@ -120,6 +122,8 @@ void save_mce_event(struct pt_regs *regs, long handled,
 
 	mce->initiator = mce_err->initiator;
 	mce->severity = mce_err->severity;
+	mce->sync_error = mce_err->sync_error;
+	mce->error_class = mce_err->error_class;
 
 	/*
 	 * Populate the mce error_type and type-specific error_type.
@@ -273,7 +277,7 @@ static void machine_process_ue_event(struct work_struct *work)
 
 				pfn = evt->u.ue_error.physical_address >>
 					PAGE_SHIFT;
-				memory_failure(pfn, SIGBUS, 0);
+				memory_failure(pfn, 0);
 			} else
 				pr_warn("Failed to identify bad address from "
 					"where the uncorrectable error (UE) "
@@ -301,15 +305,19 @@ static void machine_check_process_queued_event(struct irq_work *work)
 	while (__this_cpu_read(mce_queue_count) > 0) {
 		index = __this_cpu_read(mce_queue_count) - 1;
 		evt = this_cpu_ptr(&mce_event_queue[index]);
-		machine_check_print_event_info(evt, false);
+		machine_check_print_event_info(evt, false, false);
 		__this_cpu_dec(mce_queue_count);
 	}
 }
 
 void machine_check_print_event_info(struct machine_check_event *evt,
-				    bool user_mode)
+				    bool user_mode, bool in_guest)
 {
-	const char *level, *sevstr, *subtype;
+	const char *level, *sevstr, *subtype, *err_type;
+	uint64_t ea = 0, pa = 0;
+	int n = 0;
+	char dar_str[50];
+	char pa_str[50];
 	static const char *mc_ue_types[] = {
 		"Indeterminate",
 		"Instruction fetch",
@@ -356,6 +364,13 @@ void machine_check_print_event_info(struct machine_check_event *evt,
 		"Store (timeout)",
 		"Page table walk Load/Store (timeout)",
 	};
+	static const char *mc_error_class[] = {
+		"Unknown",
+		"Hardware error",
+		"Probable Hardware error (some chance of software cause)",
+		"Software error",
+		"Probable Software error (some chance of hardware cause)",
+	};
 
 	/* Print things out */
 	if (evt->version != MCE_V1) {
@@ -370,9 +385,9 @@ void machine_check_print_event_info(struct machine_check_event *evt,
 		break;
 	case MCE_SEV_WARNING:
 		level = KERN_WARNING;
-		sevstr = "";
+		sevstr = "Warning";
 		break;
-	case MCE_SEV_ERROR_SYNC:
+	case MCE_SEV_SEVERE:
 		level = KERN_ERR;
 		sevstr = "Severe";
 		break;
@@ -383,99 +398,107 @@ void machine_check_print_event_info(struct machine_check_event *evt,
 		break;
 	}
 
-	printk("%s%s Machine check interrupt [%s]\n", level, sevstr,
-	       evt->disposition == MCE_DISPOSITION_RECOVERED ?
-	       "Recovered" : "Not recovered");
-
-	if (user_mode) {
-		printk("%s  NIP: [%016llx] PID: %d Comm: %s\n", level,
-			evt->srr0, current->pid, current->comm);
-	} else {
-		printk("%s  NIP [%016llx]: %pS\n", level, evt->srr0,
-		       (void *)evt->srr0);
-	}
-
-	printk("%s  Initiator: %s\n", level,
-	       evt->initiator == MCE_INITIATOR_CPU ? "CPU" : "Unknown");
 	switch (evt->error_type) {
 	case MCE_ERROR_TYPE_UE:
+		err_type = "UE";
 		subtype = evt->u.ue_error.ue_error_type <
 			ARRAY_SIZE(mc_ue_types) ?
 			mc_ue_types[evt->u.ue_error.ue_error_type]
 			: "Unknown";
-		printk("%s  Error type: UE [%s]\n", level, subtype);
 		if (evt->u.ue_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.ue_error.effective_address);
+			ea = evt->u.ue_error.effective_address;
 		if (evt->u.ue_error.physical_address_provided)
-			printk("%s    Physical address:  %016llx\n",
-			       level, evt->u.ue_error.physical_address);
+			pa = evt->u.ue_error.physical_address;
 		break;
 	case MCE_ERROR_TYPE_SLB:
+		err_type = "SLB";
 		subtype = evt->u.slb_error.slb_error_type <
 			ARRAY_SIZE(mc_slb_types) ?
 			mc_slb_types[evt->u.slb_error.slb_error_type]
 			: "Unknown";
-		printk("%s  Error type: SLB [%s]\n", level, subtype);
 		if (evt->u.slb_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.slb_error.effective_address);
+			ea = evt->u.slb_error.effective_address;
 		break;
 	case MCE_ERROR_TYPE_ERAT:
+		err_type = "ERAT";
 		subtype = evt->u.erat_error.erat_error_type <
 			ARRAY_SIZE(mc_erat_types) ?
 			mc_erat_types[evt->u.erat_error.erat_error_type]
 			: "Unknown";
-		printk("%s  Error type: ERAT [%s]\n", level, subtype);
 		if (evt->u.erat_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.erat_error.effective_address);
+			ea = evt->u.erat_error.effective_address;
 		break;
 	case MCE_ERROR_TYPE_TLB:
+		err_type = "TLB";
 		subtype = evt->u.tlb_error.tlb_error_type <
 			ARRAY_SIZE(mc_tlb_types) ?
 			mc_tlb_types[evt->u.tlb_error.tlb_error_type]
 			: "Unknown";
-		printk("%s  Error type: TLB [%s]\n", level, subtype);
 		if (evt->u.tlb_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.tlb_error.effective_address);
+			ea = evt->u.tlb_error.effective_address;
 		break;
 	case MCE_ERROR_TYPE_USER:
+		err_type = "User";
 		subtype = evt->u.user_error.user_error_type <
 			ARRAY_SIZE(mc_user_types) ?
 			mc_user_types[evt->u.user_error.user_error_type]
 			: "Unknown";
-		printk("%s  Error type: User [%s]\n", level, subtype);
 		if (evt->u.user_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.user_error.effective_address);
+			ea = evt->u.user_error.effective_address;
 		break;
 	case MCE_ERROR_TYPE_RA:
+		err_type = "Real address";
 		subtype = evt->u.ra_error.ra_error_type <
 			ARRAY_SIZE(mc_ra_types) ?
 			mc_ra_types[evt->u.ra_error.ra_error_type]
 			: "Unknown";
-		printk("%s  Error type: Real address [%s]\n", level, subtype);
 		if (evt->u.ra_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.ra_error.effective_address);
+			ea = evt->u.ra_error.effective_address;
 		break;
 	case MCE_ERROR_TYPE_LINK:
+		err_type = "Link";
 		subtype = evt->u.link_error.link_error_type <
 			ARRAY_SIZE(mc_link_types) ?
 			mc_link_types[evt->u.link_error.link_error_type]
 			: "Unknown";
-		printk("%s  Error type: Link [%s]\n", level, subtype);
 		if (evt->u.link_error.effective_address_provided)
-			printk("%s    Effective address: %016llx\n",
-			       level, evt->u.link_error.effective_address);
+			ea = evt->u.link_error.effective_address;
 		break;
 	default:
 	case MCE_ERROR_TYPE_UNKNOWN:
-		printk("%s  Error type: Unknown\n", level);
+		err_type = "Unknown";
+		subtype = "";
 		break;
 	}
+
+	dar_str[0] = pa_str[0] = '\0';
+	if (ea && evt->srr0 != ea) {
+		/* Load/Store address */
+		n = sprintf(dar_str, "DAR: %016llx ", ea);
+		if (pa)
+			sprintf(dar_str + n, "paddr: %016llx ", pa);
+	} else if (pa) {
+		sprintf(pa_str, " paddr: %016llx", pa);
+	}
+
+	printk("%sMCE: CPU%d: machine check (%s) %s %s %s %s[%s]\n",
+		level, evt->cpu, sevstr, in_guest ? "Guest" : "Host",
+		err_type, subtype, dar_str,
+		evt->disposition == MCE_DISPOSITION_RECOVERED ?
+		"Recovered" : "Not recovered");
+
+	if (in_guest || user_mode) {
+		printk("%sMCE: CPU%d: PID: %d Comm: %s %sNIP: [%016llx]%s\n",
+			level, evt->cpu, current->pid, current->comm,
+			in_guest ? "Guest " : "", evt->srr0, pa_str);
+	} else {
+		printk("%sMCE: CPU%d: NIP: [%016llx] %pS%s\n",
+			level, evt->cpu, evt->srr0, (void *)evt->srr0, pa_str);
+	}
+
+	subtype = evt->error_class < ARRAY_SIZE(mc_error_class) ?
+		mc_error_class[evt->error_class] : "Unknown";
+	printk("%sMCE: CPU%d: %s\n", level, evt->cpu, subtype);
 }
 EXPORT_SYMBOL_GPL(machine_check_print_event_info);
 
@@ -488,44 +511,133 @@ long machine_check_early(struct pt_regs *regs)
 {
 	long handled = 0;
 
-	__this_cpu_inc(irq_stat.mce_exceptions);
+	hv_nmi_check_nonrecoverable(regs);
 
-	if (cur_cpu_spec && cur_cpu_spec->machine_check_early)
-		handled = cur_cpu_spec->machine_check_early(regs);
+	/*
+	 * See if platform is capable of handling machine check.
+	 */
+	if (ppc_md.machine_check_early)
+		handled = ppc_md.machine_check_early(regs);
 	return handled;
 }
 
-long hmi_exception_realmode(struct pt_regs *regs)
+/* Possible meanings for HMER_DEBUG_TRIG bit being set on POWER9 */
+static enum {
+	DTRIG_UNKNOWN,
+	DTRIG_VECTOR_CI,	/* need to emulate vector CI load instr */
+	DTRIG_SUSPEND_ESCAPE,	/* need to escape from TM suspend mode */
+} hmer_debug_trig_function;
+
+static int init_debug_trig_function(void)
 {
+	int pvr;
+	struct device_node *cpun;
+	struct property *prop = NULL;
+	const char *str;
+
+	/* First look in the device tree */
+	preempt_disable();
+	cpun = of_get_cpu_node(smp_processor_id(), NULL);
+	if (cpun) {
+		of_property_for_each_string(cpun, "ibm,hmi-special-triggers",
+					    prop, str) {
+			if (strcmp(str, "bit17-vector-ci-load") == 0)
+				hmer_debug_trig_function = DTRIG_VECTOR_CI;
+			else if (strcmp(str, "bit17-tm-suspend-escape") == 0)
+				hmer_debug_trig_function = DTRIG_SUSPEND_ESCAPE;
+		}
+		of_node_put(cpun);
+	}
+	preempt_enable();
+
+	/* If we found the property, don't look at PVR */
+	if (prop)
+		goto out;
+
+	pvr = mfspr(SPRN_PVR);
+	/* Check for POWER9 Nimbus (scale-out) */
+	if ((PVR_VER(pvr) == PVR_POWER9) && (pvr & 0xe000) == 0) {
+		/* DD2.2 and later */
+		if ((pvr & 0xfff) >= 0x202)
+			hmer_debug_trig_function = DTRIG_SUSPEND_ESCAPE;
+		/* DD2.0 and DD2.1 - used for vector CI load emulation */
+		else if ((pvr & 0xfff) >= 0x200)
+			hmer_debug_trig_function = DTRIG_VECTOR_CI;
+	}
+
+ out:
+	switch (hmer_debug_trig_function) {
+	case DTRIG_VECTOR_CI:
+		pr_debug("HMI debug trigger used for vector CI load\n");
+		break;
+	case DTRIG_SUSPEND_ESCAPE:
+		pr_debug("HMI debug trigger used for TM suspend escape\n");
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+__initcall(init_debug_trig_function);
+
+/*
+ * Handle HMIs that occur as a result of a debug trigger.
+ * Return values:
+ * -1 means this is not a HMI cause that we know about
+ *  0 means no further handling is required
+ *  1 means further handling is required
+ */
+long hmi_handle_debugtrig(struct pt_regs *regs)
+{
+	unsigned long hmer = mfspr(SPRN_HMER);
+	long ret = 0;
+
+	/* HMER_DEBUG_TRIG bit is used for various workarounds on P9 */
+	if (!((hmer & HMER_DEBUG_TRIG)
+	      && hmer_debug_trig_function != DTRIG_UNKNOWN))
+		return -1;
+		
+	hmer &= ~HMER_DEBUG_TRIG;
+	/* HMER is a write-AND register */
+	mtspr(SPRN_HMER, ~HMER_DEBUG_TRIG);
+
+	switch (hmer_debug_trig_function) {
+	case DTRIG_VECTOR_CI:
+		/*
+		 * Now to avoid problems with soft-disable we
+		 * only do the emulation if we are coming from
+		 * host user space
+		 */
+		if (regs && user_mode(regs))
+			ret = local_paca->hmi_p9_special_emu = 1;
+
+		break;
+
+	default:
+		break;
+	}
+
+	/*
+	 * See if any other HMI causes remain to be handled
+	 */
+	if (hmer & mfspr(SPRN_HMEER))
+		return -1;
+
+	return ret;
+}
+
+/*
+ * Return values:
+ */
+long hmi_exception_realmode(struct pt_regs *regs)
+{	
+	int ret;
+
 	__this_cpu_inc(irq_stat.hmi_exceptions);
 
-#ifdef CONFIG_PPC_BOOK3S_64
-	/* Workaround for P9 vector CI loads (see p9_hmi_special_emu) */
-	if (pvr_version_is(PVR_POWER9)) {
-		unsigned long hmer = mfspr(SPRN_HMER);
-
-		/* Do we have the debug bit set */
-		if (hmer & PPC_BIT(17)) {
-			hmer &= ~PPC_BIT(17);
-			mtspr(SPRN_HMER, hmer);
-
-			/*
-			 * Now to avoid problems with soft-disable we
-			 * only do the emulation if we are coming from
-			 * user space
-			 */
-			if (user_mode(regs))
-				local_paca->hmi_p9_special_emu = 1;
-
-			/*
-			 * Don't bother going to OPAL if that's the
-			 * only relevant bit.
-			 */
-			if (!(hmer & mfspr(SPRN_HMEER)))
-				return local_paca->hmi_p9_special_emu;
-		}
-	}
-#endif /* CONFIG_PPC_BOOK3S_64 */
+	ret = hmi_handle_debugtrig(regs);
+	if (ret >= 0)
+		return ret;
 
 	wait_for_subcore_guest_exit();
 

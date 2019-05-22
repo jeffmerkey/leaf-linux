@@ -274,6 +274,8 @@ static int cryptomgr_notify(struct notifier_block *this, unsigned long msg,
 		return cryptomgr_schedule_probe(data);
 	case CRYPTO_MSG_ALG_REGISTER:
 		return cryptomgr_schedule_test(data);
+	case CRYPTO_MSG_ALG_LOADED:
+		break;
 	}
 
 	return NOTIFY_DONE;
@@ -294,7 +296,13 @@ static void __exit cryptomgr_exit(void)
 	BUG_ON(err);
 }
 
-subsys_initcall(cryptomgr_init);
+/*
+ * This is arch_initcall() so that the crypto self-tests are run on algorithms
+ * registered early by subsys_initcall().  subsys_initcall() is needed for
+ * generic implementations so that they're available for comparison tests when
+ * other implementations are registered later by module_init().
+ */
+arch_initcall(cryptomgr_init);
 module_exit(cryptomgr_exit);
 
 MODULE_LICENSE("GPL");

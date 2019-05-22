@@ -36,6 +36,16 @@ nvkm_bar_bar1_vmm(struct nvkm_device *device)
 	return device->bar->func->bar1.vmm(device->bar);
 }
 
+void
+nvkm_bar_bar1_reset(struct nvkm_device *device)
+{
+	struct nvkm_bar *bar = device->bar;
+	if (bar) {
+		bar->func->bar1.init(bar);
+		bar->func->bar1.wait(bar);
+	}
+}
+
 struct nvkm_vmm *
 nvkm_bar_bar2_vmm(struct nvkm_device *device)
 {
@@ -46,6 +56,16 @@ nvkm_bar_bar2_vmm(struct nvkm_device *device)
 	if (bar && bar->bar2)
 		return bar->func->bar2.vmm(bar);
 	return NULL;
+}
+
+void
+nvkm_bar_bar2_reset(struct nvkm_device *device)
+{
+	struct nvkm_bar *bar = device->bar;
+	if (bar && bar->bar2) {
+		bar->func->bar2.init(bar);
+		bar->func->bar2.wait(bar);
+	}
 }
 
 void
@@ -73,7 +93,8 @@ static int
 nvkm_bar_fini(struct nvkm_subdev *subdev, bool suspend)
 {
 	struct nvkm_bar *bar = nvkm_bar(subdev);
-	bar->func->bar1.fini(bar);
+	if (bar->func->bar1.fini)
+		bar->func->bar1.fini(bar);
 	return 0;
 }
 

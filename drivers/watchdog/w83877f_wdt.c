@@ -224,7 +224,7 @@ static int fop_open(struct inode *inode, struct file *file)
 
 	/* Good, fire up the show */
 	wdt_startup();
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 static int fop_close(struct inode *inode, struct file *file)
@@ -292,8 +292,8 @@ static long fop_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		timeout = new_timeout;
 		wdt_keepalive();
-		/* Fall through */
 	}
+		/* Fall through */
 	case WDIOC_GETTIMEOUT:
 		return put_user(timeout, p);
 	default:

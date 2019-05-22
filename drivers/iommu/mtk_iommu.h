@@ -19,12 +19,11 @@
 #include <linux/component.h>
 #include <linux/device.h>
 #include <linux/io.h>
+#include <linux/io-pgtable.h>
 #include <linux/iommu.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <soc/mediatek/smi.h>
-
-#include "io-pgtable.h"
 
 struct mtk_iommu_suspend_reg {
 	u32				standard_axi_mode;
@@ -32,6 +31,7 @@ struct mtk_iommu_suspend_reg {
 	u32				ctrl_reg;
 	u32				int_control0;
 	u32				int_main_control;
+	u32				ivrp_paddr;
 };
 
 enum mtk_iommu_plat {

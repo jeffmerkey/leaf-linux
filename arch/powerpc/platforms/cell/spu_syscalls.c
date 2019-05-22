@@ -90,7 +90,7 @@ SYSCALL_DEFINE4(spu_create, const char __user *, name, unsigned int, flags,
 	return ret;
 }
 
-asmlinkage long sys_spu_run(int fd, __u32 __user *unpc, __u32 __user *ustatus)
+SYSCALL_DEFINE3(spu_run,int, fd, __u32 __user *, unpc, __u32 __user *, ustatus)
 {
 	long ret;
 	struct fd arg;

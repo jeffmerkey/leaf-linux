@@ -40,6 +40,7 @@
 #include <linux/sched/clock.h>
 #include <linux/start_kernel.h>
 
+#include <asm/cacheflush.h>
 #include <asm/processor.h>
 #include <asm/sections.h>
 #include <asm/pdc.h>
@@ -57,11 +58,6 @@ static char __initdata command_line[COMMAND_LINE_SIZE];
 struct proc_dir_entry * proc_runway_root __read_mostly = NULL;
 struct proc_dir_entry * proc_gsc_root __read_mostly = NULL;
 struct proc_dir_entry * proc_mckinley_root __read_mostly = NULL;
-
-#if !defined(CONFIG_PA20) && (defined(CONFIG_IOMMU_CCIO) || defined(CONFIG_IOMMU_SBA))
-int parisc_bus_is_phys __read_mostly = 1;	/* Assume no IOMMU is present */
-EXPORT_SYMBOL(parisc_bus_is_phys);
-#endif
 
 void __init setup_cmdline(char **cmdline_p)
 {
@@ -102,14 +98,8 @@ void __init dma_ops_init(void)
 		panic(	"PA-RISC Linux currently only supports machines that conform to\n"
 			"the PA-RISC 1.1 or 2.0 architecture specification.\n");
 
-	case pcxs:
-	case pcxt:
-		hppa_dma_ops = &pcx_dma_ops;
-		break;
 	case pcxl2:
 		pa7300lc_init();
-	case pcxl: /* falls through */
-		hppa_dma_ops = &pcxl_dma_ops;
 		break;
 	default:
 		break;
@@ -353,6 +343,13 @@ static int __init parisc_init(void)
 			boot_cpu_data.cpu_hz / 1000000,
 			boot_cpu_data.cpu_hz % 1000000	);
 
+#if defined(CONFIG_64BIT) && defined(CONFIG_SMP)
+	/* Don't serialize TLB flushes if we run on one CPU only. */
+	if (num_online_cpus() == 1)
+		pa_serialize_tlb_flushes = 0;
+#endif
+
+	apply_alternatives_all();
 	parisc_setup_cache_timing();
 
 	/* These are in a non-obvious order, will fix when we have an iotree */
@@ -405,6 +402,9 @@ void __init start_parisc(void)
 
 	int ret, cpunum;
 	struct pdc_coproc_cfg coproc_cfg;
+
+	/* check QEMU/SeaBIOS marker in PAGE0 */
+	running_on_qemu = (memcmp(&PAGE0->pad0, "SeaBIOS", 8) == 0);
 
 	cpunum = smp_processor_id();
 

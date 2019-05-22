@@ -19,31 +19,20 @@ static struct dentry *qedi_dbg_root;
 
 void
 qedi_dbg_host_init(struct qedi_dbg_ctx *qedi,
-		   struct qedi_debugfs_ops *dops,
+		   const struct qedi_debugfs_ops *dops,
 		   const struct file_operations *fops)
 {
 	char host_dirname[32];
-	struct dentry *file_dentry = NULL;
 
 	sprintf(host_dirname, "host%u", qedi->host_no);
 	qedi->bdf_dentry = debugfs_create_dir(host_dirname, qedi_dbg_root);
-	if (!qedi->bdf_dentry)
-		return;
 
 	while (dops) {
 		if (!(dops->name))
 			break;
 
-		file_dentry = debugfs_create_file(dops->name, 0600,
-						  qedi->bdf_dentry, qedi,
-						  fops);
-		if (!file_dentry) {
-			QEDI_INFO(qedi, QEDI_LOG_DEBUGFS,
-				  "Debugfs entry %s creation failed\n",
-				  dops->name);
-			debugfs_remove_recursive(qedi->bdf_dentry);
-			return;
-		}
+		debugfs_create_file(dops->name, 0600, qedi->bdf_dentry, qedi,
+				    fops);
 		dops++;
 		fops++;
 	}
@@ -60,8 +49,6 @@ void
 qedi_dbg_init(char *drv_name)
 {
 	qedi_dbg_root = debugfs_create_dir(drv_name, NULL);
-	if (!qedi_dbg_root)
-		QEDI_INFO(NULL, QEDI_LOG_DEBUGFS, "Init of debugfs failed\n");
 }
 
 void
@@ -99,7 +86,7 @@ static struct qedi_list_of_funcs qedi_dbg_do_not_recover_ops[] = {
 	{ NULL, NULL }
 };
 
-struct qedi_debugfs_ops qedi_debugfs_ops[] = {
+const struct qedi_debugfs_ops qedi_debugfs_ops[] = {
 	{ "gbl_ctx", NULL },
 	{ "do_not_recover", qedi_dbg_do_not_recover_ops},
 	{ "io_trace", NULL },
@@ -152,7 +139,7 @@ qedi_gbl_ctx_show(struct seq_file *s, void *unused)
 {
 	struct qedi_fastpath *fp = NULL;
 	struct qed_sb_info *sb_info = NULL;
-	struct status_block *sb = NULL;
+	struct status_block_e4 *sb = NULL;
 	struct global_queue *que = NULL;
 	int id;
 	u16 prod_idx;
@@ -168,7 +155,7 @@ qedi_gbl_ctx_show(struct seq_file *s, void *unused)
 		sb_info = fp->sb_info;
 		sb = sb_info->sb_virt;
 		prod_idx = (sb->pi_array[QEDI_PROTO_CQ_PROD_IDX] &
-			    STATUS_BLOCK_PROD_INDEX_MASK);
+			    STATUS_BLOCK_E4_PROD_INDEX_MASK);
 		seq_printf(s, "SB PROD IDX: %d\n", prod_idx);
 		que = qedi->global_queues[fp->sb_id];
 		seq_printf(s, "DRV CONS IDX: %d\n", que->cq_cons_idx);

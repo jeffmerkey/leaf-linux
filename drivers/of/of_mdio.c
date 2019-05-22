@@ -16,7 +16,6 @@
 #include <linux/phy.h>
 #include <linux/phy_fixed.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
@@ -77,10 +76,16 @@ static int of_mdiobus_register_phy(struct mii_bus *mdio,
 	if (of_property_read_bool(child, "broken-turn-around"))
 		mdio->phy_ignore_ta_mask |= 1 << addr;
 
+	of_property_read_u32(child, "reset-assert-us",
+			     &phy->mdio.reset_assert_delay);
+	of_property_read_u32(child, "reset-deassert-us",
+			     &phy->mdio.reset_deassert_delay);
+
 	/* Associate the OF node with the device structure so it
 	 * can be looked up later */
 	of_node_get(child);
 	phy->mdio.dev.of_node = child;
+	phy->mdio.dev.fwnode = of_fwnode_handle(child);
 
 	/* All data is now stored in the phy struct;
 	 * register it */
@@ -91,8 +96,8 @@ static int of_mdiobus_register_phy(struct mii_bus *mdio,
 		return rc;
 	}
 
-	dev_dbg(&mdio->dev, "registered phy %s at address %i\n",
-		child->name, addr);
+	dev_dbg(&mdio->dev, "registered phy %pOFn at address %i\n",
+		child, addr);
 	return 0;
 }
 
@@ -111,6 +116,7 @@ static int of_mdiobus_register_device(struct mii_bus *mdio,
 	 */
 	of_node_get(child);
 	mdiodev->dev.of_node = child;
+	mdiodev->dev.fwnode = of_fwnode_handle(child);
 
 	/* All data is now stored in the mdiodev struct; register it. */
 	rc = mdio_device_register(mdiodev);
@@ -120,8 +126,8 @@ static int of_mdiobus_register_device(struct mii_bus *mdio,
 		return rc;
 	}
 
-	dev_dbg(&mdio->dev, "registered mdio device %s at address %i\n",
-		child->name, addr);
+	dev_dbg(&mdio->dev, "registered mdio device %pOFn at address %i\n",
+		child, addr);
 	return 0;
 }
 
@@ -197,6 +203,9 @@ int of_mdiobus_register(struct mii_bus *mdio, struct device_node *np)
 	bool scanphys = false;
 	int addr, rc;
 
+	if (!np)
+		return mdiobus_register(mdio);
+
 	/* Do not continue if the node is disabled */
 	if (!of_device_is_available(np))
 		return -ENODEV;
@@ -206,6 +215,7 @@ int of_mdiobus_register(struct mii_bus *mdio, struct device_node *np)
 	mdio->phy_mask = ~0;
 
 	mdio->dev.of_node = np;
+	mdio->dev.fwnode = of_fwnode_handle(np);
 
 	/* Get bus level PHY reset GPIO details */
 	mdio->reset_delay_us = DEFAULT_GPIO_RESET_DELAY;
@@ -228,7 +238,12 @@ int of_mdiobus_register(struct mii_bus *mdio, struct device_node *np)
 			rc = of_mdiobus_register_phy(mdio, child, addr);
 		else
 			rc = of_mdiobus_register_device(mdio, child, addr);
-		if (rc)
+
+		if (rc == -ENODEV)
+			dev_err(&mdio->dev,
+				"MDIO device at address %d is missing.\n",
+				addr);
+		else if (rc)
 			goto unregister;
 	}
 
@@ -247,12 +262,12 @@ int of_mdiobus_register(struct mii_bus *mdio, struct device_node *np)
 				continue;
 
 			/* be noisy to encourage people to set reg property */
-			dev_info(&mdio->dev, "scan phy %s at address %i\n",
-				 child->name, addr);
+			dev_info(&mdio->dev, "scan phy %pOFn at address %i\n",
+				 child, addr);
 
 			if (of_mdiobus_child_is_phy(child)) {
 				rc = of_mdiobus_register_phy(mdio, child, addr);
-				if (rc)
+				if (rc && rc != -ENODEV)
 					goto unregister;
 			}
 		}
@@ -351,14 +366,23 @@ struct phy_device *of_phy_get_and_connect(struct net_device *dev,
 	phy_interface_t iface;
 	struct device_node *phy_np;
 	struct phy_device *phy;
+	int ret;
 
 	iface = of_get_phy_mode(np);
 	if (iface < 0)
 		return NULL;
-
-	phy_np = of_parse_phandle(np, "phy-handle", 0);
-	if (!phy_np)
-		return NULL;
+	if (of_phy_is_fixed_link(np)) {
+		ret = of_phy_register_fixed_link(np);
+		if (ret < 0) {
+			netdev_err(dev, "broken fixed-link specification\n");
+			return NULL;
+		}
+		phy_np = of_node_get(np);
+	} else {
+		phy_np = of_parse_phandle(np, "phy-handle", 0);
+		if (!phy_np)
+			return NULL;
+	}
 
 	phy = of_phy_connect(dev, phy_np, hndlr, 0, iface);
 
@@ -438,7 +462,6 @@ int of_phy_register_fixed_link(struct device_node *np)
 	struct device_node *fixed_link_node;
 	u32 fixed_link_prop[5];
 	const char *managed;
-	int link_gpio = -1;
 
 	if (of_property_read_string(np, "managed", &managed) == 0 &&
 	    strcmp(managed, "in-band-status") == 0) {
@@ -460,11 +483,7 @@ int of_phy_register_fixed_link(struct device_node *np)
 		status.pause = of_property_read_bool(fixed_link_node, "pause");
 		status.asym_pause = of_property_read_bool(fixed_link_node,
 							  "asym-pause");
-		link_gpio = of_get_named_gpio_flags(fixed_link_node,
-						    "link-gpios", 0, NULL);
 		of_node_put(fixed_link_node);
-		if (link_gpio == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
 
 		goto register_phy;
 	}
@@ -483,8 +502,7 @@ int of_phy_register_fixed_link(struct device_node *np)
 	return -ENODEV;
 
 register_phy:
-	return PTR_ERR_OR_ZERO(fixed_phy_register(PHY_POLL, &status, link_gpio,
-						  np));
+	return PTR_ERR_OR_ZERO(fixed_phy_register(PHY_POLL, &status, np));
 }
 EXPORT_SYMBOL(of_phy_register_fixed_link);
 

@@ -1,18 +1,7 @@
-/* Copyright (C) 2009-2017  B.A.T.M.A.N. contributors:
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright (C) 2009-2019  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "gateway_common.h"
@@ -26,15 +15,16 @@
 #include <linux/netdevice.h>
 #include <linux/stddef.h>
 #include <linux/string.h>
+#include <uapi/linux/batadv_packet.h>
+#include <uapi/linux/batman_adv.h>
 
 #include "gateway_client.h"
 #include "log.h"
-#include "packet.h"
 #include "tvlv.h"
 
 /**
- * batadv_parse_throughput - parse supplied string buffer to extract throughput
- *  information
+ * batadv_parse_throughput() - parse supplied string buffer to extract
+ *  throughput information
  * @net_dev: the soft interface net device
  * @buff: string buffer to parse
  * @description: text shown when throughput string cannot be parsed
@@ -100,8 +90,8 @@ bool batadv_parse_throughput(struct net_device *net_dev, char *buff,
 }
 
 /**
- * batadv_parse_gw_bandwidth - parse supplied string buffer to extract download
- *  and upload bandwidth information
+ * batadv_parse_gw_bandwidth() - parse supplied string buffer to extract
+ *  download and upload bandwidth information
  * @net_dev: the soft interface net device
  * @buff: string buffer to parse
  * @down: pointer holding the returned download bandwidth information
@@ -136,8 +126,8 @@ static bool batadv_parse_gw_bandwidth(struct net_device *net_dev, char *buff,
 }
 
 /**
- * batadv_gw_tvlv_container_update - update the gw tvlv container after gateway
- *  setting change
+ * batadv_gw_tvlv_container_update() - update the gw tvlv container after
+ *  gateway setting change
  * @bat_priv: the bat priv with all the soft interface information
  */
 void batadv_gw_tvlv_container_update(struct batadv_priv *bat_priv)
@@ -164,6 +154,15 @@ void batadv_gw_tvlv_container_update(struct batadv_priv *bat_priv)
 	}
 }
 
+/**
+ * batadv_gw_bandwidth_set() - Parse and set download/upload gateway bandwidth
+ *  from supplied string buffer
+ * @net_dev: netdev struct of the soft interface
+ * @buff: the buffer containing the user data
+ * @count: number of bytes in the buffer
+ *
+ * Return: 'count' on success or a negative error code in case of failure
+ */
 ssize_t batadv_gw_bandwidth_set(struct net_device *net_dev, char *buff,
 				size_t count)
 {
@@ -207,7 +206,7 @@ ssize_t batadv_gw_bandwidth_set(struct net_device *net_dev, char *buff,
 }
 
 /**
- * batadv_gw_tvlv_ogm_handler_v1 - process incoming gateway tvlv container
+ * batadv_gw_tvlv_ogm_handler_v1() - process incoming gateway tvlv container
  * @bat_priv: the bat priv with all the soft interface information
  * @orig: the orig_node of the ogm
  * @flags: flags indicating the tvlv state (see batadv_tvlv_handler_flags)
@@ -248,7 +247,7 @@ static void batadv_gw_tvlv_ogm_handler_v1(struct batadv_priv *bat_priv,
 }
 
 /**
- * batadv_gw_init - initialise the gateway handling internals
+ * batadv_gw_init() - initialise the gateway handling internals
  * @bat_priv: the bat priv with all the soft interface information
  */
 void batadv_gw_init(struct batadv_priv *bat_priv)
@@ -264,7 +263,7 @@ void batadv_gw_init(struct batadv_priv *bat_priv)
 }
 
 /**
- * batadv_gw_free - free the gateway handling internals
+ * batadv_gw_free() - free the gateway handling internals
  * @bat_priv: the bat priv with all the soft interface information
  */
 void batadv_gw_free(struct batadv_priv *bat_priv)

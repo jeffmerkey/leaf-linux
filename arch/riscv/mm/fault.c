@@ -29,7 +29,6 @@
 
 #include <asm/pgalloc.h>
 #include <asm/ptrace.h>
-#include <asm/uaccess.h>
 
 /*
  * This routine handles page faults.  It determines the address and the
@@ -42,7 +41,8 @@ asmlinkage void do_page_fault(struct pt_regs *regs)
 	struct mm_struct *mm;
 	unsigned long addr, cause;
 	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
-	int fault, code = SEGV_MAPERR;
+	int code = SEGV_MAPERR;
+	vm_fault_t fault;
 
 	cause = regs->scause;
 	addr = regs->sbadaddr;
@@ -63,7 +63,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs)
 		goto vmalloc_fault;
 
 	/* Enable interrupts if they were enabled in the parent context. */
-	if (likely(regs->sstatus & SR_PIE))
+	if (likely(regs->sstatus & SR_SPIE))
 		local_irq_enable();
 
 	/*
@@ -229,8 +229,9 @@ vmalloc_fault:
 		pte_t *pte_k;
 		int index;
 
+		/* User mode accesses just cause a SIGSEGV */
 		if (user_mode(regs))
-			goto bad_area;
+			return do_trap(regs, SIGSEGV, code, addr, tsk);
 
 		/*
 		 * Synchronize this task's top level page-table
@@ -241,7 +242,7 @@ vmalloc_fault:
 		 * of a task switch.
 		 */
 		index = pgd_index(addr);
-		pgd = (pgd_t *)pfn_to_virt(csr_read(sptbr)) + index;
+		pgd = (pgd_t *)pfn_to_virt(csr_read(CSR_SATP)) + index;
 		pgd_k = init_mm.pgd + index;
 
 		if (!pgd_present(*pgd_k))

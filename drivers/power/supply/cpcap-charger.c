@@ -458,6 +458,7 @@ static void cpcap_usb_detect(struct work_struct *work)
 			goto out_err;
 	}
 
+	power_supply_changed(ddata->usb);
 	return;
 
 out_err:
@@ -544,7 +545,7 @@ static void cpcap_charger_init_optional_gpios(struct cpcap_charger_ddata *ddata)
 		if (IS_ERR(ddata->gpio[i])) {
 			dev_info(ddata->dev, "no mode change GPIO%i: %li\n",
 				 i, PTR_ERR(ddata->gpio[i]));
-				 ddata->gpio[i] = NULL;
+			ddata->gpio[i] = NULL;
 		}
 	}
 }
@@ -573,8 +574,9 @@ static int cpcap_charger_init_iio(struct cpcap_charger_ddata *ddata)
 	return 0;
 
 out_err:
-	dev_err(ddata->dev, "could not initialize VBUS or ID IIO: %i\n",
-		error);
+	if (error != -EPROBE_DEFER)
+		dev_err(ddata->dev, "could not initialize VBUS or ID IIO: %i\n",
+			error);
 
 	return error;
 }

@@ -199,7 +199,7 @@ static const struct v4l2_ctrl_config mt9m111_greenbal_cfg = {
 int mt9m111_probe(struct sd *sd)
 {
 	u8 data[2] = {0x00, 0x00};
-	int i;
+	int i, rc = 0;
 	struct gspca_dev *gspca_dev = (struct gspca_dev *)sd;
 
 	if (force_sensor) {
@@ -212,21 +212,23 @@ int mt9m111_probe(struct sd *sd)
 		return -ENODEV;
 	}
 
-	PDEBUG(D_PROBE, "Probing for a mt9m111 sensor");
+	gspca_dbg(gspca_dev, D_PROBE, "Probing for a mt9m111 sensor\n");
 
 	/* Do the preinit */
 	for (i = 0; i < ARRAY_SIZE(preinit_mt9m111); i++) {
 		if (preinit_mt9m111[i][0] == BRIDGE) {
-			m5602_write_bridge(sd,
+			rc |= m5602_write_bridge(sd,
 				preinit_mt9m111[i][1],
 				preinit_mt9m111[i][2]);
 		} else {
 			data[0] = preinit_mt9m111[i][2];
 			data[1] = preinit_mt9m111[i][3];
-			m5602_write_sensor(sd,
+			rc |= m5602_write_sensor(sd,
 				preinit_mt9m111[i][1], data, 2);
 		}
 	}
+	if (rc < 0)
+		return rc;
 
 	if (m5602_read_sensor(sd, MT9M111_SC_CHIPVER, data, 2))
 		return -ENODEV;
@@ -375,11 +377,11 @@ int mt9m111_start(struct sd *sd)
 
 	switch (width) {
 	case 640:
-		PDEBUG(D_CONF, "Configuring camera for VGA mode");
+		gspca_dbg(gspca_dev, D_CONF, "Configuring camera for VGA mode\n");
 		break;
 
 	case 320:
-		PDEBUG(D_CONF, "Configuring camera for QVGA mode");
+		gspca_dbg(gspca_dev, D_CONF, "Configuring camera for QVGA mode\n");
 		break;
 	}
 	return err;
@@ -398,7 +400,8 @@ static int mt9m111_set_hvflip(struct gspca_dev *gspca_dev)
 	int hflip;
 	int vflip;
 
-	PDEBUG(D_CONF, "Set hvflip to %d %d", sd->hflip->val, sd->vflip->val);
+	gspca_dbg(gspca_dev, D_CONF, "Set hvflip to %d %d\n",
+		  sd->hflip->val, sd->vflip->val);
 
 	/* The mt9m111 is flipped by default */
 	hflip = !sd->hflip->val;
@@ -439,7 +442,7 @@ static int mt9m111_set_auto_white_balance(struct gspca_dev *gspca_dev,
 
 	err = m5602_write_sensor(sd, MT9M111_CP_OPERATING_MODE_CTL, data, 2);
 
-	PDEBUG(D_CONF, "Set auto white balance %d", val);
+	gspca_dbg(gspca_dev, D_CONF, "Set auto white balance %d\n", val);
 	return err;
 }
 
@@ -472,8 +475,8 @@ static int mt9m111_set_gain(struct gspca_dev *gspca_dev, __s32 val)
 
 	data[1] = (tmp & 0xff);
 	data[0] = (tmp & 0xff00) >> 8;
-	PDEBUG(D_CONF, "tmp=%d, data[1]=%d, data[0]=%d", tmp,
-	       data[1], data[0]);
+	gspca_dbg(gspca_dev, D_CONF, "tmp=%d, data[1]=%d, data[0]=%d\n", tmp,
+		  data[1], data[0]);
 
 	err = m5602_write_sensor(sd, MT9M111_SC_GLOBAL_GAIN,
 				   data, 2);
@@ -490,7 +493,7 @@ static int mt9m111_set_green_balance(struct gspca_dev *gspca_dev, __s32 val)
 	data[1] = (val & 0xff);
 	data[0] = (val & 0xff00) >> 8;
 
-	PDEBUG(D_CONF, "Set green balance %d", val);
+	gspca_dbg(gspca_dev, D_CONF, "Set green balance %d\n", val);
 	err = m5602_write_sensor(sd, MT9M111_SC_GREEN_1_GAIN,
 				 data, 2);
 	if (err < 0)
@@ -508,7 +511,7 @@ static int mt9m111_set_blue_balance(struct gspca_dev *gspca_dev, __s32 val)
 	data[1] = (val & 0xff);
 	data[0] = (val & 0xff00) >> 8;
 
-	PDEBUG(D_CONF, "Set blue balance %d", val);
+	gspca_dbg(gspca_dev, D_CONF, "Set blue balance %d\n", val);
 
 	return m5602_write_sensor(sd, MT9M111_SC_BLUE_GAIN,
 				  data, 2);
@@ -522,7 +525,7 @@ static int mt9m111_set_red_balance(struct gspca_dev *gspca_dev, __s32 val)
 	data[1] = (val & 0xff);
 	data[0] = (val & 0xff00) >> 8;
 
-	PDEBUG(D_CONF, "Set red balance %d", val);
+	gspca_dbg(gspca_dev, D_CONF, "Set red balance %d\n", val);
 
 	return m5602_write_sensor(sd, MT9M111_SC_RED_GAIN,
 				  data, 2);

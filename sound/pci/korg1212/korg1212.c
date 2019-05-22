@@ -1326,7 +1326,7 @@ static int snd_korg1212_copy_to(struct snd_pcm_substream *substream,
 		}
 #endif
 		if (in_kernel)
-			memcpy((void *)dst, src, size);
+			memcpy((__force void *)dst, src, size);
 		else if (copy_to_user(dst, src, size))
 			return -EFAULT;
 		src++;
@@ -1365,7 +1365,7 @@ static int snd_korg1212_copy_from(struct snd_pcm_substream *substream,
 		}
 #endif
 		if (in_kernel)
-			memcpy((void *)dst, src, size);
+			memcpy(dst, (__force void *)src, size);
 		else if (copy_from_user(dst, src, size))
 			return -EFAULT;
 		dst++;
@@ -2090,10 +2090,8 @@ static void snd_korg1212_proc_read(struct snd_info_entry *entry,
 
 static void snd_korg1212_proc_init(struct snd_korg1212 *korg1212)
 {
-	struct snd_info_entry *entry;
-
-	if (! snd_card_proc_new(korg1212->card, "korg1212", &entry))
-		snd_info_set_text_ops(entry, korg1212, snd_korg1212_proc_read);
+	snd_card_ro_proc_new(korg1212->card, "korg1212", korg1212,
+			     snd_korg1212_proc_read);
 }
 
 static int
@@ -2348,7 +2346,6 @@ static int snd_korg1212_create(struct snd_card *card, struct pci_dev *pci,
 
 	err = request_firmware(&dsp_code, "korg/k1212.dsp", &pci->dev);
 	if (err < 0) {
-		release_firmware(dsp_code);
 		snd_printk(KERN_ERR "firmware not available\n");
 		snd_korg1212_free(korg1212);
 		return err;

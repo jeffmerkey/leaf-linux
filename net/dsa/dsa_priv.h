@@ -75,15 +75,6 @@ struct dsa_slave_priv {
 	/* DSA port data, such as switch, port index, etc. */
 	struct dsa_port		*dp;
 
-	/*
-	 * The phylib phy_device pointer for the PHY connected
-	 * to this port.
-	 */
-	phy_interface_t		phy_interface;
-	int			old_link;
-	int			old_pause;
-	int			old_duplex;
-
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	struct netpoll		*netpoll;
 #endif
@@ -93,16 +84,17 @@ struct dsa_slave_priv {
 };
 
 /* dsa.c */
-const struct dsa_device_ops *dsa_resolve_tag_protocol(int tag_protocol);
-bool dsa_schedule_work(struct work_struct *work);
+const struct dsa_device_ops *dsa_tag_driver_get(int tag_protocol);
+void dsa_tag_driver_put(const struct dsa_device_ops *ops);
 
-/* legacy.c */
-int dsa_legacy_register(void);
-void dsa_legacy_unregister(void);
+bool dsa_schedule_work(struct work_struct *work);
+const char *dsa_tag_protocol_to_str(const struct dsa_device_ops *ops);
+
 int dsa_legacy_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 		       struct net_device *dev,
 		       const unsigned char *addr, u16 vid,
-		       u16 flags);
+		       u16 flags,
+		       struct netlink_ext_ack *extack);
 int dsa_legacy_fdb_del(struct ndmsg *ndm, struct nlattr *tb[],
 		       struct net_device *dev,
 		       const unsigned char *addr, u16 vid);
@@ -117,6 +109,7 @@ static inline struct net_device *dsa_master_find_slave(struct net_device *dev,
 	struct dsa_port *cpu_dp = dev->dsa_ptr;
 	struct dsa_switch_tree *dst = cpu_dp->dst;
 	struct dsa_switch *ds;
+	struct dsa_port *slave_port;
 
 	if (device < 0 || device >= DSA_MAX_SWITCHES)
 		return NULL;
@@ -128,14 +121,19 @@ static inline struct net_device *dsa_master_find_slave(struct net_device *dev,
 	if (port < 0 || port >= ds->num_ports)
 		return NULL;
 
-	return ds->ports[port].slave;
+	slave_port = &ds->ports[port];
+
+	if (unlikely(slave_port->type != DSA_PORT_TYPE_USER))
+		return NULL;
+
+	return slave_port->slave;
 }
 
 /* port.c */
 int dsa_port_set_state(struct dsa_port *dp, u8 state,
 		       struct switchdev_trans *trans);
 int dsa_port_enable(struct dsa_port *dp, struct phy_device *phy);
-void dsa_port_disable(struct dsa_port *dp, struct phy_device *phy);
+void dsa_port_disable(struct dsa_port *dp);
 int dsa_port_bridge_join(struct dsa_port *dp, struct net_device *br);
 void dsa_port_bridge_leave(struct dsa_port *dp, struct net_device *br);
 int dsa_port_vlan_filtering(struct dsa_port *dp, bool vlan_filtering,
@@ -152,13 +150,19 @@ int dsa_port_mdb_add(const struct dsa_port *dp,
 		     struct switchdev_trans *trans);
 int dsa_port_mdb_del(const struct dsa_port *dp,
 		     const struct switchdev_obj_port_mdb *mdb);
+int dsa_port_pre_bridge_flags(const struct dsa_port *dp, unsigned long flags,
+			      struct switchdev_trans *trans);
+int dsa_port_bridge_flags(const struct dsa_port *dp, unsigned long flags,
+			  struct switchdev_trans *trans);
 int dsa_port_vlan_add(struct dsa_port *dp,
 		      const struct switchdev_obj_port_vlan *vlan,
 		      struct switchdev_trans *trans);
 int dsa_port_vlan_del(struct dsa_port *dp,
 		      const struct switchdev_obj_port_vlan *vlan);
-int dsa_port_fixed_link_register_of(struct dsa_port *dp);
-void dsa_port_fixed_link_unregister_of(struct dsa_port *dp);
+int dsa_port_vid_add(struct dsa_port *dp, u16 vid, u16 flags);
+int dsa_port_vid_del(struct dsa_port *dp, u16 vid);
+int dsa_port_link_register_of(struct dsa_port *dp);
+void dsa_port_link_unregister_of(struct dsa_port *dp);
 
 /* slave.c */
 extern const struct dsa_device_ops notag_netdev_ops;
@@ -169,6 +173,8 @@ int dsa_slave_suspend(struct net_device *slave_dev);
 int dsa_slave_resume(struct net_device *slave_dev);
 int dsa_slave_register_notifier(void);
 void dsa_slave_unregister_notifier(void);
+
+void *dsa_defer_xmit(struct sk_buff *skb, struct net_device *dev);
 
 static inline struct dsa_port *dsa_slave_to_port(const struct net_device *dev)
 {
@@ -188,30 +194,4 @@ dsa_slave_to_master(const struct net_device *dev)
 /* switch.c */
 int dsa_switch_register_notifier(struct dsa_switch *ds);
 void dsa_switch_unregister_notifier(struct dsa_switch *ds);
-
-/* tag_brcm.c */
-extern const struct dsa_device_ops brcm_netdev_ops;
-extern const struct dsa_device_ops brcm_prepend_netdev_ops;
-
-/* tag_dsa.c */
-extern const struct dsa_device_ops dsa_netdev_ops;
-
-/* tag_edsa.c */
-extern const struct dsa_device_ops edsa_netdev_ops;
-
-/* tag_ksz.c */
-extern const struct dsa_device_ops ksz_netdev_ops;
-
-/* tag_lan9303.c */
-extern const struct dsa_device_ops lan9303_netdev_ops;
-
-/* tag_mtk.c */
-extern const struct dsa_device_ops mtk_netdev_ops;
-
-/* tag_qca.c */
-extern const struct dsa_device_ops qca_netdev_ops;
-
-/* tag_trailer.c */
-extern const struct dsa_device_ops trailer_netdev_ops;
-
 #endif

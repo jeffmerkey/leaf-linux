@@ -45,6 +45,7 @@
 #include "util.h"
 #include "sys.h"
 #include "xattr.h"
+#include "lops.h"
 
 #define args_neq(a1, a2, x) ((a1)->ar_##x != (a2)->ar_##x)
 
@@ -425,7 +426,7 @@ int gfs2_make_fs_rw(struct gfs2_sbd *sdp)
 
 	j_gl->gl_ops->go_inval(j_gl, DIO_METADATA);
 
-	error = gfs2_find_jhead(sdp->sd_jdesc, &head);
+	error = gfs2_find_jhead(sdp->sd_jdesc, &head, false);
 	if (error)
 		goto fail;
 
@@ -680,7 +681,7 @@ static int gfs2_lock_fs_check_clean(struct gfs2_sbd *sdp,
 		error = gfs2_jdesc_check(jd);
 		if (error)
 			break;
-		error = gfs2_find_jhead(jd, &lh);
+		error = gfs2_find_jhead(jd, &lh, false);
 		if (error)
 			break;
 		if (!(lh.lh_flags & GFS2_LOG_HEAD_UNMOUNT)) {
@@ -757,7 +758,9 @@ static int gfs2_write_inode(struct inode *inode, struct writeback_control *wbc)
 	bool flush_all = (wbc->sync_mode == WB_SYNC_ALL || gfs2_is_jdata(ip));
 
 	if (flush_all)
-		gfs2_log_flush(GFS2_SB(inode), ip->i_gl, NORMAL_FLUSH);
+		gfs2_log_flush(GFS2_SB(inode), ip->i_gl,
+			       GFS2_LOG_HEAD_FLUSH_NORMAL |
+			       GFS2_LFC_WRITE_INODE);
 	if (bdi->wb.dirty_exceeded)
 		gfs2_ail1_flush(sdp, wbc);
 	else
@@ -766,6 +769,12 @@ static int gfs2_write_inode(struct inode *inode, struct writeback_control *wbc)
 		ret = filemap_fdatawait(metamapping);
 	if (ret)
 		mark_inode_dirty_sync(inode);
+	else {
+		spin_lock(&inode->i_lock);
+		if (!(inode->i_flags & I_DIRTY))
+			gfs2_ordered_del_inode(ip);
+		spin_unlock(&inode->i_lock);
+	}
 	return ret;
 }
 
@@ -792,7 +801,7 @@ static void gfs2_dirty_inode(struct inode *inode, int flags)
 	int need_endtrans = 0;
 	int ret;
 
-	if (!(flags & (I_DIRTY_DATASYNC|I_DIRTY_SYNC)))
+	if (!(flags & I_DIRTY_INODE))
 		return;
 	if (unlikely(test_bit(SDF_SHUTDOWN, &sdp->sd_flags)))
 		return;
@@ -846,14 +855,15 @@ static int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 	if (error && !test_bit(SDF_SHUTDOWN, &sdp->sd_flags))
 		return error;
 
+	flush_workqueue(gfs2_delete_workqueue);
 	kthread_stop(sdp->sd_quotad_process);
 	kthread_stop(sdp->sd_logd_process);
 
-	flush_workqueue(gfs2_delete_workqueue);
 	gfs2_quota_sync(sdp->sd_vfs, 0);
 	gfs2_statfs_sync(sdp->sd_vfs, 0);
 
-	gfs2_log_flush(sdp, NULL, SHUTDOWN_FLUSH);
+	gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_SHUTDOWN |
+		       GFS2_LFC_MAKE_FS_RO);
 	wait_event(sdp->sd_reserving_log_wait, atomic_read(&sdp->sd_reserving_log) == 0);
 	gfs2_assert_warn(sdp, atomic_read(&sdp->sd_log_blks_free) == sdp->sd_jdesc->jd_blocks);
 
@@ -946,7 +956,8 @@ static int gfs2_sync_fs(struct super_block *sb, int wait)
 
 	gfs2_quota_sync(sb, -1);
 	if (wait)
-		gfs2_log_flush(sdp, NULL, NORMAL_FLUSH);
+		gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_NORMAL |
+			       GFS2_LFC_SYNC_FS);
 	return sdp->sd_log_error;
 }
 
@@ -961,10 +972,9 @@ void gfs2_freeze_func(struct work_struct *work)
 	error = gfs2_glock_nq_init(sdp->sd_freeze_gl, LM_ST_SHARED, 0,
 				   &freeze_gh);
 	if (error) {
-		printk(KERN_INFO "GFS2: couln't get freeze lock : %d\n", error);
+		printk(KERN_INFO "GFS2: couldn't get freeze lock : %d\n", error);
 		gfs2_assert_withdraw(sdp, 0);
-	}
-	else {
+	} else {
 		atomic_set(&sdp->sd_freeze_state, SFS_UNFROZEN);
 		error = thaw_super(sb);
 		if (error) {
@@ -977,6 +987,8 @@ void gfs2_freeze_func(struct work_struct *work)
 		gfs2_glock_dq_uninit(&freeze_gh);
 	}
 	deactivate_super(sb);
+	clear_bit_unlock(SDF_FS_FROZEN, &sdp->sd_flags);
+	wake_up_bit(&sdp->sd_flags, SDF_FS_FROZEN);
 	return;
 }
 
@@ -1019,6 +1031,7 @@ static int gfs2_freeze(struct super_block *sb)
 		msleep(1000);
 	}
 	error = 0;
+	set_bit(SDF_FS_FROZEN, &sdp->sd_flags);
 out:
 	mutex_unlock(&sdp->sd_freeze_mutex);
 	return error;
@@ -1043,7 +1056,7 @@ static int gfs2_unfreeze(struct super_block *sb)
 
 	gfs2_glock_dq_uninit(&sdp->sd_freeze_gh);
 	mutex_unlock(&sdp->sd_freeze_mutex);
-	return 0;
+	return wait_on_bit(&sdp->sd_flags, SDF_FS_FROZEN, TASK_INTERRUPTIBLE);
 }
 
 /**
@@ -1087,7 +1100,7 @@ static int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host
 	int error = 0, err;
 
 	memset(sc, 0, sizeof(struct gfs2_statfs_change_host));
-	gha = kmalloc(slots * sizeof(struct gfs2_holder), GFP_KERNEL);
+	gha = kmalloc_array(slots, sizeof(struct gfs2_holder), GFP_KERNEL);
 	if (!gha)
 		return -ENOMEM;
 	for (x = 0; x < slots; x++)
@@ -1464,7 +1477,7 @@ static void gfs2_final_release_pages(struct gfs2_inode *ip)
 	truncate_inode_pages(gfs2_glock2aspace(ip->i_gl), 0);
 	truncate_inode_pages(&inode->i_data, 0);
 
-	if (atomic_read(&gl->gl_revokes) == 0) {
+	if (!test_bit(GLF_REVOKES, &gl->gl_flags)) {
 		clear_bit(GLF_LFLUSH, &gl->gl_flags);
 		clear_bit(GLF_DIRTY, &gl->gl_flags);
 	}
@@ -1620,8 +1633,6 @@ alloc_failed:
 			goto out_truncate;
 	}
 
-	/* Case 1 starts here */
-
 	if (S_ISDIR(inode->i_mode) &&
 	    (ip->i_diskflags & GFS2_DIF_EXHASH)) {
 		error = gfs2_dir_exhash_dealloc(ip);
@@ -1650,7 +1661,8 @@ alloc_failed:
 	goto out_unlock;
 
 out_truncate:
-	gfs2_log_flush(sdp, ip->i_gl, NORMAL_FLUSH);
+	gfs2_log_flush(sdp, ip->i_gl, GFS2_LOG_HEAD_FLUSH_NORMAL |
+		       GFS2_LFC_EVICT_INODE);
 	metamapping = gfs2_glock2aspace(ip->i_gl);
 	if (test_bit(GLF_DIRTY, &ip->i_gl->gl_flags)) {
 		filemap_fdatawrite(metamapping);
@@ -1659,7 +1671,6 @@ out_truncate:
 	write_inode_now(inode, 1);
 	gfs2_ail_flush(ip->i_gl, 0);
 
-	/* Case 2 starts here */
 	error = gfs2_trans_begin(sdp, 0, sdp->sd_jdesc->jd_blocks);
 	if (error)
 		goto out_unlock;
@@ -1669,7 +1680,6 @@ out_truncate:
 	gfs2_trans_end(sdp);
 
 out_unlock:
-	/* Error path for case 1 */
 	if (gfs2_rs_active(&ip->i_res))
 		gfs2_rs_deltree(&ip->i_res);
 
@@ -1688,7 +1698,6 @@ out_unlock:
 	if (error && error != GLR_TRYFAILED && error != -EROFS)
 		fs_warn(sdp, "gfs2_evict_inode: %d\n", error);
 out:
-	/* Case 3 starts here */
 	truncate_inode_pages_final(&inode->i_data);
 	gfs2_rsqa_delete(ip, NULL);
 	gfs2_ordered_del_inode(ip);
@@ -1718,7 +1727,6 @@ static struct inode *gfs2_alloc_inode(struct super_block *sb)
 	if (ip) {
 		ip->i_flags = 0;
 		ip->i_gl = NULL;
-		ip->i_rgd = NULL;
 		memset(&ip->i_res, 0, sizeof(ip->i_res));
 		RB_CLEAR_NODE(&ip->i_res.rs_node);
 		ip->i_rahead = 0;
@@ -1726,20 +1734,14 @@ static struct inode *gfs2_alloc_inode(struct super_block *sb)
 	return &ip->i_inode;
 }
 
-static void gfs2_i_callback(struct rcu_head *head)
+static void gfs2_free_inode(struct inode *inode)
 {
-	struct inode *inode = container_of(head, struct inode, i_rcu);
-	kmem_cache_free(gfs2_inode_cachep, inode);
-}
-
-static void gfs2_destroy_inode(struct inode *inode)
-{
-	call_rcu(&inode->i_rcu, gfs2_i_callback);
+	kmem_cache_free(gfs2_inode_cachep, GFS2_I(inode));
 }
 
 const struct super_operations gfs2_super_ops = {
 	.alloc_inode		= gfs2_alloc_inode,
-	.destroy_inode		= gfs2_destroy_inode,
+	.free_inode		= gfs2_free_inode,
 	.write_inode		= gfs2_write_inode,
 	.dirty_inode		= gfs2_dirty_inode,
 	.evict_inode		= gfs2_evict_inode,

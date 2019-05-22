@@ -258,7 +258,7 @@ snd_ad1889_ac97_ready(struct snd_ad1889 *chip)
 	
 	while (!(ad1889_readw(chip, AD_AC97_ACIC) & AD_AC97_ACIC_ACRDY) 
 			&& --retry)
-		mdelay(1);
+		usleep_range(1000, 2000);
 	if (!retry) {
 		dev_err(chip->card->dev, "[%s] Link is not ready.\n",
 			__func__);
@@ -644,16 +644,11 @@ snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device)
 	chip->psubs = NULL;
 	chip->csubs = NULL;
 
-	err = snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,
+	snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,
 						snd_dma_pci_data(chip->pci),
 						BUFFER_BYTES_MAX / 2,
 						BUFFER_BYTES_MAX);
 
-	if (err < 0) {
-		dev_err(chip->card->dev, "buffer allocation error: %d\n", err);
-		return err;
-	}
-	
 	return 0;
 }
 
@@ -741,10 +736,8 @@ snd_ad1889_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffe
 static void
 snd_ad1889_proc_init(struct snd_ad1889 *chip)
 {
-	struct snd_info_entry *entry;
-
-	if (!snd_card_proc_new(chip->card, chip->card->driver, &entry))
-		snd_info_set_text_ops(entry, chip, snd_ad1889_proc_read);
+	snd_card_ro_proc_new(chip->card, chip->card->driver,
+			     chip, snd_ad1889_proc_read);
 }
 
 static const struct ac97_quirk ac97_quirks[] = {
@@ -872,7 +865,7 @@ snd_ad1889_init(struct snd_ad1889 *chip)
 	ad1889_writew(chip, AD_DS_CCS, AD_DS_CCS_CLKEN); /* turn on clock */
 	ad1889_readw(chip, AD_DS_CCS);	/* flush posted write */
 
-	mdelay(10);
+	usleep_range(10000, 11000);
 
 	/* enable Master and Target abort interrupts */
 	ad1889_writel(chip, AD_DMA_DISR, AD_DMA_DISR_PMAE | AD_DMA_DISR_PTAE);

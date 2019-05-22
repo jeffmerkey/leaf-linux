@@ -1,4 +1,26 @@
 /*
+ * Copyright 2017 Advanced Micro Devices, Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ *
+ */
+/*
  * link_encoder.h
  *
  *  Created on: Oct 6, 2015
@@ -36,7 +58,6 @@ struct encoder_feature_support {
 			uint32_t IS_HBR3_CAPABLE:1;
 			uint32_t IS_TPS3_CAPABLE:1;
 			uint32_t IS_TPS4_CAPABLE:1;
-			uint32_t IS_YCBCR_CAPABLE:1;
 			uint32_t HDMI_6GB_EN:1;
 		} bits;
 		uint32_t raw;
@@ -44,7 +65,8 @@ struct encoder_feature_support {
 
 	enum dc_color_depth max_hdmi_deep_color;
 	unsigned int max_hdmi_pixel_clock;
-	bool ycbcr420_supported;
+	bool hdmi_ycbcr420_supported;
+	bool dp_ycbcr420_supported;
 };
 
 union dpcd_psr_configuration {
@@ -101,8 +123,7 @@ struct link_encoder_funcs {
 	void (*enable_tmds_output)(struct link_encoder *enc,
 		enum clock_source_id clock_source,
 		enum dc_color_depth color_depth,
-		bool hdmi,
-		bool dual_link,
+		enum signal_type signal,
 		uint32_t pixel_clock);
 	void (*enable_dp_output)(struct link_encoder *enc,
 		const struct dc_link_settings *link_settings,
@@ -110,8 +131,11 @@ struct link_encoder_funcs {
 	void (*enable_dp_mst_output)(struct link_encoder *enc,
 		const struct dc_link_settings *link_settings,
 		enum clock_source_id clock_source);
+	void (*enable_lvds_output)(struct link_encoder *enc,
+		enum clock_source_id clock_source,
+		uint32_t pixel_clock);
 	void (*disable_output)(struct link_encoder *link_enc,
-		enum signal_type signal, struct dc_link *link);
+		enum signal_type signal);
 	void (*dp_set_lane_settings)(struct link_encoder *enc,
 		const struct link_training_settings *link_settings);
 	void (*dp_set_phy_pattern)(struct link_encoder *enc,
@@ -128,6 +152,8 @@ struct link_encoder_funcs {
 		bool connect);
 	void (*enable_hpd)(struct link_encoder *enc);
 	void (*disable_hpd)(struct link_encoder *enc);
+	bool (*is_dig_enabled)(struct link_encoder *enc);
+	unsigned int (*get_dig_frontend)(struct link_encoder *enc);
 	void (*destroy)(struct link_encoder **enc);
 };
 

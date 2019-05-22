@@ -199,8 +199,8 @@ void __init omap2xxx_check_revision(void)
 
 	pr_info("%s", soc_name);
 	if ((omap_rev() >> 8) & 0x0f)
-		pr_info("%s", soc_rev);
-	pr_info("\n");
+		pr_cont("%s", soc_rev);
+	pr_cont("\n");
 }
 
 #define OMAP3_SHOW_FEATURE(feat)		\
@@ -657,8 +657,11 @@ void __init dra7xxx_check_revision(void)
 {
 	u32 idcode;
 	u16 hawkeye;
-	u8 rev;
+	u8 rev, package;
+	struct omap_die_id odi;
 
+	omap_get_die_id(&odi);
+	package = (odi.id_2 >> 16) & 0x3;
 	idcode = read_tap_reg(OMAP_TAP_IDCODE);
 	hawkeye = (idcode >> 12) & 0xffff;
 	rev = (idcode >> 28) & 0xff;
@@ -667,7 +670,17 @@ void __init dra7xxx_check_revision(void)
 		switch (rev) {
 		case 0:
 		default:
-			omap_revision = DRA762_REV_ES1_0;
+			switch (package) {
+			case 0x2:
+				omap_revision = DRA762_ABZ_REV_ES1_0;
+				break;
+			case 0x3:
+				omap_revision = DRA762_ACD_REV_ES1_0;
+				break;
+			default:
+				omap_revision = DRA762_REV_ES1_0;
+				break;
+			}
 			break;
 		}
 		break;

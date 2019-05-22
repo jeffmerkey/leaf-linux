@@ -31,6 +31,7 @@
 #include <linux/errno.h>
 #include <linux/skbuff.h>
 
+#include <linux/mmc/host.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/mmc/sdio_func.h>
 
@@ -292,6 +293,18 @@ static int btsdio_probe(struct sdio_func *func,
 		tuple = tuple->next;
 	}
 
+	/* Broadcom devices soldered onto the PCB (non-removable) use an
+	 * UART connection for Bluetooth, ignore the BT SDIO interface.
+	 */
+	if (func->vendor == SDIO_VENDOR_ID_BROADCOM &&
+	    !mmc_card_is_removable(func->card->host)) {
+		switch (func->device) {
+		case SDIO_DEVICE_ID_BROADCOM_43341:
+		case SDIO_DEVICE_ID_BROADCOM_43430:
+			return -ENODEV;
+		}
+	}
+
 	data = devm_kzalloc(&func->dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
@@ -363,20 +376,7 @@ static struct sdio_driver btsdio_driver = {
 	.id_table	= btsdio_table,
 };
 
-static int __init btsdio_init(void)
-{
-	BT_INFO("Generic Bluetooth SDIO driver ver %s", VERSION);
-
-	return sdio_register_driver(&btsdio_driver);
-}
-
-static void __exit btsdio_exit(void)
-{
-	sdio_unregister_driver(&btsdio_driver);
-}
-
-module_init(btsdio_init);
-module_exit(btsdio_exit);
+module_sdio_driver(btsdio_driver);
 
 MODULE_AUTHOR("Marcel Holtmann <marcel@holtmann.org>");
 MODULE_DESCRIPTION("Generic Bluetooth SDIO driver ver " VERSION);

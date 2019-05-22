@@ -1,23 +1,14 @@
-/* Copyright (C) 2010-2017  B.A.T.M.A.N. contributors:
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright (C) 2010-2019  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "debugfs.h"
 #include "main.h"
 
+#include <asm/current.h>
+#include <linux/dcache.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/errno.h>
@@ -25,7 +16,7 @@
 #include <linux/fs.h>
 #include <linux/netdevice.h>
 #include <linux/printk.h>
-#include <linux/sched.h> /* for linux/wait.h */
+#include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/stat.h>
 #include <linux/stddef.h>
@@ -46,8 +37,24 @@
 
 static struct dentry *batadv_debugfs;
 
+/**
+ * batadv_debugfs_deprecated() - Log use of deprecated batadv debugfs access
+ * @file: file which was accessed
+ * @alt: explanation what can be used as alternative
+ */
+void batadv_debugfs_deprecated(struct file *file, const char *alt)
+{
+	struct dentry *dentry = file_dentry(file);
+	const char *name = dentry->d_name.name;
+
+	pr_warn_ratelimited(DEPRECATED "%s (pid %d) Use of debugfs file \"%s\".\n%s",
+			    current->comm, task_pid_nr(current), name, alt);
+}
+
 static int batadv_algorithms_open(struct inode *inode, struct file *file)
 {
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_ROUTING_ALGOS instead\n");
 	return single_open(file, batadv_algo_seq_print_text, NULL);
 }
 
@@ -55,6 +62,8 @@ static int neighbors_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_NEIGHBORS instead\n");
 	return single_open(file, batadv_hardif_neigh_seq_print_text, net_dev);
 }
 
@@ -62,12 +71,14 @@ static int batadv_originators_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_ORIGINATORS instead\n");
 	return single_open(file, batadv_orig_seq_print_text, net_dev);
 }
 
 /**
- * batadv_originators_hardif_open - handles debugfs output for the
- *  originator table of an hard interface
+ * batadv_originators_hardif_open() - handles debugfs output for the originator
+ *  table of an hard interface
  * @inode: inode pointer to debugfs file
  * @file: pointer to the seq_file
  *
@@ -78,6 +89,8 @@ static int batadv_originators_hardif_open(struct inode *inode,
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_HARDIFS instead\n");
 	return single_open(file, batadv_orig_hardif_seq_print_text, net_dev);
 }
 
@@ -85,6 +98,8 @@ static int batadv_gateways_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_GATEWAYS instead\n");
 	return single_open(file, batadv_gw_client_seq_print_text, net_dev);
 }
 
@@ -92,6 +107,8 @@ static int batadv_transtable_global_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_TRANSTABLE_GLOBAL instead\n");
 	return single_open(file, batadv_tt_global_seq_print_text, net_dev);
 }
 
@@ -100,6 +117,8 @@ static int batadv_bla_claim_table_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_BLA_CLAIM instead\n");
 	return single_open(file, batadv_bla_claim_table_seq_print_text,
 			   net_dev);
 }
@@ -109,6 +128,8 @@ static int batadv_bla_backbone_table_open(struct inode *inode,
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_BLA_BACKBONE instead\n");
 	return single_open(file, batadv_bla_backbone_table_seq_print_text,
 			   net_dev);
 }
@@ -117,7 +138,7 @@ static int batadv_bla_backbone_table_open(struct inode *inode,
 
 #ifdef CONFIG_BATMAN_ADV_DAT
 /**
- * batadv_dat_cache_open - Prepare file handler for reads from dat_chache
+ * batadv_dat_cache_open() - Prepare file handler for reads from dat_cache
  * @inode: inode which was opened
  * @file: file handle to be initialized
  *
@@ -127,6 +148,8 @@ static int batadv_dat_cache_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_DAT_CACHE instead\n");
 	return single_open(file, batadv_dat_cache_seq_print_text, net_dev);
 }
 #endif
@@ -135,6 +158,8 @@ static int batadv_transtable_local_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_TRANSTABLE_LOCAL instead\n");
 	return single_open(file, batadv_tt_local_seq_print_text, net_dev);
 }
 
@@ -148,13 +173,14 @@ static int batadv_nc_nodes_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file, "");
 	return single_open(file, batadv_nc_nodes_seq_print_text, net_dev);
 }
 #endif
 
 #ifdef CONFIG_BATMAN_ADV_MCAST
 /**
- * batadv_mcast_flags_open - prepare file handler for reads from mcast_flags
+ * batadv_mcast_flags_open() - prepare file handler for reads from mcast_flags
  * @inode: inode which was opened
  * @file: file handle to be initialized
  *
@@ -164,6 +190,8 @@ static int batadv_mcast_flags_open(struct inode *inode, struct file *file)
 {
 	struct net_device *net_dev = (struct net_device *)inode->i_private;
 
+	batadv_debugfs_deprecated(file,
+				  "Use genl command BATADV_CMD_GET_MCAST_FLAGS instead\n");
 	return single_open(file, batadv_mcast_flags_seq_print_text, net_dev);
 }
 #endif
@@ -259,6 +287,9 @@ static struct batadv_debuginfo *batadv_hardif_debuginfos[] = {
 	NULL,
 };
 
+/**
+ * batadv_debugfs_init() - Initialize soft interface independent debugfs entries
+ */
 void batadv_debugfs_init(void)
 {
 	struct batadv_debuginfo **bat_debug;
@@ -289,6 +320,9 @@ err:
 	batadv_debugfs = NULL;
 }
 
+/**
+ * batadv_debugfs_destroy() - Remove all debugfs entries
+ */
 void batadv_debugfs_destroy(void)
 {
 	debugfs_remove_recursive(batadv_debugfs);
@@ -296,7 +330,7 @@ void batadv_debugfs_destroy(void)
 }
 
 /**
- * batadv_debugfs_add_hardif - creates the base directory for a hard interface
+ * batadv_debugfs_add_hardif() - creates the base directory for a hard interface
  *  in debugfs.
  * @hard_iface: hard interface which should be added.
  *
@@ -338,7 +372,26 @@ out:
 }
 
 /**
- * batadv_debugfs_del_hardif - delete the base directory for a hard interface
+ * batadv_debugfs_rename_hardif() - Fix debugfs path for renamed hardif
+ * @hard_iface: hard interface which was renamed
+ */
+void batadv_debugfs_rename_hardif(struct batadv_hard_iface *hard_iface)
+{
+	const char *name = hard_iface->net_dev->name;
+	struct dentry *dir;
+	struct dentry *d;
+
+	dir = hard_iface->debug_dir;
+	if (!dir)
+		return;
+
+	d = debugfs_rename(dir->d_parent, dir, dir->d_parent, name);
+	if (!d)
+		pr_err("Can't rename debugfs dir to %s\n", name);
+}
+
+/**
+ * batadv_debugfs_del_hardif() - delete the base directory for a hard interface
  *  in debugfs.
  * @hard_iface: hard interface which is deleted.
  */
@@ -355,6 +408,12 @@ void batadv_debugfs_del_hardif(struct batadv_hard_iface *hard_iface)
 	}
 }
 
+/**
+ * batadv_debugfs_add_meshif() - Initialize interface dependent debugfs entries
+ * @dev: netdev struct of the soft interface
+ *
+ * Return: 0 on success or negative error number in case of failure
+ */
 int batadv_debugfs_add_meshif(struct net_device *dev)
 {
 	struct batadv_priv *bat_priv = netdev_priv(dev);
@@ -401,6 +460,30 @@ out:
 	return -ENOMEM;
 }
 
+/**
+ * batadv_debugfs_rename_meshif() - Fix debugfs path for renamed softif
+ * @dev: net_device which was renamed
+ */
+void batadv_debugfs_rename_meshif(struct net_device *dev)
+{
+	struct batadv_priv *bat_priv = netdev_priv(dev);
+	const char *name = dev->name;
+	struct dentry *dir;
+	struct dentry *d;
+
+	dir = bat_priv->debug_dir;
+	if (!dir)
+		return;
+
+	d = debugfs_rename(dir->d_parent, dir, dir->d_parent, name);
+	if (!d)
+		pr_err("Can't rename debugfs dir to %s\n", name);
+}
+
+/**
+ * batadv_debugfs_del_meshif() - Remove interface dependent debugfs entries
+ * @dev: netdev struct of the soft interface
+ */
 void batadv_debugfs_del_meshif(struct net_device *dev)
 {
 	struct batadv_priv *bat_priv = netdev_priv(dev);

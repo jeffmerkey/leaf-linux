@@ -408,7 +408,6 @@ static int pcan_usb_decode_error(struct pcan_usb_msg_context *mc, u8 n,
 {
 	struct sk_buff *skb;
 	struct can_frame *cf;
-	struct timeval tv;
 	enum can_state new_state;
 
 	/* ignore this error until 1st ts received */
@@ -424,6 +423,7 @@ static int pcan_usb_decode_error(struct pcan_usb_msg_context *mc, u8 n,
 			new_state = CAN_STATE_ERROR_WARNING;
 			break;
 		}
+		/* else: fall through */
 
 	case CAN_STATE_ERROR_WARNING:
 		if (n & PCAN_USB_ERROR_BUS_HEAVY) {
@@ -525,8 +525,8 @@ static int pcan_usb_decode_error(struct pcan_usb_msg_context *mc, u8 n,
 	if (status_len & PCAN_USB_STATUSLEN_TIMESTAMP) {
 		struct skb_shared_hwtstamps *hwts = skb_hwtstamps(skb);
 
-		peak_usb_get_ts_tv(&mc->pdev->time_ref, mc->ts16, &tv);
-		hwts->hwtstamp = timeval_to_ktime(tv);
+		peak_usb_get_ts_time(&mc->pdev->time_ref, mc->ts16,
+				     &hwts->hwtstamp);
 	}
 
 	mc->netdev->stats.rx_packets++;
@@ -610,7 +610,6 @@ static int pcan_usb_decode_data(struct pcan_usb_msg_context *mc, u8 status_len)
 	u8 rec_len = status_len & PCAN_USB_STATUSLEN_DLC;
 	struct sk_buff *skb;
 	struct can_frame *cf;
-	struct timeval tv;
 	struct skb_shared_hwtstamps *hwts;
 
 	skb = alloc_can_skb(mc->netdev, &cf);
@@ -658,9 +657,8 @@ static int pcan_usb_decode_data(struct pcan_usb_msg_context *mc, u8 status_len)
 	}
 
 	/* convert timestamp into kernel time */
-	peak_usb_get_ts_tv(&mc->pdev->time_ref, mc->ts16, &tv);
 	hwts = skb_hwtstamps(skb);
-	hwts->hwtstamp = timeval_to_ktime(tv);
+	peak_usb_get_ts_time(&mc->pdev->time_ref, mc->ts16, &hwts->hwtstamp);
 
 	/* update statistics */
 	mc->netdev->stats.rx_packets++;

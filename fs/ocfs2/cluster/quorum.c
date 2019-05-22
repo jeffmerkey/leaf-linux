@@ -81,6 +81,7 @@ static void o2quo_fence_self(void)
 	default:
 		WARN_ON(o2nm_single_cluster->cl_fence_method >=
 			O2NM_FENCE_METHODS);
+		/* fall through */
 	case O2NM_FENCE_RESET:
 		printk(KERN_ERR "*** ocfs2 is very sorry to be fencing this "
 		       "system by restarting ***\n");
@@ -314,12 +315,13 @@ void o2quo_conn_err(u8 node)
 				node, qs->qs_connected);
 
 		clear_bit(node, qs->qs_conn_bm);
+
+		if (test_bit(node, qs->qs_hb_bm))
+			o2quo_set_hold(qs, node);
 	}
 
 	mlog(0, "node %u, %d total\n", node, qs->qs_connected);
 
-	if (test_bit(node, qs->qs_hb_bm))
-		o2quo_set_hold(qs, node);
 
 	spin_unlock(&qs->qs_lock);
 }

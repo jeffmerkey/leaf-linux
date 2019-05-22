@@ -145,8 +145,7 @@ static void rtsr_set_bits(struct pxa_rtc *pxa_rtc, u32 mask)
 
 static irqreturn_t pxa_rtc_irq(int irq, void *dev_id)
 {
-	struct platform_device *pdev = to_platform_device(dev_id);
-	struct pxa_rtc *pxa_rtc = platform_get_drvdata(pdev);
+	struct pxa_rtc *pxa_rtc = dev_get_drvdata(dev_id);
 	u32 rtsr;
 	unsigned long events = 0;
 
@@ -363,7 +362,7 @@ static int __init pxa_rtc_probe(struct platform_device *pdev)
 	sa1100_rtc->rtar = pxa_rtc->base + 0x4;
 	sa1100_rtc->rttr = pxa_rtc->base + 0xc;
 	ret = sa1100_rtc_init(pdev, sa1100_rtc);
-	if (!ret) {
+	if (ret) {
 		dev_err(dev, "Unable to init SA1100 RTC sub-device\n");
 		return ret;
 	}

@@ -1120,7 +1120,6 @@ static int lm63_probe(struct i2c_client *client,
 		data->kind = (enum chips)of_device_get_match_data(&client->dev);
 	else
 		data->kind = id->driver_data;
-	data->kind = id->driver_data;
 	if (data->kind == lm64)
 		data->temp2_offset = 16000;
 
@@ -1154,7 +1153,7 @@ static const struct i2c_device_id lm63_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, lm63_id);
 
-static const struct of_device_id lm63_of_match[] = {
+static const struct of_device_id __maybe_unused lm63_of_match[] = {
 	{
 		.compatible = "national,lm63",
 		.data = (void *)lm63

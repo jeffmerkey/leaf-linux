@@ -51,7 +51,7 @@ struct posix_clock;
 struct posix_clock_operations {
 	struct module *owner;
 
-	int  (*clock_adjtime)(struct posix_clock *pc, struct timex *tx);
+	int  (*clock_adjtime)(struct posix_clock *pc, struct __kernel_timex *tx);
 
 	int  (*clock_gettime)(struct posix_clock *pc, struct timespec64 *ts);
 
@@ -68,7 +68,7 @@ struct posix_clock_operations {
 
 	int     (*open)    (struct posix_clock *pc, fmode_t f_mode);
 
-	uint    (*poll)    (struct posix_clock *pc,
+	__poll_t (*poll)   (struct posix_clock *pc,
 			    struct file *file, poll_table *wait);
 
 	int     (*release) (struct posix_clock *pc);

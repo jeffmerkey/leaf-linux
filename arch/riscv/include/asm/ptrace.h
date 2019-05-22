@@ -56,8 +56,8 @@ struct pt_regs {
 	unsigned long sstatus;
 	unsigned long sbadaddr;
 	unsigned long scause;
-        /* a0 value before the syscall */
-        unsigned long orig_a0;
+	/* a0 value before the syscall */
+	unsigned long orig_a0;
 };
 
 #ifdef CONFIG_64BIT
@@ -66,51 +66,47 @@ struct pt_regs {
 #define REG_FMT "%08lx"
 #endif
 
-#define user_mode(regs) (((regs)->sstatus & SR_PS) == 0)
+#define user_mode(regs) (((regs)->sstatus & SR_SPP) == 0)
 
 
 /* Helpers for working with the instruction pointer */
-#define GET_IP(regs) ((regs)->sepc)
-#define SET_IP(regs, val) (GET_IP(regs) = (val))
-
 static inline unsigned long instruction_pointer(struct pt_regs *regs)
 {
-	return GET_IP(regs);
+	return regs->sepc;
 }
 static inline void instruction_pointer_set(struct pt_regs *regs,
 					   unsigned long val)
 {
-	SET_IP(regs, val);
+	regs->sepc = val;
 }
 
 #define profile_pc(regs) instruction_pointer(regs)
 
 /* Helpers for working with the user stack pointer */
-#define GET_USP(regs) ((regs)->sp)
-#define SET_USP(regs, val) (GET_USP(regs) = (val))
-
 static inline unsigned long user_stack_pointer(struct pt_regs *regs)
 {
-	return GET_USP(regs);
+	return regs->sp;
 }
 static inline void user_stack_pointer_set(struct pt_regs *regs,
 					  unsigned long val)
 {
-	SET_USP(regs, val);
+	regs->sp =  val;
 }
 
 /* Helpers for working with the frame pointer */
-#define GET_FP(regs) ((regs)->s0)
-#define SET_FP(regs, val) (GET_FP(regs) = (val))
-
 static inline unsigned long frame_pointer(struct pt_regs *regs)
 {
-	return GET_FP(regs);
+	return regs->s0;
 }
 static inline void frame_pointer_set(struct pt_regs *regs,
 				     unsigned long val)
 {
-	SET_FP(regs, val);
+	regs->s0 = val;
+}
+
+static inline unsigned long regs_return_value(struct pt_regs *regs)
+{
+	return regs->a0;
 }
 
 #endif /* __ASSEMBLY__ */

@@ -274,8 +274,9 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 		num_ambs += hweight16(data->amb_present[i] & 0x7fff);
 
 	/* Set up sysfs stuff */
-	data->attrs = kzalloc(sizeof(*data->attrs) * num_ambs * KNOBS_PER_AMB,
-				GFP_KERNEL);
+	data->attrs = kzalloc(array3_size(num_ambs, KNOBS_PER_AMB,
+					  sizeof(*data->attrs)),
+			      GFP_KERNEL);
 	if (!data->attrs)
 		return -ENOMEM;
 	data->num_attrs = 0;
@@ -295,7 +296,7 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 			snprintf(iattr->name, AMB_SYSFS_NAME_LEN,
 				 "temp%d_label", d);
 			iattr->s_attr.dev_attr.attr.name = iattr->name;
-			iattr->s_attr.dev_attr.attr.mode = S_IRUGO;
+			iattr->s_attr.dev_attr.attr.mode = 0444;
 			iattr->s_attr.dev_attr.show = show_label;
 			iattr->s_attr.index = k;
 			sysfs_attr_init(&iattr->s_attr.dev_attr.attr);
@@ -310,7 +311,7 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 			snprintf(iattr->name, AMB_SYSFS_NAME_LEN,
 				 "temp%d_input", d);
 			iattr->s_attr.dev_attr.attr.name = iattr->name;
-			iattr->s_attr.dev_attr.attr.mode = S_IRUGO;
+			iattr->s_attr.dev_attr.attr.mode = 0444;
 			iattr->s_attr.dev_attr.show = show_amb_temp;
 			iattr->s_attr.index = k;
 			sysfs_attr_init(&iattr->s_attr.dev_attr.attr);
@@ -325,7 +326,7 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 			snprintf(iattr->name, AMB_SYSFS_NAME_LEN,
 				 "temp%d_min", d);
 			iattr->s_attr.dev_attr.attr.name = iattr->name;
-			iattr->s_attr.dev_attr.attr.mode = S_IWUSR | S_IRUGO;
+			iattr->s_attr.dev_attr.attr.mode = 0644;
 			iattr->s_attr.dev_attr.show = show_amb_min;
 			iattr->s_attr.dev_attr.store = store_amb_min;
 			iattr->s_attr.index = k;
@@ -341,7 +342,7 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 			snprintf(iattr->name, AMB_SYSFS_NAME_LEN,
 				 "temp%d_mid", d);
 			iattr->s_attr.dev_attr.attr.name = iattr->name;
-			iattr->s_attr.dev_attr.attr.mode = S_IWUSR | S_IRUGO;
+			iattr->s_attr.dev_attr.attr.mode = 0644;
 			iattr->s_attr.dev_attr.show = show_amb_mid;
 			iattr->s_attr.dev_attr.store = store_amb_mid;
 			iattr->s_attr.index = k;
@@ -357,7 +358,7 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 			snprintf(iattr->name, AMB_SYSFS_NAME_LEN,
 				 "temp%d_max", d);
 			iattr->s_attr.dev_attr.attr.name = iattr->name;
-			iattr->s_attr.dev_attr.attr.mode = S_IWUSR | S_IRUGO;
+			iattr->s_attr.dev_attr.attr.mode = 0644;
 			iattr->s_attr.dev_attr.show = show_amb_max;
 			iattr->s_attr.dev_attr.store = store_amb_max;
 			iattr->s_attr.index = k;
@@ -373,7 +374,7 @@ static int i5k_amb_hwmon_init(struct platform_device *pdev)
 			snprintf(iattr->name, AMB_SYSFS_NAME_LEN,
 				 "temp%d_alarm", d);
 			iattr->s_attr.dev_attr.attr.name = iattr->name;
-			iattr->s_attr.dev_attr.attr.mode = S_IRUGO;
+			iattr->s_attr.dev_attr.attr.mode = 0444;
 			iattr->s_attr.dev_attr.show = show_amb_alarm;
 			iattr->s_attr.index = k;
 			sysfs_attr_init(&iattr->s_attr.dev_attr.attr);

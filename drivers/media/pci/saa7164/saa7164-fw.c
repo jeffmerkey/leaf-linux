@@ -409,7 +409,7 @@ int saa7164_downloadfirmware(struct saa7164_dev *dev)
 		(version & 0x0000001f),
 		(version & 0xffff0000) >> 16);
 
-	/* Load the firmwware from the disk if required */
+	/* Load the firmware from the disk if required */
 	if (version == 0) {
 
 		printk(KERN_INFO "%s() Waiting for firmware upload (%s)\n",
@@ -426,7 +426,8 @@ int saa7164_downloadfirmware(struct saa7164_dev *dev)
 			__func__, fw->size);
 
 		if (fw->size != fwlength) {
-			printk(KERN_ERR "xc5000: firmware incorrect size\n");
+			printk(KERN_ERR "saa7164: firmware incorrect size %zu != %u\n",
+				fw->size, fwlength);
 			ret = -ENOMEM;
 			goto out;
 		}

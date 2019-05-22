@@ -249,6 +249,7 @@ static void pwm_export_release(struct device *child)
 static int pwm_export_child(struct device *parent, struct pwm_device *pwm)
 {
 	struct pwm_export *export;
+	char *pwm_prop[2];
 	int ret;
 
 	if (test_and_set_bit(PWMF_EXPORTED, &pwm->flags))
@@ -272,9 +273,14 @@ static int pwm_export_child(struct device *parent, struct pwm_device *pwm)
 	ret = device_register(&export->child);
 	if (ret) {
 		clear_bit(PWMF_EXPORTED, &pwm->flags);
-		kfree(export);
+		put_device(&export->child);
+		export = NULL;
 		return ret;
 	}
+	pwm_prop[0] = kasprintf(GFP_KERNEL, "EXPORT=pwm%u", pwm->hwpwm);
+	pwm_prop[1] = NULL;
+	kobject_uevent_env(&parent->kobj, KOBJ_CHANGE, pwm_prop);
+	kfree(pwm_prop[0]);
 
 	return 0;
 }
@@ -287,6 +293,7 @@ static int pwm_unexport_match(struct device *child, void *data)
 static int pwm_unexport_child(struct device *parent, struct pwm_device *pwm)
 {
 	struct device *child;
+	char *pwm_prop[2];
 
 	if (!test_and_clear_bit(PWMF_EXPORTED, &pwm->flags))
 		return -ENODEV;
@@ -294,6 +301,11 @@ static int pwm_unexport_child(struct device *parent, struct pwm_device *pwm)
 	child = device_find_child(parent, pwm, pwm_unexport_match);
 	if (!child)
 		return -ENODEV;
+
+	pwm_prop[0] = kasprintf(GFP_KERNEL, "UNEXPORT=pwm%u", pwm->hwpwm);
+	pwm_prop[1] = NULL;
+	kobject_uevent_env(&parent->kobj, KOBJ_CHANGE, pwm_prop);
+	kfree(pwm_prop[0]);
 
 	/* for device_find_child() */
 	put_device(child);
@@ -386,7 +398,7 @@ void pwmchip_sysfs_export(struct pwm_chip *chip)
 
 	/*
 	 * If device_create() fails the pwm_chip is still usable by
-	 * the kernel its just not exported.
+	 * the kernel it's just not exported.
 	 */
 	parent = device_create(&pwm_class, chip->dev, MKDEV(0, 0), chip,
 			       "pwmchip%d", chip->base);
@@ -397,19 +409,6 @@ void pwmchip_sysfs_export(struct pwm_chip *chip)
 }
 
 void pwmchip_sysfs_unexport(struct pwm_chip *chip)
-{
-	struct device *parent;
-
-	parent = class_find_device(&pwm_class, NULL, chip,
-				   pwmchip_sysfs_match);
-	if (parent) {
-		/* for class_find_device() */
-		put_device(parent);
-		device_unregister(parent);
-	}
-}
-
-void pwmchip_sysfs_unexport_children(struct pwm_chip *chip)
 {
 	struct device *parent;
 	unsigned int i;
@@ -427,6 +426,7 @@ void pwmchip_sysfs_unexport_children(struct pwm_chip *chip)
 	}
 
 	put_device(parent);
+	device_unregister(parent);
 }
 
 static int __init pwm_sysfs_init(void)

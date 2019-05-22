@@ -102,7 +102,7 @@ static int check_free_space(struct bsd_acct_struct *acct)
 {
 	struct kstatfs sbuf;
 
-	if (time_is_before_jiffies(acct->needcheck))
+	if (time_is_after_jiffies(acct->needcheck))
 		goto out;
 
 	/* May block */
@@ -227,7 +227,7 @@ static int acct_on(struct filename *pathname)
 		filp_close(file, NULL);
 		return PTR_ERR(internal);
 	}
-	err = mnt_want_write(internal);
+	err = __mnt_want_write(internal);
 	if (err) {
 		mntput(internal);
 		kfree(acct);
@@ -252,7 +252,7 @@ static int acct_on(struct filename *pathname)
 	old = xchg(&ns->bacct, &acct->pin);
 	mutex_unlock(&acct->lock);
 	pin_kill(old);
-	mnt_drop_write(mnt);
+	__mnt_drop_write(mnt);
 	mntput(mnt);
 	return 0;
 }

@@ -685,10 +685,10 @@ isdn_ppp_ioctl(int min, struct file *file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-unsigned int
+__poll_t
 isdn_ppp_poll(struct file *file, poll_table *wait)
 {
-	u_int mask;
+	__poll_t mask;
 	struct ippp_buf_queue *bf, *bl;
 	u_long flags;
 	struct ippp_struct *is;
@@ -704,12 +704,12 @@ isdn_ppp_poll(struct file *file, poll_table *wait)
 
 	if (!(is->state & IPPP_OPEN)) {
 		if (is->state == IPPP_CLOSEWAIT)
-			return POLLHUP;
+			return EPOLLHUP;
 		printk(KERN_DEBUG "isdn_ppp: device not open\n");
-		return POLLERR;
+		return EPOLLERR;
 	}
 	/* we're always ready to send .. */
-	mask = POLLOUT | POLLWRNORM;
+	mask = EPOLLOUT | EPOLLWRNORM;
 
 	spin_lock_irqsave(&is->buflock, flags);
 	bl = is->last;
@@ -719,7 +719,7 @@ isdn_ppp_poll(struct file *file, poll_table *wait)
 	 */
 	if (bf->next != bl || (is->state & IPPP_NOBLOCK)) {
 		is->state &= ~IPPP_NOBLOCK;
-		mask |= POLLIN | POLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 	}
 	spin_unlock_irqrestore(&is->buflock, flags);
 	return mask;
@@ -1888,8 +1888,9 @@ static u32 isdn_ppp_mp_get_seq(int short_seq,
 	return seq;
 }
 
-struct sk_buff *isdn_ppp_mp_discard(ippp_bundle *mp,
-				    struct sk_buff *from, struct sk_buff *to)
+static struct sk_buff *isdn_ppp_mp_discard(ippp_bundle *mp,
+					   struct sk_buff *from,
+					   struct sk_buff *to)
 {
 	if (from)
 		while (from != to) {
@@ -1900,8 +1901,8 @@ struct sk_buff *isdn_ppp_mp_discard(ippp_bundle *mp,
 	return from;
 }
 
-void isdn_ppp_mp_reassembly(isdn_net_dev *net_dev, isdn_net_local *lp,
-			    struct sk_buff *from, struct sk_buff *to)
+static void isdn_ppp_mp_reassembly(isdn_net_dev *net_dev, isdn_net_local *lp,
+				   struct sk_buff *from, struct sk_buff *to)
 {
 	ippp_bundle *mp = net_dev->pb;
 	int proto;

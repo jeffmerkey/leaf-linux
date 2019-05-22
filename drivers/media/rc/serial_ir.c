@@ -273,7 +273,7 @@ static void frbwrite(unsigned int l, bool is_pulse)
 {
 	/* simple noise filter */
 	static unsigned int ptr, pulse, space;
-	DEFINE_IR_RAW_EVENT(ev);
+	struct ir_raw_event ev = {};
 
 	if (ptr > 0 && is_pulse) {
 		pulse += l;
@@ -472,10 +472,10 @@ static int hardware_init_port(void)
 
 static void serial_ir_timeout(struct timer_list *unused)
 {
-	DEFINE_IR_RAW_EVENT(ev);
-
-	ev.timeout = true;
-	ev.duration = serial_ir.rcdev->timeout;
+	struct ir_raw_event ev = {
+		.timeout = true,
+		.duration = serial_ir.rcdev->timeout
+	};
 	ir_raw_event_store_with_filter(serial_ir.rcdev, &ev);
 	ir_raw_event_handle(serial_ir.rcdev);
 }
@@ -773,8 +773,6 @@ static void serial_ir_exit(void)
 
 static int __init serial_ir_init_module(void)
 {
-	int result;
-
 	switch (type) {
 	case IR_HOMEBREW:
 	case IR_IRDEO:
@@ -802,12 +800,7 @@ static int __init serial_ir_init_module(void)
 	if (sense != -1)
 		sense = !!sense;
 
-	result = serial_ir_init();
-	if (!result)
-		return 0;
-
-	serial_ir_exit();
-	return result;
+	return serial_ir_init();
 }
 
 static void __exit serial_ir_exit_module(void)

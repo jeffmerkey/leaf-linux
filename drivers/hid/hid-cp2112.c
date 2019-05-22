@@ -696,8 +696,16 @@ static int cp2112_xfer(struct i2c_adapter *adap, u16 addr,
 					      (u8 *)&word, 2);
 		break;
 	case I2C_SMBUS_I2C_BLOCK_DATA:
-		size = I2C_SMBUS_BLOCK_DATA;
-		/* fallthrough */
+		if (read_write == I2C_SMBUS_READ) {
+			read_length = data->block[0];
+			count = cp2112_write_read_req(buf, addr, read_length,
+						      command, NULL, 0);
+		} else {
+			count = cp2112_write_req(buf, addr, command,
+						 data->block + 1,
+						 data->block[0]);
+		}
+		break;
 	case I2C_SMBUS_BLOCK_DATA:
 		if (I2C_SMBUS_READ == read_write) {
 			count = cp2112_write_read_req(buf, addr,
@@ -784,6 +792,9 @@ static int cp2112_xfer(struct i2c_adapter *adap, u16 addr,
 		break;
 	case I2C_SMBUS_WORD_DATA:
 		data->word = le16_to_cpup((__le16 *)buf);
+		break;
+	case I2C_SMBUS_I2C_BLOCK_DATA:
+		memcpy(data->block + 1, buf, read_length);
 		break;
 	case I2C_SMBUS_BLOCK_DATA:
 		if (read_length > I2C_SMBUS_BLOCK_MAX) {
@@ -1192,7 +1203,7 @@ static int __maybe_unused cp2112_allocate_irq(struct cp2112_device *dev,
 		return -EINVAL;
 
 	dev->desc[pin] = gpiochip_request_own_desc(&dev->gc, pin,
-						   "HID/I2C:Event");
+						   "HID/I2C:Event", 0);
 	if (IS_ERR(dev->desc[pin])) {
 		dev_err(dev->gc.parent, "Failed to request GPIO\n");
 		return PTR_ERR(dev->desc[pin]);

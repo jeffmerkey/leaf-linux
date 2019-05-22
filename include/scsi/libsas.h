@@ -52,8 +52,8 @@ enum sas_phy_role {
 };
 
 enum sas_phy_type {
-        PHY_TYPE_PHYSICAL,
-        PHY_TYPE_VIRTUAL
+	PHY_TYPE_PHYSICAL,
+	PHY_TYPE_VIRTUAL
 };
 
 /* The events are mnemonically described in sas_dump.c
@@ -75,16 +75,15 @@ enum phy_event {
 	PHYE_OOB_ERROR,
 	PHYE_SPINUP_HOLD,             /* hot plug SATA, no COMWAKE sent */
 	PHYE_RESUME_TIMEOUT,
+	PHYE_SHUTDOWN,
 	PHY_NUM_EVENTS,
 };
 
 enum discover_event {
 	DISCE_DISCOVER_DOMAIN   = 0U,
 	DISCE_REVALIDATE_DOMAIN,
-	DISCE_PROBE,
 	DISCE_SUSPEND,
 	DISCE_RESUME,
-	DISCE_DESTRUCT,
 	DISC_NUM_EVENTS,
 };
 
@@ -92,7 +91,7 @@ enum discover_event {
 
 #define to_dom_device(_obj) container_of(_obj, struct domain_device, dev_obj)
 #define to_dev_attr(_attr)  container_of(_attr, struct domain_dev_attribute,\
-                                         attr)
+					 attr)
 
 enum routing_attribute {
 	DIRECT_ROUTING,
@@ -162,7 +161,7 @@ struct sata_device {
 	u8     port_no;        /* port number, if this is a PM (Port) */
 
 	struct ata_port *ap;
-	struct ata_host ata_host;
+	struct ata_host *ata_host;
 	struct smp_resp rps_resp ____cacheline_aligned; /* report_phy_sata_resp */
 	u8     fis[ATA_RESP_FIS_SIZE];
 };
@@ -185,37 +184,37 @@ struct domain_device {
 	spinlock_t done_lock;
 	enum sas_device_type dev_type;
 
-        enum sas_linkrate linkrate;
-        enum sas_linkrate min_linkrate;
-        enum sas_linkrate max_linkrate;
+	enum sas_linkrate linkrate;
+	enum sas_linkrate min_linkrate;
+	enum sas_linkrate max_linkrate;
 
-        int  pathways;
+	int  pathways;
 
-        struct domain_device *parent;
-        struct list_head siblings; /* devices on the same level */
-        struct asd_sas_port *port;        /* shortcut to root of the tree */
+	struct domain_device *parent;
+	struct list_head siblings; /* devices on the same level */
+	struct asd_sas_port *port;        /* shortcut to root of the tree */
 	struct sas_phy *phy;
 
-        struct list_head dev_list_node;
+	struct list_head dev_list_node;
 	struct list_head disco_list_node; /* awaiting probe or destruct */
 
-        enum sas_protocol    iproto;
-        enum sas_protocol    tproto;
+	enum sas_protocol    iproto;
+	enum sas_protocol    tproto;
 
-        struct sas_rphy *rphy;
+	struct sas_rphy *rphy;
 
-        u8  sas_addr[SAS_ADDR_SIZE];
-        u8  hashed_sas_addr[HASHED_SAS_ADDR_SIZE];
+	u8  sas_addr[SAS_ADDR_SIZE];
+	u8  hashed_sas_addr[HASHED_SAS_ADDR_SIZE];
 
-        u8  frame_rcvd[32];
+	u8  frame_rcvd[32];
 
-        union {
-                struct expander_device ex_dev;
-                struct sata_device     sata_dev; /* STP & directly attached */
+	union {
+		struct expander_device ex_dev;
+		struct sata_device     sata_dev; /* STP & directly attached */
 		struct ssp_device      ssp_dev;
-        };
+	};
 
-        void *lldd_dev;
+	void *lldd_dev;
 	unsigned long state;
 	struct kref kref;
 };
@@ -224,6 +223,13 @@ struct sas_work {
 	struct list_head drain_node;
 	struct work_struct work;
 };
+
+/* Lots of code duplicates this in the SCSI tree, which can be factored out */
+static inline bool sas_dev_type_is_expander(enum sas_device_type type)
+{
+	return type == SAS_EDGE_EXPANDER_DEVICE ||
+	       type == SAS_FANOUT_EXPANDER_DEVICE;
+}
 
 static inline void INIT_SAS_WORK(struct sas_work *sw, void (*fn)(struct work_struct *))
 {
@@ -246,9 +252,9 @@ static inline struct sas_discovery_event *to_sas_discovery_event(struct work_str
 struct sas_discovery {
 	struct sas_discovery_event disc_work[DISC_NUM_EVENTS];
 	unsigned long    pending;
-	u8     fanout_sas_addr[8];
-	u8     eeds_a[8];
-	u8     eeds_b[8];
+	u8     fanout_sas_addr[SAS_ADDR_SIZE];
+	u8     eeds_a[SAS_ADDR_SIZE];
+	u8     eeds_b[SAS_ADDR_SIZE];
 	int    max_level;
 };
 
@@ -261,6 +267,7 @@ struct asd_sas_port {
 	struct list_head dev_list;
 	struct list_head disco_list;
 	struct list_head destroy_list;
+	struct list_head sas_port_del_list;
 	enum   sas_linkrate linkrate;
 
 	struct sas_work work;
@@ -292,6 +299,7 @@ struct asd_sas_port {
 struct asd_sas_event {
 	struct sas_work work;
 	struct asd_sas_phy *phy;
+	int event;
 };
 
 static inline struct asd_sas_event *to_asd_sas_event(struct work_struct *work)
@@ -301,17 +309,24 @@ static inline struct asd_sas_event *to_asd_sas_event(struct work_struct *work)
 	return ev;
 }
 
+static inline void INIT_SAS_EVENT(struct asd_sas_event *ev,
+		void (*fn)(struct work_struct *),
+		struct asd_sas_phy *phy, int event)
+{
+	INIT_SAS_WORK(&ev->work, fn);
+	ev->phy = phy;
+	ev->event = event;
+}
+
+#define SAS_PHY_SHUTDOWN_THRES   1024
+
 /* The phy pretty much is controlled by the LLDD.
  * The class only reads those fields.
  */
 struct asd_sas_phy {
 /* private: */
-	struct asd_sas_event   port_events[PORT_NUM_EVENTS];
-	struct asd_sas_event   phy_events[PHY_NUM_EVENTS];
-
-	unsigned long port_events_pending;
-	unsigned long phy_events_pending;
-
+	atomic_t event_nr;
+	int in_shutdown;
 	int error;
 	int suspended;
 
@@ -380,6 +395,9 @@ struct sas_ha_struct {
 	struct device *dev;	  /* should be set */
 	struct module *lldd_module; /* should be set */
 
+	struct workqueue_struct *event_q;
+	struct workqueue_struct *disco_q;
+
 	u8 *sas_addr;		  /* must be set */
 	u8 hashed_sas_addr[HASHED_SAS_ADDR_SIZE];
 
@@ -399,6 +417,8 @@ struct sas_ha_struct {
 
 	struct list_head eh_done_q;  /* complete via scsi_eh_flush_done_q */
 	struct list_head eh_ata_q; /* scmds to promote from sas to ata eh */
+
+	int event_thres;
 };
 
 #define SHOST_TO_SAS_HA(_shost) (*(struct sas_ha_struct **)(_shost)->hostdata)
@@ -499,10 +519,10 @@ enum exec_status {
 
 /* When a task finishes with a response, the LLDD examines the
  * response:
- * 	- For an ATA task task_status_struct::stat is set to
+ *	- For an ATA task task_status_struct::stat is set to
  * SAS_PROTO_RESPONSE, and the task_status_struct::buf is set to the
  * contents of struct ata_task_resp.
- * 	- For SSP tasks, if no data is present or status/TMF response
+ *	- For SSP tasks, if no data is present or status/TMF response
  * is valid, task_status_struct::stat is set.  If data is present
  * (SENSE data), the LLDD copies up to SAS_STATUS_BUF_SIZE, sets
  * task_status_struct::buf_valid_size, and task_status_struct::stat is
@@ -658,18 +678,17 @@ extern void sas_prep_resume_ha(struct sas_ha_struct *sas_ha);
 extern void sas_resume_ha(struct sas_ha_struct *sas_ha);
 extern void sas_suspend_ha(struct sas_ha_struct *sas_ha);
 
-int sas_set_phy_speed(struct sas_phy *phy,
-		      struct sas_phy_linkrates *rates);
+int sas_set_phy_speed(struct sas_phy *phy, struct sas_phy_linkrates *rates);
 int sas_phy_reset(struct sas_phy *phy, int hard_reset);
-extern int sas_queuecommand(struct Scsi_Host * ,struct scsi_cmnd *);
+extern int sas_queuecommand(struct Scsi_Host *, struct scsi_cmnd *);
 extern int sas_target_alloc(struct scsi_target *);
 extern int sas_slave_configure(struct scsi_device *);
 extern int sas_change_queue_depth(struct scsi_device *, int new_depth);
-extern int sas_bios_param(struct scsi_device *,
-			  struct block_device *,
+extern int sas_bios_param(struct scsi_device *, struct block_device *,
 			  sector_t capacity, int *hsc);
 extern struct scsi_transport_template *
 sas_domain_attach_transport(struct sas_domain_function_template *);
+extern struct device_attribute dev_attr_phy_event_threshold;
 
 int  sas_discover_root_expander(struct domain_device *);
 
@@ -695,7 +714,8 @@ int sas_eh_target_reset_handler(struct scsi_cmnd *cmd);
 
 extern void sas_target_destroy(struct scsi_target *);
 extern int sas_slave_alloc(struct scsi_device *);
-extern int sas_ioctl(struct scsi_device *sdev, int cmd, void __user *arg);
+extern int sas_ioctl(struct scsi_device *sdev, unsigned int cmd,
+		     void __user *arg);
 extern int sas_drain_work(struct sas_ha_struct *ha);
 
 extern void sas_ssp_task_response(struct device *dev, struct sas_task *task,

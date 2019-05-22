@@ -292,7 +292,9 @@ static int build_via_table(struct viadev *dev, struct snd_pcm_substream *substre
 			return -ENOMEM;
 	}
 	if (! dev->idx_table) {
-		dev->idx_table = kmalloc(sizeof(*dev->idx_table) * VIA_TABLE_SIZE, GFP_KERNEL);
+		dev->idx_table = kmalloc_array(VIA_TABLE_SIZE,
+					       sizeof(*dev->idx_table),
+					       GFP_KERNEL);
 		if (! dev->idx_table)
 			return -ENOMEM;
 	}
@@ -863,11 +865,9 @@ static int snd_via686_pcm_new(struct via82xx_modem *chip)
 	init_viadev(chip, 0, VIA_REG_MO_STATUS, 0);
 	init_viadev(chip, 1, VIA_REG_MI_STATUS, 1);
 
-	if ((err = snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV_SG,
-							 snd_dma_pci_data(chip->pci),
-							 64*1024, 128*1024)) < 0)
-		return err;
-
+	snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV_SG,
+					      snd_dma_pci_data(chip->pci),
+					      64*1024, 128*1024);
 	return 0;
 }
 
@@ -935,10 +935,8 @@ static void snd_via82xx_proc_read(struct snd_info_entry *entry, struct snd_info_
 
 static void snd_via82xx_proc_init(struct via82xx_modem *chip)
 {
-	struct snd_info_entry *entry;
-
-	if (! snd_card_proc_new(chip->card, "via82xx", &entry))
-		snd_info_set_text_ops(entry, chip, snd_via82xx_proc_read);
+	snd_card_ro_proc_new(chip->card, "via82xx", chip,
+			     snd_via82xx_proc_read);
 }
 
 /*
@@ -1036,8 +1034,6 @@ static int snd_via82xx_suspend(struct device *dev)
 	int i;
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
-	for (i = 0; i < 2; i++)
-		snd_pcm_suspend_all(chip->pcms[i]);
 	for (i = 0; i < chip->num_devs; i++)
 		snd_via82xx_channel_reset(chip, &chip->devs[i]);
 	synchronize_irq(chip->irq);

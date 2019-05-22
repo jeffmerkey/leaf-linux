@@ -347,7 +347,6 @@ static struct shash_alg alg = {
 	.descsize	=	sizeof(struct rmd160_ctx),
 	.base		=	{
 		.cra_name	 =	"rmd160",
-		.cra_flags	 =	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	 =	RMD160_BLOCK_SIZE,
 		.cra_module	 =	THIS_MODULE,
 	}
@@ -363,7 +362,7 @@ static void __exit rmd160_mod_fini(void)
 	crypto_unregister_shash(&alg);
 }
 
-module_init(rmd160_mod_init);
+subsys_initcall(rmd160_mod_init);
 module_exit(rmd160_mod_fini);
 
 MODULE_LICENSE("GPL");

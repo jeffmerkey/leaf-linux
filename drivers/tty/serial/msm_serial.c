@@ -1634,7 +1634,7 @@ static void msm_console_write(struct console *co, const char *s,
 	__msm_console_write(port, s, count, msm_port->is_uartdm);
 }
 
-static int __init msm_console_setup(struct console *co, char *options)
+static int msm_console_setup(struct console *co, char *options)
 {
 	struct uart_port *port;
 	int baud = 115200;
@@ -1812,11 +1812,34 @@ static const struct of_device_id msm_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, msm_match_table);
 
+static int __maybe_unused msm_serial_suspend(struct device *dev)
+{
+	struct msm_port *port = dev_get_drvdata(dev);
+
+	uart_suspend_port(&msm_uart_driver, &port->uart);
+
+	return 0;
+}
+
+static int __maybe_unused msm_serial_resume(struct device *dev)
+{
+	struct msm_port *port = dev_get_drvdata(dev);
+
+	uart_resume_port(&msm_uart_driver, &port->uart);
+
+	return 0;
+}
+
+static const struct dev_pm_ops msm_serial_dev_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(msm_serial_suspend, msm_serial_resume)
+};
+
 static struct platform_driver msm_platform_driver = {
 	.remove = msm_serial_remove,
 	.probe = msm_serial_probe,
 	.driver = {
 		.name = "msm_serial",
+		.pm = &msm_serial_dev_pm_ops,
 		.of_match_table = msm_match_table,
 	},
 };

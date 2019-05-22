@@ -219,13 +219,14 @@ static struct snd_soc_card bytcht_da7213_card = {
 	.num_dapm_routes = ARRAY_SIZE(audio_map),
 };
 
-static char codec_name[16]; /* i2c-<HID>:00 with HID being 8 chars */
+static char codec_name[SND_ACPI_I2C_ID_LEN];
 
 static int bytcht_da7213_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card;
 	struct snd_soc_acpi_mach *mach;
-	const char *i2c_name = NULL;
+	const char *platform_name;
+	struct acpi_device *adev;
 	int dai_index = 0;
 	int ret_val = 0;
 	int i;
@@ -243,12 +244,20 @@ static int bytcht_da7213_probe(struct platform_device *pdev)
 	}
 
 	/* fixup codec name based on HID */
-	i2c_name = snd_soc_acpi_find_name_from_hid(mach->id);
-	if (i2c_name) {
+	adev = acpi_dev_get_first_match_dev(mach->id, NULL, -1);
+	if (adev) {
 		snprintf(codec_name, sizeof(codec_name),
-			"%s%s", "i2c-", i2c_name);
+			 "i2c-%s", acpi_dev_name(adev));
+		put_device(&adev->dev);
 		dailink[dai_index].codec_name = codec_name;
 	}
+
+	/* override plaform name, if required */
+	platform_name = mach->mach_params.platform;
+
+	ret_val = snd_soc_fixup_dai_links_platform_name(card, platform_name);
+	if (ret_val)
+		return ret_val;
 
 	ret_val = devm_snd_soc_register_card(&pdev->dev, card);
 	if (ret_val) {

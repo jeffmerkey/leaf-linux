@@ -51,7 +51,7 @@ static u32 ath79_gpio_read(struct ath79_gpio_ctrl *ctrl, unsigned reg)
 static void ath79_gpio_write(struct ath79_gpio_ctrl *ctrl,
 			unsigned reg, u32 val)
 {
-	return writel(val, ctrl->base + reg);
+	writel(val, ctrl->base + reg);
 }
 
 static bool ath79_gpio_update_bits(
@@ -258,6 +258,8 @@ static int ath79_gpio_probe(struct platform_device *pdev)
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
 	ctrl->base = devm_ioremap_nocache(
 		&pdev->dev, res->start, resource_size(res));
 	if (!ctrl->base)
@@ -324,3 +326,6 @@ static struct platform_driver ath79_gpio_driver = {
 };
 
 module_platform_driver(ath79_gpio_driver);
+
+MODULE_DESCRIPTION("Atheros AR71XX/AR724X/AR913X GPIO API support");
+MODULE_LICENSE("GPL v2");

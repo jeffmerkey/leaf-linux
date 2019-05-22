@@ -102,7 +102,7 @@ static int scx200_wdt_open(struct inode *inode, struct file *file)
 		return -EBUSY;
 	scx200_wdt_enable();
 
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 static int scx200_wdt_release(struct inode *inode, struct file *file)
@@ -262,10 +262,3 @@ static void __exit scx200_wdt_cleanup(void)
 
 module_init(scx200_wdt_init);
 module_exit(scx200_wdt_cleanup);
-
-/*
-    Local variables:
-	compile-command: "make -k -C ../.. SUBDIRS=drivers/char modules"
-	c-basic-offset: 8
-    End:
-*/

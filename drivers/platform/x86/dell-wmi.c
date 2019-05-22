@@ -50,8 +50,6 @@ MODULE_LICENSE("GPL");
 
 static bool wmi_requires_smbios_request;
 
-MODULE_ALIAS("wmi:"DELL_EVENT_GUID);
-
 struct dell_wmi_priv {
 	struct input_dev *input_dev;
 	u32 interface_version;
@@ -233,7 +231,7 @@ static const u16 bios_to_linux_keycode[256] = {
 	[18]	= KEY_PROG1,
 	[19]	= KEY_BRIGHTNESSDOWN,
 	[20]	= KEY_BRIGHTNESSUP,
-	[21]	= KEY_UNKNOWN,
+	[21]	= KEY_BRIGHTNESS_AUTO,
 	[22]	= KEY_KBDILLUMTOGGLE,
 	[23]	= KEY_UNKNOWN,
 	[24]	= KEY_SWITCHVIDEOMODE,
@@ -261,6 +259,18 @@ static const u16 bios_to_linux_keycode[256] = {
  * override them.
  */
 static const struct key_entry dell_wmi_keymap_type_0010[] = {
+	/* Fn-lock switched to function keys */
+	{ KE_IGNORE, 0x0, { KEY_RESERVED } },
+
+	/* Fn-lock switched to multimedia keys */
+	{ KE_IGNORE, 0x1, { KEY_RESERVED } },
+
+	/* Keyboard backlight change notification */
+	{ KE_IGNORE, 0x3f, { KEY_RESERVED } },
+
+	/* Mic mute */
+	{ KE_KEY, 0x150, { KEY_MICMUTE } },
+
 	/* Fn-lock */
 	{ KE_IGNORE, 0x151, { KEY_RESERVED } },
 
@@ -293,6 +303,14 @@ static const struct key_entry dell_wmi_keymap_type_0010[] = {
 	{ KE_KEY,    0x851, { KEY_PROG2 } },
 	{ KE_KEY,    0x852, { KEY_PROG3 } },
 
+	/*
+	 * Radio disable (notify only -- there is no model for which the
+	 * WMI event is supposed to trigger an action).
+	 */
+	{ KE_IGNORE, 0xe008, { KEY_RFKILL } },
+
+	/* Fn-lock */
+	{ KE_IGNORE, 0xe035, { KEY_RESERVED } },
 };
 
 /*
@@ -639,6 +657,8 @@ static int dell_wmi_events_set_enabled(bool enable)
 	int ret;
 
 	buffer = kzalloc(sizeof(struct calling_interface_buffer), GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
 	buffer->cmd_class = CLASS_INFO;
 	buffer->cmd_select = SELECT_APP_REGISTRATION;
 	buffer->input[0] = 0x10000;
@@ -709,7 +729,7 @@ static int __init dell_wmi_init(void)
 
 	return wmi_driver_register(&dell_wmi_driver);
 }
-module_init(dell_wmi_init);
+late_initcall(dell_wmi_init);
 
 static void __exit dell_wmi_exit(void)
 {
@@ -719,3 +739,5 @@ static void __exit dell_wmi_exit(void)
 	wmi_driver_unregister(&dell_wmi_driver);
 }
 module_exit(dell_wmi_exit);
+
+MODULE_DEVICE_TABLE(wmi, dell_wmi_id_table);

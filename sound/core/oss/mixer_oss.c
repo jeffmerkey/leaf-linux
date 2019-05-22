@@ -1247,7 +1247,7 @@ static void snd_mixer_oss_proc_init(struct snd_mixer_oss *mixer)
 	if (! entry)
 		return;
 	entry->content = SNDRV_INFO_CONTENT_TEXT;
-	entry->mode = S_IFREG | S_IRUGO | S_IWUSR;
+	entry->mode = S_IFREG | 0644;
 	entry->c.text.read = snd_mixer_oss_proc_read;
 	entry->c.text.write = snd_mixer_oss_proc_write;
 	entry->private_data = mixer;
@@ -1403,24 +1403,32 @@ static int snd_mixer_oss_notify_handler(struct snd_card *card, int cmd)
 
 static int __init alsa_mixer_oss_init(void)
 {
+	struct snd_card *card;
 	int idx;
 	
 	snd_mixer_oss_notify_callback = snd_mixer_oss_notify_handler;
 	for (idx = 0; idx < SNDRV_CARDS; idx++) {
-		if (snd_cards[idx])
-			snd_mixer_oss_notify_handler(snd_cards[idx], SND_MIXER_OSS_NOTIFY_REGISTER);
+		card = snd_card_ref(idx);
+		if (card) {
+			snd_mixer_oss_notify_handler(card, SND_MIXER_OSS_NOTIFY_REGISTER);
+			snd_card_unref(card);
+		}
 	}
 	return 0;
 }
 
 static void __exit alsa_mixer_oss_exit(void)
 {
+	struct snd_card *card;
 	int idx;
 
 	snd_mixer_oss_notify_callback = NULL;
 	for (idx = 0; idx < SNDRV_CARDS; idx++) {
-		if (snd_cards[idx])
-			snd_mixer_oss_notify_handler(snd_cards[idx], SND_MIXER_OSS_NOTIFY_FREE);
+		card = snd_card_ref(idx);
+		if (card) {
+			snd_mixer_oss_notify_handler(card, SND_MIXER_OSS_NOTIFY_FREE);
+			snd_card_unref(card);
+		}
 	}
 }
 

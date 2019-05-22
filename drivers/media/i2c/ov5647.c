@@ -428,8 +428,8 @@ static int ov5647_sensor_set_register(struct v4l2_subdev *sd,
 }
 #endif
 
-/**
- * @short Subdev core operations registration
+/*
+ * Subdev core operations registration
  */
 static const struct v4l2_subdev_core_ops ov5647_subdev_core_ops = {
 	.s_power		= ov5647_sensor_power,
@@ -532,7 +532,7 @@ static const struct v4l2_subdev_internal_ops ov5647_subdev_internal_ops = {
 
 static int ov5647_parse_dt(struct device_node *np)
 {
-	struct v4l2_fwnode_endpoint bus_cfg;
+	struct v4l2_fwnode_endpoint bus_cfg = { .bus_type = 0 };
 	struct device_node *ep;
 
 	int ret;

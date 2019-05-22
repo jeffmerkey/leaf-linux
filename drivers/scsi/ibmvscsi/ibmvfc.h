@@ -78,9 +78,14 @@ enum ibmvfc_crq_valid {
 	IBMVFC_CRQ_XPORT_EVENT		= 0xFF,
 };
 
-enum ibmvfc_crq_format {
+enum ibmvfc_crq_init_msg {
 	IBMVFC_CRQ_INIT			= 0x01,
 	IBMVFC_CRQ_INIT_COMPLETE	= 0x02,
+};
+
+enum ibmvfc_crq_xport_evts {
+	IBMVFC_PARTNER_FAILED		= 0x01,
+	IBMVFC_PARTNER_DEREGISTER	= 0x02,
 	IBMVFC_PARTITION_MIGRATED	= 0x06,
 };
 
@@ -367,7 +372,7 @@ enum ibmvfc_fcp_rsp_info_codes {
 };
 
 struct ibmvfc_fcp_rsp_info {
-	__be16 reserved;
+	u8 reserved[3];
 	u8 rsp_code;
 	u8 reserved2[4];
 }__attribute__((packed, aligned (2)));

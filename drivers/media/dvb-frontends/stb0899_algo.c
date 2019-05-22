@@ -835,8 +835,8 @@ static u32 stb0899_dvbs2_calc_dev(struct stb0899_state *state)
 	dec_ratio = (internal->master_clk * 2) / (5 * internal->srate);
 	dec_ratio = (dec_ratio == 0) ? 1 : dec_ratio;
 
-	master_clk = internal->master_clk / 1000;	/* for integer Caculation*/
-	srate = internal->srate / 1000;	/* for integer Caculation*/
+	master_clk = internal->master_clk / 1000;	/* for integer Calculation*/
+	srate = internal->srate / 1000;	/* for integer Calculation*/
 	correction = (512 * master_clk) / (2 * dec_ratio * srate);
 
 	return	correction;
@@ -864,7 +864,7 @@ static void stb0899_dvbs2_set_srate(struct stb0899_state *state)
 		win_sel = dec_rate - 4;
 
 	decim = (1 << dec_rate);
-	/* (FSamp/Fsymbol *100) for integer Caculation */
+	/* (FSamp/Fsymbol *100) for integer Calculation */
 	f_sym = internal->master_clk / ((decim * internal->srate) / 1000);
 
 	if (f_sym <= 2250)	/* don't band limit signal going into btr block*/
@@ -925,8 +925,7 @@ static void stb0899_dvbs2_set_btr_loopbw(struct stb0899_state *state)
 		wn = (4 * zeta * zeta) + 1000000;
 		wn = (2 * (loopbw_percent * 1000) * 40 * zeta) /wn;  /*wn =wn 10^-8*/
 
-		k_indirect = (wn * wn) / K;
-		k_indirect = k_indirect;	  /*kindirect = kindirect 10^-6*/
+		k_indirect = (wn * wn) / K;	/*kindirect = kindirect 10^-6*/
 		k_direct   = (2 * wn * zeta) / K;	/*kDirect = kDirect 10^-2*/
 		k_direct  *= 100;
 

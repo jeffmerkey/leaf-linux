@@ -340,6 +340,7 @@ struct inode *jffs2_iget(struct super_block *sb, unsigned long ino)
 			rdev = old_decode_dev(je16_to_cpu(jdev.old_id));
 		else
 			rdev = new_decode_dev(je32_to_cpu(jdev.new_id));
+		/* fall through */
 
 	case S_IFSOCK:
 	case S_IFIFO:
@@ -362,7 +363,6 @@ error_io:
 	ret = -EIO;
 error:
 	mutex_unlock(&f->sem);
-	jffs2_do_clear_inode(c, f);
 	iget_failed(inode);
 	return ERR_PTR(ret);
 }

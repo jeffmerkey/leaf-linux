@@ -28,11 +28,13 @@
 static unsigned int master_timeout __read_mostly = 300;
 static char *ts_algo = "kmp";
 
+#define HELPER_NAME "amanda"
+
 MODULE_AUTHOR("Brian J. Murrell <netfilter@interlinx.bc.ca>");
 MODULE_DESCRIPTION("Amanda connection tracking module");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("ip_conntrack_amanda");
-MODULE_ALIAS_NFCT_HELPER("amanda");
+MODULE_ALIAS_NFCT_HELPER(HELPER_NAME);
 
 module_param(master_timeout, uint, 0600);
 MODULE_PARM_DESC(master_timeout, "timeout for the master connection");
@@ -54,6 +56,7 @@ enum amanda_strings {
 	SEARCH_DATA,
 	SEARCH_MESG,
 	SEARCH_INDEX,
+	SEARCH_STATE,
 };
 
 static struct {
@@ -79,6 +82,10 @@ static struct {
 	},
 	[SEARCH_INDEX] = {
 		.string = "INDEX ",
+		.len	= 6,
+	},
+	[SEARCH_STATE] = {
+		.string = "STATE ",
 		.len	= 6,
 	},
 };
@@ -124,7 +131,7 @@ static int amanda_help(struct sk_buff *skb,
 		goto out;
 	stop += start;
 
-	for (i = SEARCH_DATA; i <= SEARCH_INDEX; i++) {
+	for (i = SEARCH_DATA; i <= SEARCH_STATE; i++) {
 		off = skb_find_text(skb, start, stop, search[i].ts);
 		if (off == UINT_MAX)
 			continue;
@@ -168,19 +175,20 @@ out:
 }
 
 static const struct nf_conntrack_expect_policy amanda_exp_policy = {
-	.max_expected		= 3,
+	.max_expected		= 4,
 	.timeout		= 180,
 };
 
 static struct nf_conntrack_helper amanda_helper[2] __read_mostly = {
 	{
-		.name			= "amanda",
+		.name			= HELPER_NAME,
 		.me			= THIS_MODULE,
 		.help			= amanda_help,
 		.tuple.src.l3num	= AF_INET,
 		.tuple.src.u.udp.port	= cpu_to_be16(10080),
 		.tuple.dst.protonum	= IPPROTO_UDP,
 		.expect_policy		= &amanda_exp_policy,
+		.nat_mod_name		= NF_NAT_HELPER_NAME(HELPER_NAME),
 	},
 	{
 		.name			= "amanda",
@@ -190,6 +198,7 @@ static struct nf_conntrack_helper amanda_helper[2] __read_mostly = {
 		.tuple.src.u.udp.port	= cpu_to_be16(10080),
 		.tuple.dst.protonum	= IPPROTO_UDP,
 		.expect_policy		= &amanda_exp_policy,
+		.nat_mod_name		= NF_NAT_HELPER_NAME(HELPER_NAME),
 	},
 };
 

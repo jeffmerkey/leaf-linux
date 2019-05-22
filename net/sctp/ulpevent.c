@@ -443,8 +443,8 @@ struct sctp_ulpevent *sctp_ulpevent_make_send_failed(
 		goto fail;
 
 	/* Pull off the common chunk header and DATA header.  */
-	skb_pull(skb, sizeof(struct sctp_data_chunk));
-	len -= sizeof(struct sctp_data_chunk);
+	skb_pull(skb, sctp_datachk_len(&asoc->stream));
+	len -= sctp_datachk_len(&asoc->stream);
 
 	/* Embed the event fields inside the cloned skb.  */
 	event = sctp_skb2event(skb);
@@ -634,8 +634,9 @@ struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 						gfp_t gfp)
 {
 	struct sctp_ulpevent *event = NULL;
-	struct sk_buff *skb;
-	size_t padding, len;
+	struct sk_buff *skb = chunk->skb;
+	struct sock *sk = asoc->base.sk;
+	size_t padding, datalen;
 	int rx_count;
 
 	/*
@@ -646,15 +647,12 @@ struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 	if (asoc->ep->rcvbuf_policy)
 		rx_count = atomic_read(&asoc->rmem_alloc);
 	else
-		rx_count = atomic_read(&asoc->base.sk->sk_rmem_alloc);
+		rx_count = atomic_read(&sk->sk_rmem_alloc);
 
-	if (rx_count >= asoc->base.sk->sk_rcvbuf) {
+	datalen = ntohs(chunk->chunk_hdr->length);
 
-		if ((asoc->base.sk->sk_userlocks & SOCK_RCVBUF_LOCK) ||
-		    (!sk_rmem_schedule(asoc->base.sk, chunk->skb,
-				       chunk->skb->truesize)))
-			goto fail;
-	}
+	if (rx_count >= sk->sk_rcvbuf || !sk_rmem_schedule(sk, skb, datalen))
+		goto fail;
 
 	/* Clone the original skb, sharing the data.  */
 	skb = skb_clone(chunk->skb, gfp);
@@ -681,8 +679,7 @@ struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 	 * The sender should never pad with more than 3 bytes.  The receiver
 	 * MUST ignore the padding bytes.
 	 */
-	len = ntohs(chunk->chunk_hdr->length);
-	padding = SCTP_PAD4(len) - len;
+	padding = SCTP_PAD4(datalen) - datalen;
 
 	/* Fixup cloned skb with just this chunks data.  */
 	skb_trim(skb, chunk->chunk_end - padding - skb->data);
@@ -705,8 +702,6 @@ struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 	sctp_ulpevent_receive_data(event, asoc);
 
 	event->stream = ntohs(chunk->subh.data_hdr->stream);
-	event->ssn = ntohs(chunk->subh.data_hdr->ssn);
-	event->ppid = chunk->subh.data_hdr->ppid;
 	if (chunk->chunk_hdr->flags & SCTP_DATA_UNORDERED) {
 		event->flags |= SCTP_UNORDERED;
 		event->cumtsn = sctp_tsnmap_get_ctsn(&asoc->peer.tsn_map);
@@ -717,7 +712,6 @@ struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 	return event;
 
 fail_mark:
-	sctp_chunk_put(chunk);
 	kfree_skb(skb);
 fail:
 	return NULL;
@@ -732,8 +726,9 @@ fail:
  *   various events.
  */
 struct sctp_ulpevent *sctp_ulpevent_make_pdapi(
-	const struct sctp_association *asoc, __u32 indication,
-	gfp_t gfp)
+					const struct sctp_association *asoc,
+					__u32 indication, __u32 sid, __u32 seq,
+					__u32 flags, gfp_t gfp)
 {
 	struct sctp_ulpevent *event;
 	struct sctp_pdapi_event *pd;
@@ -754,7 +749,9 @@ struct sctp_ulpevent *sctp_ulpevent_make_pdapi(
 	 *   Currently unused.
 	 */
 	pd->pdapi_type = SCTP_PARTIAL_DELIVERY_EVENT;
-	pd->pdapi_flags = 0;
+	pd->pdapi_flags = flags;
+	pd->pdapi_stream = sid;
+	pd->pdapi_seq = seq;
 
 	/* pdapi_length: 32 bits (unsigned integer)
 	 *

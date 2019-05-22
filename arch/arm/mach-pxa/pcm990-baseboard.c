@@ -23,7 +23,7 @@
 #include <linux/irq.h>
 #include <linux/platform_device.h>
 #include <linux/i2c.h>
-#include <linux/i2c/pxa-i2c.h>
+#include <linux/platform_data/i2c-pxa.h>
 #include <linux/pwm.h>
 #include <linux/pwm_backlight.h>
 
@@ -370,9 +370,6 @@ static struct pxamci_platform_data pcm990_mci_platform_data = {
 	.init 			= pcm990_mci_init,
 	.setpower 		= pcm990_mci_setpower,
 	.exit			= pcm990_mci_exit,
-	.gpio_card_detect	= -1,
-	.gpio_card_ro		= -1,
-	.gpio_power		= -1,
 };
 
 static struct pxaohci_platform_data pcm990_ohci_platform_data = {

@@ -238,6 +238,7 @@ static int power7_marked_instr_event(u64 event)
 	case 6:
 		if (psel == 0x64)
 			return pmc >= 3;
+		break;
 	case 8:
 		return unit == 0xd;
 	}
@@ -444,7 +445,7 @@ static struct power_pmu power7_pmu = {
 	.cache_events		= &power7_cache_events,
 };
 
-static int __init init_power7_pmu(void)
+int init_power7_pmu(void)
 {
 	if (!cur_cpu_spec->oprofile_cpu_type ||
 	    strcmp(cur_cpu_spec->oprofile_cpu_type, "ppc64/power7"))
@@ -455,5 +456,3 @@ static int __init init_power7_pmu(void)
 
 	return register_power_pmu(&power7_pmu);
 }
-
-early_initcall(init_power7_pmu);

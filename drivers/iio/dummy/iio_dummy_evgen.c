@@ -56,7 +56,7 @@ static int iio_dummy_evgen_create(void)
 		return -ENOMEM;
 
 	ret = irq_sim_init(&iio_evgen->irq_sim, IIO_EVENTGEN_NO);
-	if (ret) {
+	if (ret < 0) {
 		kfree(iio_evgen);
 		return ret;
 	}
@@ -196,7 +196,10 @@ static __init int iio_dummy_evgen_init(void)
 		return ret;
 	device_initialize(&iio_evgen_dev);
 	dev_set_name(&iio_evgen_dev, "iio_evgen");
-	return device_add(&iio_evgen_dev);
+	ret = device_add(&iio_evgen_dev);
+	if (ret)
+		put_device(&iio_evgen_dev);
+	return ret;
 }
 module_init(iio_dummy_evgen_init);
 

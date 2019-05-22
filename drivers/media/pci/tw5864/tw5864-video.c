@@ -610,7 +610,7 @@ static int tw5864_querycap(struct file *file, void *priv,
 {
 	struct tw5864_input *input = video_drvdata(file);
 
-	strcpy(cap->driver, "tw5864");
+	strscpy(cap->driver, "tw5864", sizeof(cap->driver));
 	snprintf(cap->card, sizeof(cap->card), "TW5864 Encoder %d",
 		 input->nr);
 	sprintf(cap->bus_info, "PCI:%s", pci_name(input->root->pci));
@@ -730,7 +730,7 @@ static int tw5864_frameinterval_get(struct tw5864_input *input,
 		frameinterval->denominator = 25;
 		break;
 	default:
-	        dev_warn(&dev->pci->dev, "tw5864_frameinterval_get requested for unknown std %d\n",
+		dev_warn(&dev->pci->dev, "tw5864_frameinterval_get requested for unknown std %d\n",
 			 input->std);
 		return -EINVAL;
 	}
@@ -1395,12 +1395,12 @@ static void tw5864_handle_frame(struct tw5864_h264_frame *frame)
 	input->vb = NULL;
 	spin_unlock_irqrestore(&input->slock, flags);
 
-	v4l2_buf = to_vb2_v4l2_buffer(&vb->vb.vb2_buf);
-
 	if (!vb) { /* Gone because of disabling */
 		dev_dbg(&dev->pci->dev, "vb is empty, dropping frame\n");
 		return;
 	}
+
+	v4l2_buf = to_vb2_v4l2_buffer(&vb->vb.vb2_buf);
 
 	/*
 	 * Check for space.

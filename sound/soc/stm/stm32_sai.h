@@ -91,6 +91,9 @@
 #define SAI_XCR1_OSR_SHIFT	26
 #define SAI_XCR1_OSR		BIT(SAI_XCR1_OSR_SHIFT)
 
+#define SAI_XCR1_MCKEN_SHIFT	27
+#define SAI_XCR1_MCKEN		BIT(SAI_XCR1_MCKEN_SHIFT)
+
 /******************* Bit definition for SAI_XCR2 register *******************/
 #define SAI_XCR2_FTH_SHIFT	0
 #define SAI_XCR2_FTH_MASK	GENMASK(2, SAI_XCR2_FTH_SHIFT)
@@ -248,9 +251,11 @@ enum stm32_sai_version {
 /**
  * struct stm32_sai_conf - SAI configuration
  * @version: SAI version
+ * @has_spdif: SAI S/PDIF support flag
  */
 struct stm32_sai_conf {
 	int version;
+	bool has_spdif;
 };
 
 /**
@@ -263,6 +268,7 @@ struct stm32_sai_conf {
  * @version: SOC version
  * @irq: SAI interrupt line
  * @set_sync: pointer to synchro mode configuration callback
+ * @gcr: SAI Global Configuration Register
  */
 struct stm32_sai_data {
 	struct platform_device *pdev;
@@ -274,4 +280,5 @@ struct stm32_sai_data {
 	int irq;
 	int (*set_sync)(struct stm32_sai_data *sai,
 			struct device_node *np_provider, int synco, int synci);
+	u32 gcr;
 };

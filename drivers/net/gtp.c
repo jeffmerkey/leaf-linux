@@ -742,11 +742,13 @@ static int gtp_hashtable_new(struct gtp_dev *gtp, int hsize)
 {
 	int i;
 
-	gtp->addr_hash = kmalloc(sizeof(struct hlist_head) * hsize, GFP_KERNEL);
+	gtp->addr_hash = kmalloc_array(hsize, sizeof(struct hlist_head),
+				       GFP_KERNEL);
 	if (gtp->addr_hash == NULL)
 		return -ENOMEM;
 
-	gtp->tid_hash = kmalloc(sizeof(struct hlist_head) * hsize, GFP_KERNEL);
+	gtp->tid_hash = kmalloc_array(hsize, sizeof(struct hlist_head),
+				      GFP_KERNEL);
 	if (gtp->tid_hash == NULL)
 		goto err1;
 
@@ -1253,7 +1255,7 @@ out:
 	return skb->len;
 }
 
-static struct nla_policy gtp_genl_policy[GTPA_MAX + 1] = {
+static const struct nla_policy gtp_genl_policy[GTPA_MAX + 1] = {
 	[GTPA_LINK]		= { .type = NLA_U32, },
 	[GTPA_VERSION]		= { .type = NLA_U32, },
 	[GTPA_TID]		= { .type = NLA_U64, },
@@ -1268,21 +1270,21 @@ static struct nla_policy gtp_genl_policy[GTPA_MAX + 1] = {
 static const struct genl_ops gtp_genl_ops[] = {
 	{
 		.cmd = GTP_CMD_NEWPDP,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.doit = gtp_genl_new_pdp,
-		.policy = gtp_genl_policy,
 		.flags = GENL_ADMIN_PERM,
 	},
 	{
 		.cmd = GTP_CMD_DELPDP,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.doit = gtp_genl_del_pdp,
-		.policy = gtp_genl_policy,
 		.flags = GENL_ADMIN_PERM,
 	},
 	{
 		.cmd = GTP_CMD_GETPDP,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.doit = gtp_genl_get_pdp,
 		.dumpit = gtp_genl_dump_pdp,
-		.policy = gtp_genl_policy,
 		.flags = GENL_ADMIN_PERM,
 	},
 };
@@ -1292,6 +1294,7 @@ static struct genl_family gtp_genl_family __ro_after_init = {
 	.version	= 0,
 	.hdrsize	= 0,
 	.maxattr	= GTPA_MAX,
+	.policy = gtp_genl_policy,
 	.netnsok	= true,
 	.module		= THIS_MODULE,
 	.ops		= gtp_genl_ops,

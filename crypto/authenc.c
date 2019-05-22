@@ -33,7 +33,7 @@ struct authenc_instance_ctx {
 struct crypto_authenc_ctx {
 	struct crypto_ahash *auth;
 	struct crypto_skcipher *enc;
-	struct crypto_skcipher *null;
+	struct crypto_sync_skcipher *null;
 };
 
 struct authenc_request_ctx {
@@ -58,14 +58,22 @@ int crypto_authenc_extractkeys(struct crypto_authenc_keys *keys, const u8 *key,
 		return -EINVAL;
 	if (rta->rta_type != CRYPTO_AUTHENC_KEYA_PARAM)
 		return -EINVAL;
-	if (RTA_PAYLOAD(rta) < sizeof(*param))
+
+	/*
+	 * RTA_OK() didn't align the rtattr's payload when validating that it
+	 * fits in the buffer.  Yet, the keys should start on the next 4-byte
+	 * aligned boundary.  To avoid confusion, require that the rtattr
+	 * payload be exactly the param struct, which has a 4-byte aligned size.
+	 */
+	if (RTA_PAYLOAD(rta) != sizeof(*param))
 		return -EINVAL;
+	BUILD_BUG_ON(sizeof(*param) % RTA_ALIGNTO);
 
 	param = RTA_DATA(rta);
 	keys->enckeylen = be32_to_cpu(param->enckeylen);
 
-	key += RTA_ALIGN(rta->rta_len);
-	keylen -= RTA_ALIGN(rta->rta_len);
+	key += rta->rta_len;
+	keylen -= rta->rta_len;
 
 	if (keylen < keys->enckeylen)
 		return -EINVAL;
@@ -108,6 +116,7 @@ static int crypto_authenc_setkey(struct crypto_aead *authenc, const u8 *key,
 				       CRYPTO_TFM_RES_MASK);
 
 out:
+	memzero_explicit(&keys, sizeof(keys));
 	return err;
 
 badkey:
@@ -184,9 +193,9 @@ static int crypto_authenc_copy_assoc(struct aead_request *req)
 {
 	struct crypto_aead *authenc = crypto_aead_reqtfm(req);
 	struct crypto_authenc_ctx *ctx = crypto_aead_ctx(authenc);
-	SKCIPHER_REQUEST_ON_STACK(skreq, ctx->null);
+	SYNC_SKCIPHER_REQUEST_ON_STACK(skreq, ctx->null);
 
-	skcipher_request_set_tfm(skreq, ctx->null);
+	skcipher_request_set_sync_tfm(skreq, ctx->null);
 	skcipher_request_set_callback(skreq, aead_request_flags(req),
 				      NULL, NULL);
 	skcipher_request_set_crypt(skreq, req->src, req->dst, req->assoclen,
@@ -317,7 +326,7 @@ static int crypto_authenc_init_tfm(struct crypto_aead *tfm)
 	struct crypto_authenc_ctx *ctx = crypto_aead_ctx(tfm);
 	struct crypto_ahash *auth;
 	struct crypto_skcipher *enc;
-	struct crypto_skcipher *null;
+	struct crypto_sync_skcipher *null;
 	int err;
 
 	auth = crypto_spawn_ahash(&ictx->auth);
@@ -329,7 +338,7 @@ static int crypto_authenc_init_tfm(struct crypto_aead *tfm)
 	if (IS_ERR(enc))
 		goto err_free_ahash;
 
-	null = crypto_get_default_null_skcipher2();
+	null = crypto_get_default_null_skcipher();
 	err = PTR_ERR(null);
 	if (IS_ERR(null))
 		goto err_free_skcipher;
@@ -363,7 +372,7 @@ static void crypto_authenc_exit_tfm(struct crypto_aead *tfm)
 
 	crypto_free_ahash(ctx->auth);
 	crypto_free_skcipher(ctx->enc);
-	crypto_put_default_null_skcipher2();
+	crypto_put_default_null_skcipher();
 }
 
 static void crypto_authenc_free(struct aead_instance *inst)
@@ -499,7 +508,7 @@ static void __exit crypto_authenc_module_exit(void)
 	crypto_unregister_template(&crypto_authenc_tmpl);
 }
 
-module_init(crypto_authenc_module_init);
+subsys_initcall(crypto_authenc_module_init);
 module_exit(crypto_authenc_module_exit);
 
 MODULE_LICENSE("GPL");

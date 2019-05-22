@@ -16,6 +16,7 @@
 #include <asm/asm-offsets.h>
 #include <asm/cache.h>
 #include <asm/mmu.h>
+#include <asm/feature-fixups.h>
 
 _GLOBAL(__setup_cpu_603)
 	mflr	r5
@@ -23,6 +24,7 @@ BEGIN_MMU_FTR_SECTION
 	li	r10,0
 	mtspr	SPRN_SPRG_603_LRU,r10		/* init SW LRU tracking */
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_NEED_DTLB_SW_LRU)
+
 BEGIN_FTR_SECTION
 	bl	__init_fpu_registers
 END_FTR_SECTION_IFCLR(CPU_FTR_FPU_UNAVAILABLE)
@@ -226,7 +228,7 @@ BEGIN_FTR_SECTION
 	beq	1f
 END_FTR_SECTION_IFSET(CPU_FTR_L3CR)
 	lwz	r6,CPU_SPEC_FEATURES(r4)
-	andi.	r0,r6,CPU_FTR_L3_DISABLE_NAP
+	andis.	r0,r6,CPU_FTR_L3_DISABLE_NAP@h
 	beq	1f
 	li	r7,CPU_FTR_CAN_NAP
 	andc	r6,r6,r7
@@ -325,7 +327,7 @@ _GLOBAL(__save_cpu_setup)
 	lis	r5,cpu_state_storage@h
 	ori	r5,r5,cpu_state_storage@l
 
-	/* Save HID0 (common to all CONFIG_6xx cpus) */
+	/* Save HID0 (common to all CONFIG_PPC_BOOK3S_32 cpus) */
 	mfspr	r3,SPRN_HID0
 	stw	r3,CS_HID0(r5)
 

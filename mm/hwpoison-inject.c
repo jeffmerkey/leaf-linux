@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Inject a hwpoison memory failure on a arbitrary pfn */
 #include <linux/module.h>
 #include <linux/debugfs.h>
@@ -52,7 +53,7 @@ static int hwpoison_inject(void *data, u64 val)
 
 inject:
 	pr_info("Injecting memory failure at pfn %#lx\n", pfn);
-	return memory_failure(pfn, 18, MF_COUNT_INCREASED);
+	return memory_failure(pfn, MF_COUNT_INCREASED);
 put_out:
 	put_hwpoison_page(p);
 	return 0;

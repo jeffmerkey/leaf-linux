@@ -523,7 +523,7 @@ static ssize_t validate_flash_write(struct file *file, const char __user *buf,
 		args_buf->status = VALIDATE_INCOMPLETE;
 	}
 
-	if (!access_ok(VERIFY_READ, buf, count)) {
+	if (!access_ok(buf, count)) {
 		rc = -EFAULT;
 		goto done;
 	}
@@ -727,7 +727,7 @@ static int __init rtas_flash_init(void)
 		const struct rtas_flash_file *f = &rtas_flash_files[i];
 		int token;
 
-		if (!proc_create(f->filename, S_IRUSR | S_IWUSR, NULL, &f->fops))
+		if (!proc_create(f->filename, 0600, NULL, &f->fops))
 			goto enomem;
 
 		/*

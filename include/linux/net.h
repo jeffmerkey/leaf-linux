@@ -83,6 +83,12 @@ enum sock_type {
 
 #endif /* ARCH_HAS_SOCKET_TYPES */
 
+/**
+ * enum sock_shutdown_cmd - Shutdown types
+ * @SHUT_RD: shutdown receptions
+ * @SHUT_WR: shutdown transmissions
+ * @SHUT_RDWR: shutdown receptions/transmissions
+ */
 enum sock_shutdown_cmd {
 	SHUT_RD,
 	SHUT_WR,
@@ -114,7 +120,7 @@ struct socket {
 
 	unsigned long		flags;
 
-	struct socket_wq __rcu	*wq;
+	struct socket_wq	*wq;
 
 	struct file		*file;
 	struct sock		*sk;
@@ -146,8 +152,8 @@ struct proto_ops {
 				      struct socket *newsock, int flags, bool kern);
 	int		(*getname)   (struct socket *sock,
 				      struct sockaddr *addr,
-				      int *sockaddr_len, int peer);
-	unsigned int	(*poll)	     (struct file *file, struct socket *sock,
+				      int peer);
+	__poll_t	(*poll)	     (struct file *file, struct socket *sock,
 				      struct poll_table_struct *wait);
 	int		(*ioctl)     (struct socket *sock, unsigned int cmd,
 				      unsigned long arg);
@@ -155,6 +161,8 @@ struct proto_ops {
 	int	 	(*compat_ioctl) (struct socket *sock, unsigned int cmd,
 				      unsigned long arg);
 #endif
+	int		(*gettstamp) (struct socket *sock, void __user *userstamp,
+				      bool timeval, bool time32);
 	int		(*listen)    (struct socket *sock, int len);
 	int		(*shutdown)  (struct socket *sock, int flags);
 	int		(*setsockopt)(struct socket *sock, int level,
@@ -197,6 +205,7 @@ struct proto_ops {
 					   int offset, size_t size, int flags);
 	int		(*sendmsg_locked)(struct sock *sk, struct msghdr *msg,
 					  size_t size);
+	int		(*set_rcvlowat)(struct sock *sk, int val);
 };
 
 #define DECLARE_SOCKADDR(type, dst, src)	\
@@ -222,6 +231,7 @@ enum {
 int sock_wake_async(struct socket_wq *sk_wq, int how, int band);
 int sock_register(const struct net_proto_family *fam);
 void sock_unregister(int family);
+bool sock_is_registered(int family);
 int __sock_create(struct net *net, int family, int type, int proto,
 		  struct socket **res, int kern);
 int sock_create(int family, int type, int proto, struct socket **res);
@@ -261,7 +271,7 @@ do {								\
 #define net_dbg_ratelimited(fmt, ...)					\
 do {									\
 	DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, fmt);			\
-	if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT) &&	\
+	if (DYNAMIC_DEBUG_BRANCH(descriptor) &&				\
 	    net_ratelimit())						\
 		__dynamic_pr_debug(&descriptor, pr_fmt(fmt),		\
 		                   ##__VA_ARGS__);			\
@@ -294,10 +304,8 @@ int kernel_listen(struct socket *sock, int backlog);
 int kernel_accept(struct socket *sock, struct socket **newsock, int flags);
 int kernel_connect(struct socket *sock, struct sockaddr *addr, int addrlen,
 		   int flags);
-int kernel_getsockname(struct socket *sock, struct sockaddr *addr,
-		       int *addrlen);
-int kernel_getpeername(struct socket *sock, struct sockaddr *addr,
-		       int *addrlen);
+int kernel_getsockname(struct socket *sock, struct sockaddr *addr);
+int kernel_getpeername(struct socket *sock, struct sockaddr *addr);
 int kernel_getsockopt(struct socket *sock, int level, int optname, char *optval,
 		      int *optlen);
 int kernel_setsockopt(struct socket *sock, int level, int optname, char *optval,
@@ -306,7 +314,6 @@ int kernel_sendpage(struct socket *sock, struct page *page, int offset,
 		    size_t size, int flags);
 int kernel_sendpage_locked(struct sock *sk, struct page *page, int offset,
 			   size_t size, int flags);
-int kernel_sock_ioctl(struct socket *sock, int cmd, unsigned long arg);
 int kernel_sock_shutdown(struct socket *sock, enum sock_shutdown_cmd how);
 
 /* Routine returns the IP overhead imposed by a (caller-protected) socket. */

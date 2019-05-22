@@ -11,6 +11,13 @@
  *   GNU General Public License for more details.
  */
 
-#define __ARCH_HAVE_MMU
+/*
+ * There is explicitly no include guard here because this file is expected to
+ * be included multiple times.
+ */
+
 #define __ARCH_WANT_SYS_CLONE
+
 #include <uapi/asm/unistd.h>
+
+#define NR_syscalls (__NR_syscalls)

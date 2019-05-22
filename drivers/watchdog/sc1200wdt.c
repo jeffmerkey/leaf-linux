@@ -178,7 +178,7 @@ static int sc1200wdt_open(struct inode *inode, struct file *file)
 	sc1200wdt_start();
 	pr_info("Watchdog enabled, timeout = %d min(s)", timeout);
 
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 
@@ -239,7 +239,7 @@ static long sc1200wdt_ioctl(struct file *file, unsigned int cmd,
 			return -EINVAL;
 		timeout = new_timeout;
 		sc1200wdt_write_data(WDTO, timeout);
-		/* fall through and return the new timeout */
+		/* fall through - and return the new timeout */
 
 	case WDIOC_GETTIMEOUT:
 		return put_user(timeout * 60, p);

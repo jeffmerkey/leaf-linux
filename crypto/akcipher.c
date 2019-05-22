@@ -30,15 +30,12 @@ static int crypto_akcipher_report(struct sk_buff *skb, struct crypto_alg *alg)
 {
 	struct crypto_report_akcipher rakcipher;
 
-	strncpy(rakcipher.type, "akcipher", sizeof(rakcipher.type));
+	memset(&rakcipher, 0, sizeof(rakcipher));
 
-	if (nla_put(skb, CRYPTOCFGA_REPORT_AKCIPHER,
-		    sizeof(struct crypto_report_akcipher), &rakcipher))
-		goto nla_put_failure;
-	return 0;
+	strscpy(rakcipher.type, "akcipher", sizeof(rakcipher.type));
 
-nla_put_failure:
-	return -EMSGSIZE;
+	return nla_put(skb, CRYPTOCFGA_REPORT_AKCIPHER,
+		       sizeof(rakcipher), &rakcipher);
 }
 #else
 static int crypto_akcipher_report(struct sk_buff *skb, struct crypto_alg *alg)
@@ -122,9 +119,23 @@ static void akcipher_prepare_alg(struct akcipher_alg *alg)
 	base->cra_flags |= CRYPTO_ALG_TYPE_AKCIPHER;
 }
 
+static int akcipher_default_op(struct akcipher_request *req)
+{
+	return -ENOSYS;
+}
+
 int crypto_register_akcipher(struct akcipher_alg *alg)
 {
 	struct crypto_alg *base = &alg->base;
+
+	if (!alg->sign)
+		alg->sign = akcipher_default_op;
+	if (!alg->verify)
+		alg->verify = akcipher_default_op;
+	if (!alg->encrypt)
+		alg->encrypt = akcipher_default_op;
+	if (!alg->decrypt)
+		alg->decrypt = akcipher_default_op;
 
 	akcipher_prepare_alg(alg);
 	return crypto_register_alg(base);

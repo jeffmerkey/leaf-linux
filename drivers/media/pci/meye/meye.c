@@ -805,7 +805,7 @@ again:
 				      mchip_hsize() * mchip_vsize() * 2);
 		meye.grab_buffer[reqnr].size = mchip_hsize() * mchip_vsize() * 2;
 		meye.grab_buffer[reqnr].state = MEYE_BUF_DONE;
-		v4l2_get_timestamp(&meye.grab_buffer[reqnr].timestamp);
+		meye.grab_buffer[reqnr].ts = ktime_get_ns();
 		meye.grab_buffer[reqnr].sequence = sequence++;
 		kfifo_in_locked(&meye.doneq, (unsigned char *)&reqnr,
 				sizeof(int), &meye.doneq_lock);
@@ -826,7 +826,7 @@ again:
 		       size);
 		meye.grab_buffer[reqnr].size = size;
 		meye.grab_buffer[reqnr].state = MEYE_BUF_DONE;
-		v4l2_get_timestamp(&meye.grab_buffer[reqnr].timestamp);
+		meye.grab_buffer[reqnr].ts = ktime_get_ns();
 		meye.grab_buffer[reqnr].sequence = sequence++;
 		kfifo_in_locked(&meye.doneq, (unsigned char *)&reqnr,
 				sizeof(int), &meye.doneq_lock);
@@ -1019,8 +1019,8 @@ static int meyeioc_stilljcapt(int *len)
 static int vidioc_querycap(struct file *file, void *fh,
 				struct v4l2_capability *cap)
 {
-	strcpy(cap->driver, "meye");
-	strcpy(cap->card, "meye");
+	strscpy(cap->driver, "meye", sizeof(cap->driver));
+	strscpy(cap->card, "meye", sizeof(cap->card));
 	sprintf(cap->bus_info, "PCI:%s", pci_name(meye.mchip_dev));
 
 	cap->device_caps = V4L2_CAP_VIDEO_CAPTURE |
@@ -1035,7 +1035,7 @@ static int vidioc_enum_input(struct file *file, void *fh, struct v4l2_input *i)
 	if (i->index != 0)
 		return -EINVAL;
 
-	strcpy(i->name, "Camera");
+	strscpy(i->name, "Camera", sizeof(i->name));
 	i->type = V4L2_INPUT_TYPE_CAMERA;
 
 	return 0;
@@ -1118,12 +1118,12 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *fh,
 	if (f->index == 0) {
 		/* standard YUV 422 capture */
 		f->flags = 0;
-		strcpy(f->description, "YUV422");
+		strscpy(f->description, "YUV422", sizeof(f->description));
 		f->pixelformat = V4L2_PIX_FMT_YUYV;
 	} else {
 		/* compressed MJPEG capture */
 		f->flags = V4L2_FMT_FLAG_COMPRESSED;
-		strcpy(f->description, "MJPEG");
+		strscpy(f->description, "MJPEG", sizeof(f->description));
 		f->pixelformat = V4L2_PIX_FMT_MJPEG;
 	}
 
@@ -1283,7 +1283,7 @@ static int vidioc_querybuf(struct file *file, void *fh, struct v4l2_buffer *buf)
 		buf->flags |= V4L2_BUF_FLAG_DONE;
 
 	buf->field = V4L2_FIELD_NONE;
-	buf->timestamp = meye.grab_buffer[index].timestamp;
+	buf->timestamp = ns_to_timeval(meye.grab_buffer[index].ts);
 	buf->sequence = meye.grab_buffer[index].sequence;
 	buf->memory = V4L2_MEMORY_MMAP;
 	buf->m.offset = index * gbufsize;
@@ -1349,7 +1349,7 @@ static int vidioc_dqbuf(struct file *file, void *fh, struct v4l2_buffer *buf)
 	buf->bytesused = meye.grab_buffer[reqnr].size;
 	buf->flags = V4L2_BUF_FLAG_MAPPED | V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	buf->field = V4L2_FIELD_NONE;
-	buf->timestamp = meye.grab_buffer[reqnr].timestamp;
+	buf->timestamp = ns_to_timeval(meye.grab_buffer[reqnr].ts);
 	buf->sequence = meye.grab_buffer[reqnr].sequence;
 	buf->memory = V4L2_MEMORY_MMAP;
 	buf->m.offset = reqnr * gbufsize;
@@ -1423,14 +1423,14 @@ static long vidioc_default(struct file *file, void *fh, bool valid_prio,
 
 }
 
-static unsigned int meye_poll(struct file *file, poll_table *wait)
+static __poll_t meye_poll(struct file *file, poll_table *wait)
 {
-	unsigned int res = v4l2_ctrl_poll(file, wait);
+	__poll_t res = v4l2_ctrl_poll(file, wait);
 
 	mutex_lock(&meye.lock);
 	poll_wait(file, &meye.proc_list, wait);
 	if (kfifo_len(&meye.doneq))
-		res |= POLLIN | POLLRDNORM;
+		res |= EPOLLIN | EPOLLRDNORM;
 	mutex_unlock(&meye.lock);
 	return res;
 }
@@ -1460,7 +1460,7 @@ static int meye_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned long page, pos;
 
 	mutex_lock(&meye.lock);
-	if (size > gbuffers * gbufsize) {
+	if (size > gbuffers * gbufsize || offset > gbuffers * gbufsize - size) {
 		mutex_unlock(&meye.lock);
 		return -EINVAL;
 	}
@@ -1536,7 +1536,7 @@ static const struct v4l2_ioctl_ops meye_ioctl_ops = {
 static const struct video_device meye_template = {
 	.name		= "meye",
 	.fops		= &meye_fops,
-	.ioctl_ops 	= &meye_ioctl_ops,
+	.ioctl_ops	= &meye_ioctl_ops,
 	.release	= video_device_release_empty,
 };
 
@@ -1625,7 +1625,7 @@ static int meye_probe(struct pci_dev *pcidev, const struct pci_device_id *ent)
 	ret = -ENOMEM;
 	meye.mchip_dev = pcidev;
 
-	meye.grab_temp = vmalloc(MCHIP_NB_PAGES_MJPEG * PAGE_SIZE);
+	meye.grab_temp = vmalloc(array_size(PAGE_SIZE, MCHIP_NB_PAGES_MJPEG));
 	if (!meye.grab_temp)
 		goto outvmalloc;
 

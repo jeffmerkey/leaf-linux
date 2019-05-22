@@ -78,7 +78,6 @@ struct host1x_syncpt_ops {
 	void (*load_wait_base)(struct host1x_syncpt *syncpt);
 	u32 (*load)(struct host1x_syncpt *syncpt);
 	int (*cpu_incr)(struct host1x_syncpt *syncpt);
-	int (*patch_wait)(struct host1x_syncpt *syncpt, void *patch_addr);
 	void (*assign_to_channel)(struct host1x_syncpt *syncpt,
 	                          struct host1x_channel *channel);
 	void (*enable_protection)(struct host1x *host);
@@ -95,6 +94,12 @@ struct host1x_intr_ops {
 	int (*free_syncpt_irq)(struct host1x *host);
 };
 
+struct host1x_sid_entry {
+	unsigned int base;
+	unsigned int offset;
+	unsigned int limit;
+};
+
 struct host1x_info {
 	unsigned int nb_channels; /* host1x: number of channels supported */
 	unsigned int nb_pts; /* host1x: number of syncpoints supported */
@@ -104,6 +109,8 @@ struct host1x_info {
 	unsigned int sync_offset; /* offset of syncpoint registers */
 	u64 dma_mask; /* mask of addressable memory */
 	bool has_hypervisor; /* has hypervisor registers */
+	unsigned int num_sid_entries;
+	const struct host1x_sid_entry *sid_table;
 };
 
 struct host1x {
@@ -117,6 +124,7 @@ struct host1x {
 	struct clk *clk;
 	struct reset_control *rst;
 
+	struct iommu_group *group;
 	struct iommu_domain *domain;
 	struct iova_domain iova;
 	dma_addr_t iova_end;
@@ -180,13 +188,6 @@ static inline int host1x_hw_syncpt_cpu_incr(struct host1x *host,
 					    struct host1x_syncpt *sp)
 {
 	return host->syncpt_op->cpu_incr(sp);
-}
-
-static inline int host1x_hw_syncpt_patch_wait(struct host1x *host,
-					      struct host1x_syncpt *sp,
-					      void *patch_addr)
-{
-	return host->syncpt_op->patch_wait(sp, patch_addr);
 }
 
 static inline void host1x_hw_syncpt_assign_to_channel(

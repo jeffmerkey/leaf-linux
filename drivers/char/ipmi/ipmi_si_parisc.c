@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/module.h>
 #include <asm/hardware.h>	/* for register_parisc_driver() stuff */
@@ -10,9 +11,11 @@ static int __init ipmi_parisc_probe(struct parisc_device *dev)
 {
 	struct si_sm_io io;
 
+	memset(&io, 0, sizeof(io));
+
 	io.si_type	= SI_KCS;
 	io.addr_source	= SI_DEVICETREE;
-	io.addr_type	= IPMI_MEM_ADDR_SPACE;
+	io.addr_space	= IPMI_MEM_ADDR_SPACE;
 	io.addr_data	= dev->hpa.start;
 	io.regsize	= 1;
 	io.regspacing	= 1;

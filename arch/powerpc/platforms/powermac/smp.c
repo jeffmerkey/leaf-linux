@@ -65,7 +65,6 @@
 #endif
 
 extern void __secondary_start_pmac_0(void);
-extern int pmac_pfunc_base_install(void);
 
 static void (*pmac_tb_freeze)(int freeze);
 static u64 timebase;
@@ -774,8 +773,8 @@ static void __init smp_core99_probe(void)
 	if (ppc_md.progress) ppc_md.progress("smp_core99_probe", 0x345);
 
 	/* Count CPUs in the device-tree */
-       	for (cpus = NULL; (cpus = of_find_node_by_type(cpus, "cpu")) != NULL;)
-	       	++ncpus;
+	for_each_node_by_type(cpus, "cpu")
+		++ncpus;
 
 	printk(KERN_INFO "PowerMac SMP probe found %d cpus\n", ncpus);
 
@@ -833,8 +832,7 @@ static int smp_core99_kick_cpu(int nr)
 	mdelay(1);
 
 	/* Restore our exception vector */
-	*vector = save_vector;
-	flush_icache_range((unsigned long) vector, (unsigned long) vector + 4);
+	patch_instruction(vector, save_vector);
 
 	local_irq_restore(flags);
 	if (ppc_md.progress) ppc_md.progress("smp_core99_kick_cpu done", 0x347);

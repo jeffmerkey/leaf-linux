@@ -229,6 +229,12 @@ struct hda_device_id {
 	unsigned long driver_data;
 };
 
+struct sdw_device_id {
+	__u16 mfg_id;
+	__u16 part_id;
+	kernel_ulong_t driver_data;
+};
+
 /*
  * Struct used for matching a device
  */
@@ -442,6 +448,23 @@ struct pci_epf_device_id {
 	kernel_ulong_t driver_data;
 };
 
+/* i3c */
+
+#define I3C_MATCH_DCR			0x1
+#define I3C_MATCH_MANUF			0x2
+#define I3C_MATCH_PART			0x4
+#define I3C_MATCH_EXTRA_INFO		0x8
+
+struct i3c_device_id {
+	__u8 match_flags;
+	__u8 dcr;
+	__u16 manuf_id;
+	__u16 part_id;
+	__u16 extra_info;
+
+	const void *data;
+};
+
 /* spi */
 
 #define SPI_NAME_SIZE	32
@@ -449,6 +472,30 @@ struct pci_epf_device_id {
 
 struct spi_device_id {
 	char name[SPI_NAME_SIZE];
+	kernel_ulong_t driver_data;	/* Data private to the driver */
+};
+
+/* SLIMbus */
+
+#define SLIMBUS_NAME_SIZE	32
+#define SLIMBUS_MODULE_PREFIX	"slim:"
+
+struct slim_device_id {
+	__u16 manf_id, prod_code;
+	__u16 dev_index, instance;
+
+	/* Data private to the driver */
+	kernel_ulong_t driver_data;
+};
+
+#define APR_NAME_SIZE	32
+#define APR_MODULE_PREFIX "apr:"
+
+struct apr_device_id {
+	char name[APR_NAME_SIZE];
+	__u32 domain_id;
+	__u32 svc_id;
+	__u32 svc_version;
 	kernel_ulong_t driver_data;	/* Data private to the driver */
 };
 
@@ -471,6 +518,7 @@ enum dmi_field {
 	DMI_PRODUCT_VERSION,
 	DMI_PRODUCT_SERIAL,
 	DMI_PRODUCT_UUID,
+	DMI_PRODUCT_SKU,
 	DMI_PRODUCT_FAMILY,
 	DMI_BOARD_VENDOR,
 	DMI_BOARD_NAME,
@@ -483,6 +531,7 @@ enum dmi_field {
 	DMI_CHASSIS_SERIAL,
 	DMI_CHASSIS_ASSET_TAG,
 	DMI_STRING_MAX,
+	DMI_OEM_STRING,	/* special case - will not be in dmi_ident */
 };
 
 struct dmi_strmatch {
@@ -533,7 +582,7 @@ struct platform_device_id {
 /**
  * struct mdio_device_id - identifies PHY devices on an MDIO/MII bus
  * @phy_id: The result of
- *     (mdio_read(&MII_PHYSID1) << 16 | mdio_read(&PHYSID2)) & @phy_id_mask
+ *     (mdio_read(&MII_PHYSID1) << 16 | mdio_read(&MII_PHYSID2)) & @phy_id_mask
  *     for this PHY type
  * @phy_id_mask: Defines the significant bits of @phy_id.  A value of 0
  *     is used to terminate an array of struct mdio_device_id.
@@ -713,5 +762,42 @@ struct tb_service_id {
 #define TBSVC_MATCH_PROTOCOL_ID		0x0002
 #define TBSVC_MATCH_PROTOCOL_VERSION	0x0004
 #define TBSVC_MATCH_PROTOCOL_REVISION	0x0008
+
+/* USB Type-C Alternate Modes */
+
+#define TYPEC_ANY_MODE	0x7
+
+/**
+ * struct typec_device_id - USB Type-C alternate mode identifiers
+ * @svid: Standard or Vendor ID
+ * @mode: Mode index
+ * @driver_data: Driver specific data
+ */
+struct typec_device_id {
+	__u16 svid;
+	__u8 mode;
+	kernel_ulong_t driver_data;
+};
+
+/**
+ * struct tee_client_device_id - tee based device identifier
+ * @uuid: For TEE based client devices we use the device uuid as
+ *        the identifier.
+ */
+struct tee_client_device_id {
+	uuid_t uuid;
+};
+
+/* WMI */
+
+#define WMI_MODULE_PREFIX	"wmi:"
+
+/**
+ * struct wmi_device_id - WMI device identifier
+ * @guid_string: 36 char string of the form fa50ff2b-f2e8-45de-83fa-65417f2f49ba
+ */
+struct wmi_device_id {
+	const char guid_string[UUID_STRING_LEN+1];
+};
 
 #endif /* LINUX_MOD_DEVICETABLE_H */

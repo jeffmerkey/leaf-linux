@@ -28,11 +28,11 @@
 #include <asm/cache.h>
 
 #include "irammap.h"
+#include "reset.h"
 #include "sleep.h"
 
 #define EMC_CFG				0xc
 #define EMC_ADR_CFG			0x10
-#define EMC_REFRESH			0x70
 #define EMC_NOP				0xdc
 #define EMC_SELF_REF			0xe0
 #define EMC_REQ_CTRL			0x2b0
@@ -53,6 +53,9 @@
 #define APB_MISC_XM2VTTGENPADCTRL	0x8d8
 #define APB_MISC_XM2CFGCPADCTRL2	0x8e4
 #define APB_MISC_XM2CFGDPADCTRL2	0x8e8
+
+#define __tegra20_cpu1_resettable_status_offset \
+	(__tegra_cpu_reset_handler_data_offset + RESET_DATA(RESETTABLE_STATUS))
 
 .macro pll_enable, rd, r_car_base, pll_base
 	ldr	\rd, [\r_car_base, #\pll_base]
@@ -397,7 +400,6 @@ padload_done:
 	mov	r1, #1
 	str	r1, [r0, #EMC_NOP]
 	str	r1, [r0, #EMC_NOP]
-	str	r1, [r0, #EMC_REFRESH]
 
 	emc_device_mask r1, r0
 

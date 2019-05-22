@@ -1,16 +1,10 @@
-/*
- * Copyright 2011 Freescale Semiconductor, Inc.
- * Copyright 2011 Linaro Ltd.
- *
- * The code contained herein is licensed under the GNU General Public
- * License. You may obtain a copy of the GNU General Public License
- * Version 2 or later at the following locations:
- *
- * http://www.opensource.org/licenses/gpl-license.html
- * http://www.gnu.org/copyleft/gpl.html
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// Copyright 2011 Freescale Semiconductor, Inc.
+// Copyright 2011 Linaro Ltd.
 
 #include <dt-bindings/clock/imx6qdl-clock.h>
+#include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 
 / {
@@ -20,10 +14,8 @@
 	 * The decompressor and also some bootloaders rely on a
 	 * pre-existing /chosen node to be available to insert the
 	 * command line and merge other ATAGS info.
-	 * Also for U-Boot there must be a pre-existing /memory node.
 	 */
 	chosen {};
-	memory { device_type = "memory"; reg = <0 0>; };
 
 	aliases {
 		ethernet0 = &fec;
@@ -58,9 +50,6 @@
 	};
 
 	clocks {
-		#address-cells = <1>;
-		#size-cells = <0>;
-
 		ckil {
 			compatible = "fsl,imx-ckil", "fixed-clock";
 			#clock-cells = <0>;
@@ -78,6 +67,86 @@
 			#clock-cells = <0>;
 			clock-frequency = <24000000>;
 		};
+	};
+
+	tempmon: tempmon {
+		compatible = "fsl,imx6q-tempmon";
+		interrupt-parent = <&gpc>;
+		interrupts = <0 49 IRQ_TYPE_LEVEL_HIGH>;
+		fsl,tempmon = <&anatop>;
+		fsl,tempmon-data = <&ocotp>;
+		clocks = <&clks IMX6QDL_CLK_PLL3_USB_OTG>;
+		#thermal-sensor-cells = <0>;
+	};
+
+	ldb: ldb {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		compatible = "fsl,imx6q-ldb", "fsl,imx53-ldb";
+		gpr = <&gpr>;
+		status = "disabled";
+
+		lvds-channel@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0>;
+			status = "disabled";
+
+			port@0 {
+				reg = <0>;
+
+				lvds0_mux_0: endpoint {
+					remote-endpoint = <&ipu1_di0_lvds0>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+
+				lvds0_mux_1: endpoint {
+					remote-endpoint = <&ipu1_di1_lvds0>;
+				};
+			};
+		};
+
+		lvds-channel@1 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <1>;
+			status = "disabled";
+
+			port@0 {
+				reg = <0>;
+
+				lvds1_mux_0: endpoint {
+					remote-endpoint = <&ipu1_di0_lvds1>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+
+				lvds1_mux_1: endpoint {
+					remote-endpoint = <&ipu1_di1_lvds1>;
+				};
+			};
+		};
+	};
+
+	pmu: pmu {
+		compatible = "arm,cortex-a9-pmu";
+		interrupt-parent = <&gpc>;
+		interrupts = <0 94 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	usbphynop1: usbphynop1 {
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
+	};
+
+	usbphynop2: usbphynop2 {
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
 	};
 
 	soc {
@@ -157,6 +226,7 @@
 				 <&clks IMX6QDL_CLK_GPU3D_SHADER>;
 			clock-names = "bus", "core", "shader";
 			power-domains = <&pd_pu>;
+			#cooling-cells = <2>;
 		};
 
 		gpu_2d: gpu@134000 {
@@ -167,6 +237,7 @@
 				 <&clks IMX6QDL_CLK_GPU2D_CORE>;
 			clock-names = "bus", "core";
 			power-domains = <&pd_pu>;
+			#cooling-cells = <2>;
 		};
 
 		timer@a00600 {
@@ -209,6 +280,7 @@
 			ranges = <0x81000000 0 0          0x01f80000 0 0x00010000 /* downstream I/O */
 				  0x82000000 0 0x01000000 0x01000000 0 0x00f00000>; /* non-prefetchable memory */
 			num-lanes = <1>;
+			num-viewport = <4>;
 			interrupts = <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "msi";
 			#interrupt-cells = <1>;
@@ -222,11 +294,6 @@
 				 <&clks IMX6QDL_CLK_PCIE_REF_125M>;
 			clock-names = "pcie", "pcie_bus", "pcie_phy";
 			status = "disabled";
-		};
-
-		pmu {
-			compatible = "arm,cortex-a9-pmu";
-			interrupts = <0 94 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
 		aips-bus@2000000 { /* AIPS1 */
@@ -263,7 +330,7 @@
 					status = "disabled";
 				};
 
-				ecspi1: ecspi@2008000 {
+				ecspi1: spi@2008000 {
 					#address-cells = <1>;
 					#size-cells = <0>;
 					compatible = "fsl,imx6q-ecspi", "fsl,imx51-ecspi";
@@ -277,7 +344,7 @@
 					status = "disabled";
 				};
 
-				ecspi2: ecspi@200c000 {
+				ecspi2: spi@200c000 {
 					#address-cells = <1>;
 					#size-cells = <0>;
 					compatible = "fsl,imx6q-ecspi", "fsl,imx51-ecspi";
@@ -291,7 +358,7 @@
 					status = "disabled";
 				};
 
-				ecspi3: ecspi@2010000 {
+				ecspi3: spi@2010000 {
 					#address-cells = <1>;
 					#size-cells = <0>;
 					compatible = "fsl,imx6q-ecspi", "fsl,imx51-ecspi";
@@ -305,7 +372,7 @@
 					status = "disabled";
 				};
 
-				ecspi4: ecspi@2014000 {
+				ecspi4: spi@2014000 {
 					#address-cells = <1>;
 					#size-cells = <0>;
 					compatible = "fsl,imx6q-ecspi", "fsl,imx51-ecspi";
@@ -494,6 +561,7 @@
 				clocks = <&clks IMX6QDL_CLK_CAN1_IPG>,
 					 <&clks IMX6QDL_CLK_CAN1_SERIAL>;
 				clock-names = "ipg", "per";
+				fsl,stop-mode = <&gpr 0x34 28 0x10 17>;
 				status = "disabled";
 			};
 
@@ -504,6 +572,7 @@
 				clocks = <&clks IMX6QDL_CLK_CAN2_IPG>,
 					 <&clks IMX6QDL_CLK_CAN2_SERIAL>;
 				clock-names = "ipg", "per";
+				fsl,stop-mode = <&gpr 0x34 29 0x10 18>;
 				status = "disabled";
 			};
 
@@ -729,14 +798,6 @@
 				};
 			};
 
-			tempmon: tempmon {
-				compatible = "fsl,imx6q-tempmon";
-				interrupts = <0 49 IRQ_TYPE_LEVEL_HIGH>;
-				fsl,tempmon = <&anatop>;
-				fsl,tempmon-data = <&ocotp>;
-				clocks = <&clks IMX6QDL_CLK_PLL3_USB_OTG>;
-			};
-
 			usbphy1: usbphy@20c9000 {
 				compatible = "fsl,imx6q-usbphy", "fsl,imx23-usbphy";
 				reg = <0x020c9000 0x1000>;
@@ -772,6 +833,18 @@
 					value = <0x60>;
 					mask = <0x60>;
 					status = "disabled";
+				};
+
+				snvs_pwrkey: snvs-powerkey {
+					compatible = "fsl,sec-v4.0-pwrkey";
+					regmap = <&snvs>;
+					interrupts = <GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>;
+					linux,keycode = <KEY_POWER>;
+					wakeup-source;
+				};
+
+				snvs_lpgpr: snvs-lpgpr {
+					compatible = "fsl,imx6q-snvs-lpgpr";
 				};
 			};
 
@@ -841,60 +914,6 @@
 				reg = <0x20e0000 0x4000>;
 			};
 
-			ldb: ldb {
-				#address-cells = <1>;
-				#size-cells = <0>;
-				compatible = "fsl,imx6q-ldb", "fsl,imx53-ldb";
-				gpr = <&gpr>;
-				status = "disabled";
-
-				lvds-channel@0 {
-					#address-cells = <1>;
-					#size-cells = <0>;
-					reg = <0>;
-					status = "disabled";
-
-					port@0 {
-						reg = <0>;
-
-						lvds0_mux_0: endpoint {
-							remote-endpoint = <&ipu1_di0_lvds0>;
-						};
-					};
-
-					port@1 {
-						reg = <1>;
-
-						lvds0_mux_1: endpoint {
-							remote-endpoint = <&ipu1_di1_lvds0>;
-						};
-					};
-				};
-
-				lvds-channel@1 {
-					#address-cells = <1>;
-					#size-cells = <0>;
-					reg = <1>;
-					status = "disabled";
-
-					port@0 {
-						reg = <0>;
-
-						lvds1_mux_0: endpoint {
-							remote-endpoint = <&ipu1_di0_lvds1>;
-						};
-					};
-
-					port@1 {
-						reg = <1>;
-
-						lvds1_mux_1: endpoint {
-							remote-endpoint = <&ipu1_di1_lvds1>;
-						};
-					};
-				};
-			};
-
 			dcic1: dcic@20e4000 {
 				reg = <0x020e4000 0x4000>;
 				interrupts = <0 124 IRQ_TYPE_LEVEL_HIGH>;
@@ -909,7 +928,7 @@
 				compatible = "fsl,imx6q-sdma", "fsl,imx35-sdma";
 				reg = <0x020ec000 0x4000>;
 				interrupts = <0 2 IRQ_TYPE_LEVEL_HIGH>;
-				clocks = <&clks IMX6QDL_CLK_SDMA>,
+				clocks = <&clks IMX6QDL_CLK_IPG>,
 					 <&clks IMX6QDL_CLK_SDMA>;
 				clock-names = "ipg", "ahb";
 				#dma-cells = <3>;
@@ -926,7 +945,6 @@
 
 			crypto: caam@2100000 {
 				compatible = "fsl,sec-v4.0";
-				fsl,sec-era = <4>;
 				#address-cells = <1>;
 				#size-cells = <1>;
 				reg = <0x2100000 0x10000>;
@@ -986,6 +1004,8 @@
 				reg = <0x02184400 0x200>;
 				interrupts = <0 41 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clks IMX6QDL_CLK_USBOH3>;
+				fsl,usbphy = <&usbphynop1>;
+				phy_type = "hsic";
 				fsl,usbmisc = <&usbmisc 2>;
 				dr_mode = "host";
 				ahb-burst-config = <0x0>;
@@ -999,6 +1019,8 @@
 				reg = <0x02184600 0x200>;
 				interrupts = <0 42 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clks IMX6QDL_CLK_USBOH3>;
+				fsl,usbphy = <&usbphynop2>;
+				phy_type = "hsic";
 				fsl,usbmisc = <&usbmisc 3>;
 				dr_mode = "host";
 				ahb-burst-config = <0x0>;
@@ -1017,6 +1039,7 @@
 			fec: ethernet@2188000 {
 				compatible = "fsl,imx6q-fec";
 				reg = <0x02188000 0x4000>;
+				interrupt-names = "int0", "pps";
 				interrupts-extended =
 					<&intc 0 118 IRQ_TYPE_LEVEL_HIGH>,
 					<&intc 0 119 IRQ_TYPE_LEVEL_HIGH>;
@@ -1116,13 +1139,16 @@
 				reg = <0x021ac000 0x4000>;
 			};
 
-			mmdc0: mmdc@21b0000 { /* MMDC0 */
+			mmdc0: memory-controller@21b0000 { /* MMDC0 */
 				compatible = "fsl,imx6q-mmdc";
 				reg = <0x021b0000 0x4000>;
+				clocks = <&clks IMX6QDL_CLK_MMDC_P0_IPG>;
 			};
 
-			mmdc1: mmdc@21b4000 { /* MMDC1 */
+			mmdc1: memory-controller@21b4000 { /* MMDC1 */
+				compatible = "fsl,imx6q-mmdc";
 				reg = <0x021b4000 0x4000>;
+				status = "disabled";
 			};
 
 			weim: weim@21b8000 {
@@ -1172,8 +1198,6 @@
 			};
 
 			mipi_dsi: mipi@21e0000 {
-				#address-cells = <1>;
-				#size-cells = <0>;
 				reg = <0x021e0000 0x4000>;
 				status = "disabled";
 
@@ -1285,22 +1309,27 @@
 				#size-cells = <0>;
 				reg = <2>;
 
-				ipu1_di0_disp0: disp0-endpoint {
+				ipu1_di0_disp0: endpoint@0 {
+					reg = <0>;
 				};
 
-				ipu1_di0_hdmi: hdmi-endpoint {
+				ipu1_di0_hdmi: endpoint@1 {
+					reg = <1>;
 					remote-endpoint = <&hdmi_mux_0>;
 				};
 
-				ipu1_di0_mipi: mipi-endpoint {
+				ipu1_di0_mipi: endpoint@2 {
+					reg = <2>;
 					remote-endpoint = <&mipi_mux_0>;
 				};
 
-				ipu1_di0_lvds0: lvds0-endpoint {
+				ipu1_di0_lvds0: endpoint@3 {
+					reg = <3>;
 					remote-endpoint = <&lvds0_mux_0>;
 				};
 
-				ipu1_di0_lvds1: lvds1-endpoint {
+				ipu1_di0_lvds1: endpoint@4 {
+					reg = <4>;
 					remote-endpoint = <&lvds1_mux_0>;
 				};
 			};
@@ -1310,22 +1339,27 @@
 				#size-cells = <0>;
 				reg = <3>;
 
-				ipu1_di1_disp1: disp1-endpoint {
+				ipu1_di1_disp1: endpoint@0 {
+					reg = <0>;
 				};
 
-				ipu1_di1_hdmi: hdmi-endpoint {
+				ipu1_di1_hdmi: endpoint@1 {
+					reg = <1>;
 					remote-endpoint = <&hdmi_mux_1>;
 				};
 
-				ipu1_di1_mipi: mipi-endpoint {
+				ipu1_di1_mipi: endpoint@2 {
+					reg = <2>;
 					remote-endpoint = <&mipi_mux_1>;
 				};
 
-				ipu1_di1_lvds0: lvds0-endpoint {
+				ipu1_di1_lvds0: endpoint@3 {
+					reg = <3>;
 					remote-endpoint = <&lvds0_mux_1>;
 				};
 
-				ipu1_di1_lvds1: lvds1-endpoint {
+				ipu1_di1_lvds1: endpoint@4 {
+					reg = <4>;
 					remote-endpoint = <&lvds1_mux_1>;
 				};
 			};

@@ -57,7 +57,7 @@ static u32 xen_apic_read(u32 reg)
 		return 0;
 
 	if (reg == APIC_LVR)
-		return 0x10;
+		return 0x14;
 #ifdef CONFIG_X86_32
 	if (reg == APIC_LDR)
 		return SET_APIC_LOGICAL_ID(1UL << smp_processor_id());
@@ -112,7 +112,7 @@ static int xen_madt_oem_check(char *oem_id, char *oem_table_id)
 	return xen_pv_domain();
 }
 
-static int xen_id_always_valid(int apicid)
+static int xen_id_always_valid(u32 apicid)
 {
 	return 1;
 }
@@ -215,7 +215,7 @@ static void __init xen_apic_check(void)
 }
 void __init xen_init_apic(void)
 {
-	x86_io_apic_ops.read = xen_io_apic_read;
+	x86_apic_ops.io_apic_read = xen_io_apic_read;
 	/* On PV guests the APIC CPUID bit is disabled so none of the
 	 * routines end up executing. */
 	if (!xen_initial_domain())

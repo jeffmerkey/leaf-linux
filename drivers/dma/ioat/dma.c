@@ -372,6 +372,7 @@ struct ioat_ring_ent **
 ioat_alloc_ring(struct dma_chan *c, int order, gfp_t flags)
 {
 	struct ioatdma_chan *ioat_chan = to_ioat_chan(c);
+	struct ioatdma_device *ioat_dma = ioat_chan->ioat_dma;
 	struct ioat_ring_ent **ring;
 	int total_descs = 1 << order;
 	int i, chunks;
@@ -436,6 +437,17 @@ ioat_alloc_ring(struct dma_chan *c, int order, gfp_t flags)
 		hw->next = next->txd.phys;
 	}
 	ring[i]->hw->next = ring[0]->txd.phys;
+
+	/* setup descriptor pre-fetching for v3.4 */
+	if (ioat_dma->cap & IOAT_CAP_DPS) {
+		u16 drsctl = IOAT_CHAN_DRSZ_2MB | IOAT_CHAN_DRS_EN;
+
+		if (chunks == 1)
+			drsctl |= IOAT_CHAN_DRS_AUTOWRAP;
+
+		writew(drsctl, ioat_chan->reg_base + IOAT_CHAN_DRSCTL_OFFSET);
+
+	}
 
 	return ring;
 }
@@ -597,7 +609,6 @@ static void __cleanup(struct ioatdma_chan *ioat_chan, dma_addr_t phys_complete)
 	for (i = 0; i < active && !seen_current; i++) {
 		struct dma_async_tx_descriptor *tx;
 
-		smp_read_barrier_depends();
 		prefetch(ioat_get_ring_ent(ioat_chan, idx + i + 1));
 		desc = ioat_get_ring_ent(ioat_chan, idx + i);
 		dump_desc_dbg(ioat_chan, desc);
@@ -689,6 +700,12 @@ static void ioat_restart_channel(struct ioatdma_chan *ioat_chan)
 {
 	u64 phys_complete;
 
+	/* set the completion address register again */
+	writel(lower_32_bits(ioat_chan->completion_dma),
+	       ioat_chan->reg_base + IOAT_CHANCMP_OFFSET_LOW);
+	writel(upper_32_bits(ioat_chan->completion_dma),
+	       ioat_chan->reg_base + IOAT_CHANCMP_OFFSET_HIGH);
+
 	ioat_quiesce(ioat_chan, 0);
 	if (ioat_cleanup_preamble(ioat_chan, &phys_complete))
 		__cleanup(ioat_chan, phys_complete);
@@ -715,7 +732,6 @@ static void ioat_abort_descs(struct ioatdma_chan *ioat_chan)
 	for (i = 1; i < active; i++) {
 		struct dma_async_tx_descriptor *tx;
 
-		smp_read_barrier_depends();
 		prefetch(ioat_get_ring_ent(ioat_chan, idx + i + 1));
 		desc = ioat_get_ring_ent(ioat_chan, idx + i);
 

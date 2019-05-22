@@ -11,12 +11,14 @@
  * published by the Free Software Foundation.
  */
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/seq_file.h>
 #include <linux/init.h>
 #include <linux/compiler.h>
 #include <linux/slab.h>
 #include <asm/irqdomain.h>
 #include <asm/hw_irq.h>
+#include <asm/traps.h>
 #include <asm/apic.h>
 #include <asm/i8259.h>
 #include <asm/desc.h>
@@ -134,21 +136,40 @@ static void apic_update_vector(struct irq_data *irqd, unsigned int newvec,
 {
 	struct apic_chip_data *apicd = apic_chip_data(irqd);
 	struct irq_desc *desc = irq_data_to_desc(irqd);
+	bool managed = irqd_affinity_is_managed(irqd);
 
 	lockdep_assert_held(&vector_lock);
 
 	trace_vector_update(irqd->irq, newvec, newcpu, apicd->vector,
 			    apicd->cpu);
 
-	/* Setup the vector move, if required  */
-	if (apicd->vector && cpu_online(apicd->cpu)) {
+	/*
+	 * If there is no vector associated or if the associated vector is
+	 * the shutdown vector, which is associated to make PCI/MSI
+	 * shutdown mode work, then there is nothing to release. Clear out
+	 * prev_vector for this and the offlined target case.
+	 */
+	apicd->prev_vector = 0;
+	if (!apicd->vector || apicd->vector == MANAGED_IRQ_SHUTDOWN_VECTOR)
+		goto setnew;
+	/*
+	 * If the target CPU of the previous vector is online, then mark
+	 * the vector as move in progress and store it for cleanup when the
+	 * first interrupt on the new vector arrives. If the target CPU is
+	 * offline then the regular release mechanism via the cleanup
+	 * vector is not possible and the vector can be immediately freed
+	 * in the underlying matrix allocator.
+	 */
+	if (cpu_online(apicd->cpu)) {
 		apicd->move_in_progress = true;
 		apicd->prev_vector = apicd->vector;
 		apicd->prev_cpu = apicd->cpu;
 	} else {
-		apicd->prev_vector = 0;
+		irq_matrix_free(vector_matrix, apicd->cpu, apicd->vector,
+				managed);
 	}
 
+setnew:
 	apicd->vector = newvec;
 	apicd->cpu = newcpu;
 	BUG_ON(!IS_ERR_OR_NULL(per_cpu(vector_irq, newcpu)[newvec]));
@@ -184,6 +205,7 @@ static void reserve_irq_vector_locked(struct irq_data *irqd)
 	irq_matrix_reserve(vector_matrix);
 	apicd->can_reserve = true;
 	apicd->has_reserved = true;
+	irqd_set_can_reserve(irqd);
 	trace_vector_reserve(irqd->irq, 0);
 	vector_assign_managed_shutdown(irqd);
 }
@@ -198,7 +220,8 @@ static int reserve_irq_vector(struct irq_data *irqd)
 	return 0;
 }
 
-static int allocate_vector(struct irq_data *irqd, const struct cpumask *dest)
+static int
+assign_vector_locked(struct irq_data *irqd, const struct cpumask *dest)
 {
 	struct apic_chip_data *apicd = apic_chip_data(irqd);
 	bool resvd = apicd->has_reserved;
@@ -215,23 +238,22 @@ static int allocate_vector(struct irq_data *irqd, const struct cpumask *dest)
 	if (vector && cpu_online(cpu) && cpumask_test_cpu(cpu, dest))
 		return 0;
 
+	/*
+	 * Careful here. @apicd might either have move_in_progress set or
+	 * be enqueued for cleanup. Assigning a new vector would either
+	 * leave a stale vector on some CPU around or in case of a pending
+	 * cleanup corrupt the hlist.
+	 */
+	if (apicd->move_in_progress || !hlist_unhashed(&apicd->clist))
+		return -EBUSY;
+
 	vector = irq_matrix_alloc(vector_matrix, dest, resvd, &cpu);
-	if (vector > 0)
-		apic_update_vector(irqd, vector, cpu);
 	trace_vector_alloc(irqd->irq, vector, resvd, vector);
-	return vector;
-}
-
-static int assign_vector_locked(struct irq_data *irqd,
-				const struct cpumask *dest)
-{
-	struct apic_chip_data *apicd = apic_chip_data(irqd);
-	int vector = allocate_vector(irqd, dest);
-
 	if (vector < 0)
 		return vector;
+	apic_update_vector(irqd, vector, cpu);
+	apic_update_irq_cfg(irqd, vector, cpu);
 
-	apic_update_irq_cfg(irqd, apicd->vector, apicd->cpu);
 	return 0;
 }
 
@@ -292,14 +314,13 @@ assign_managed_vector(struct irq_data *irqd, const struct cpumask *dest)
 	struct apic_chip_data *apicd = apic_chip_data(irqd);
 	int vector, cpu;
 
-	cpumask_and(vector_searchmask, vector_searchmask, affmsk);
-	cpu = cpumask_first(vector_searchmask);
-	if (cpu >= nr_cpu_ids)
-		return -EINVAL;
+	cpumask_and(vector_searchmask, dest, affmsk);
+
 	/* set_affinity might call here for nothing */
 	if (apicd->vector && cpumask_test_cpu(apicd->cpu, vector_searchmask))
 		return 0;
-	vector = irq_matrix_alloc_managed(vector_matrix, cpu);
+	vector = irq_matrix_alloc_managed(vector_matrix, vector_searchmask,
+					  &cpu);
 	trace_vector_alloc_managed(irqd->irq, vector, vector);
 	if (vector < 0)
 		return vector;
@@ -368,8 +389,18 @@ static int activate_reserved(struct irq_data *irqd)
 	int ret;
 
 	ret = assign_irq_vector_any_locked(irqd);
-	if (!ret)
+	if (!ret) {
 		apicd->has_reserved = false;
+		/*
+		 * Core might have disabled reservation mode after
+		 * allocating the irq descriptor. Ideally this should
+		 * happen before allocation time, but that would require
+		 * completely convoluted ways of transporting that
+		 * information.
+		 */
+		if (!irqd_can_reserve(irqd))
+			apicd->can_reserve = false;
+	}
 	return ret;
 }
 
@@ -382,7 +413,7 @@ static int activate_managed(struct irq_data *irqd)
 	if (WARN_ON_ONCE(cpumask_empty(vector_searchmask))) {
 		/* Something in the core code broke! Survive gracefully */
 		pr_err("Managed startup for irq %u, but no CPU\n", irqd->irq);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	ret = assign_managed_vector(irqd, vector_searchmask);
@@ -394,25 +425,25 @@ static int activate_managed(struct irq_data *irqd)
 		pr_err("Managed startup irq %u, no vector available\n",
 		       irqd->irq);
 	}
-       return ret;
+	return ret;
 }
 
 static int x86_vector_activate(struct irq_domain *dom, struct irq_data *irqd,
-			       bool early)
+			       bool reserve)
 {
 	struct apic_chip_data *apicd = apic_chip_data(irqd);
 	unsigned long flags;
 	int ret = 0;
 
 	trace_vector_activate(irqd->irq, apicd->is_managed,
-			      apicd->can_reserve, early);
+			      apicd->can_reserve, reserve);
 
 	/* Nothing to do for fixed assigned vectors */
 	if (!apicd->can_reserve && !apicd->is_managed)
 		return 0;
 
 	raw_spin_lock_irqsave(&vector_lock, flags);
-	if (early || irqd_is_managed_and_shutdown(irqd))
+	if (reserve || irqd_is_managed_and_shutdown(irqd))
 		vector_assign_managed_shutdown(irqd);
 	else if (apicd->is_managed)
 		ret = activate_managed(irqd);
@@ -478,6 +509,7 @@ static bool vector_configure_legacy(unsigned int virq, struct irq_data *irqd,
 	} else {
 		/* Release the vector */
 		apicd->can_reserve = true;
+		irqd_set_can_reserve(irqd);
 		clear_irq_vector(irqd);
 		realloc = true;
 	}
@@ -530,23 +562,25 @@ static int x86_vector_alloc_irqs(struct irq_domain *domain, unsigned int virq,
 
 		err = assign_irq_vector_policy(irqd, info);
 		trace_vector_setup(virq + i, false, err);
-		if (err)
+		if (err) {
+			irqd->chip_data = NULL;
+			free_apic_chip_data(apicd);
 			goto error;
+		}
 	}
 
 	return 0;
 
 error:
-	x86_vector_free_irqs(domain, virq, i + 1);
+	x86_vector_free_irqs(domain, virq, i);
 	return err;
 }
 
 #ifdef CONFIG_GENERIC_IRQ_DEBUGFS
-void x86_vector_debug_show(struct seq_file *m, struct irq_domain *d,
-			   struct irq_data *irqd, int ind)
+static void x86_vector_debug_show(struct seq_file *m, struct irq_domain *d,
+				  struct irq_data *irqd, int ind)
 {
-	unsigned int cpu, vector, prev_cpu, prev_vector;
-	struct apic_chip_data *apicd;
+	struct apic_chip_data apicd;
 	unsigned long flags;
 	int irq;
 
@@ -562,24 +596,26 @@ void x86_vector_debug_show(struct seq_file *m, struct irq_domain *d,
 		return;
 	}
 
-	apicd = irqd->chip_data;
-	if (!apicd) {
+	if (!irqd->chip_data) {
 		seq_printf(m, "%*sVector: Not assigned\n", ind, "");
 		return;
 	}
 
 	raw_spin_lock_irqsave(&vector_lock, flags);
-	cpu = apicd->cpu;
-	vector = apicd->vector;
-	prev_cpu = apicd->prev_cpu;
-	prev_vector = apicd->prev_vector;
+	memcpy(&apicd, irqd->chip_data, sizeof(apicd));
 	raw_spin_unlock_irqrestore(&vector_lock, flags);
-	seq_printf(m, "%*sVector: %5u\n", ind, "", vector);
-	seq_printf(m, "%*sTarget: %5u\n", ind, "", cpu);
-	if (prev_vector) {
-		seq_printf(m, "%*sPrevious vector: %5u\n", ind, "", prev_vector);
-		seq_printf(m, "%*sPrevious target: %5u\n", ind, "", prev_cpu);
+
+	seq_printf(m, "%*sVector: %5u\n", ind, "", apicd.vector);
+	seq_printf(m, "%*sTarget: %5u\n", ind, "", apicd.cpu);
+	if (apicd.prev_vector) {
+		seq_printf(m, "%*sPrevious vector: %5u\n", ind, "", apicd.prev_vector);
+		seq_printf(m, "%*sPrevious target: %5u\n", ind, "", apicd.prev_cpu);
 	}
+	seq_printf(m, "%*smove_in_progress: %u\n", ind, "", apicd.move_in_progress ? 1 : 0);
+	seq_printf(m, "%*sis_managed:       %u\n", ind, "", apicd.is_managed ? 1 : 0);
+	seq_printf(m, "%*scan_reserve:      %u\n", ind, "", apicd.can_reserve ? 1 : 0);
+	seq_printf(m, "%*shas_reserved:     %u\n", ind, "", apicd.has_reserved ? 1 : 0);
+	seq_printf(m, "%*scleanup_pending:  %u\n", ind, "", !hlist_unhashed(&apicd.clist));
 }
 #endif
 
@@ -766,11 +802,16 @@ static int apic_retrigger_irq(struct irq_data *irqd)
 	return 1;
 }
 
+void apic_ack_irq(struct irq_data *irqd)
+{
+	irq_move_irq(irqd);
+	ack_APIC_irq();
+}
+
 void apic_ack_edge(struct irq_data *irqd)
 {
 	irq_complete_move(irqd_cfg(irqd));
-	irq_move_irq(irqd);
-	ack_APIC_irq();
+	apic_ack_irq(irqd);
 }
 
 static struct irq_chip lapic_controller = {

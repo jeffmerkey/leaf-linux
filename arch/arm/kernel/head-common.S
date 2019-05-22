@@ -105,8 +105,9 @@ __mmap_switched:
    ARM(	ldmia	r4!, {r0, r1, sp} )
  THUMB(	ldmia	r4!, {r0, r1, r3} )
  THUMB(	mov	sp, r3 )
-	sub	r1, r1, r0
-	bl	__memzero			@ clear .bss
+	sub	r2, r1, r0
+	mov	r1, #0
+	bl	memset				@ clear .bss
 
 	ldmia	r4, {r0, r1, r2, r3}
 	str	r9, [r0]			@ Save processor ID
@@ -144,6 +145,9 @@ __mmap_switched_data:
 #endif
 	.size	__mmap_switched_data, . - __mmap_switched_data
 
+	__FINIT
+	.text
+
 /*
  * This provides a C-API version of __lookup_processor_type
  */
@@ -154,9 +158,6 @@ ENTRY(lookup_processor_type)
 	mov	r0, r5
 	ldmfd	sp!, {r4 - r6, r9, pc}
 ENDPROC(lookup_processor_type)
-
-	__FINIT
-	.text
 
 /*
  * Read processor ID register (CP#15, CR0), and look up in the linker-built

@@ -212,9 +212,7 @@ static int pasemi_get_mac_addr(struct pasemi_mac *mac)
 		return -ENOENT;
 	}
 
-	if (sscanf(maddr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-		   &addr[0], &addr[1], &addr[2], &addr[3], &addr[4], &addr[5])
-	    != ETH_ALEN) {
+	if (!mac_pton(maddr, addr)) {
 		dev_warn(&pdev->dev,
 			 "can't parse mac address, not configuring\n");
 		return -EINVAL;
@@ -392,8 +390,9 @@ static int pasemi_mac_setup_rx_resources(const struct net_device *dev)
 	spin_lock_init(&ring->lock);
 
 	ring->size = RX_RING_SIZE;
-	ring->ring_info = kzalloc(sizeof(struct pasemi_mac_buffer) *
-				  RX_RING_SIZE, GFP_KERNEL);
+	ring->ring_info = kcalloc(RX_RING_SIZE,
+				  sizeof(struct pasemi_mac_buffer),
+				  GFP_KERNEL);
 
 	if (!ring->ring_info)
 		goto out_ring_info;
@@ -402,9 +401,9 @@ static int pasemi_mac_setup_rx_resources(const struct net_device *dev)
 	if (pasemi_dma_alloc_ring(&ring->chan, RX_RING_SIZE))
 		goto out_ring_desc;
 
-	ring->buffers = dma_zalloc_coherent(&mac->dma_pdev->dev,
-					    RX_RING_SIZE * sizeof(u64),
-					    &ring->buf_dma, GFP_KERNEL);
+	ring->buffers = dma_alloc_coherent(&mac->dma_pdev->dev,
+					   RX_RING_SIZE * sizeof(u64),
+					   &ring->buf_dma, GFP_KERNEL);
 	if (!ring->buffers)
 		goto out_ring_desc;
 
@@ -475,8 +474,9 @@ pasemi_mac_setup_tx_resources(const struct net_device *dev)
 	spin_lock_init(&ring->lock);
 
 	ring->size = TX_RING_SIZE;
-	ring->ring_info = kzalloc(sizeof(struct pasemi_mac_buffer) *
-				  TX_RING_SIZE, GFP_KERNEL);
+	ring->ring_info = kcalloc(TX_RING_SIZE,
+				  sizeof(struct pasemi_mac_buffer),
+				  GFP_KERNEL);
 	if (!ring->ring_info)
 		goto out_ring_info;
 
@@ -1355,7 +1355,7 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 	const int nh_off = skb_network_offset(skb);
 	const int nh_len = skb_network_header_len(skb);
 	const int nfrags = skb_shinfo(skb)->nr_frags;
-	int cs_size, i, fill, hdr, cpyhdr, evt;
+	int cs_size, i, fill, hdr, evt;
 	dma_addr_t csdma;
 
 	fund = XCT_FUN_ST | XCT_FUN_RR_8BRES |
@@ -1396,7 +1396,6 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 		fill++;
 
 	/* Copy the result into the TCP packet */
-	cpyhdr = fill;
 	CS_DESC(csring, fill++) = XCT_FUN_O | XCT_FUN_FUN(csring->fun) |
 				  XCT_FUN_LLEN(2) | XCT_FUN_SE;
 	CS_DESC(csring, fill++) = XCT_PTR_LEN(2) | XCT_PTR_ADDR(cs_dest) | XCT_PTR_T;
@@ -1716,6 +1715,7 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		err = -ENODEV;
 		goto out;
 	}
+	dma_set_mask(&mac->dma_pdev->dev, DMA_BIT_MASK(64));
 
 	mac->iob_pdev = pci_get_device(PCI_VENDOR_ID_PASEMI, 0xa001, NULL);
 	if (!mac->iob_pdev) {
@@ -1838,7 +1838,7 @@ static void __exit pasemi_mac_cleanup_module(void)
 	pci_unregister_driver(&pasemi_mac_driver);
 }
 
-int pasemi_mac_init_module(void)
+static int pasemi_mac_init_module(void)
 {
 	int err;
 

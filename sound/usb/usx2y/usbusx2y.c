@@ -266,7 +266,9 @@ int usX2Y_AsyncSeq04_init(struct usX2Ydev *usX2Y)
 	int	err = 0,
 		i;
 
-	if (NULL == (usX2Y->AS04.buffer = kmalloc(URB_DataLen_AsyncSeq*URBS_AsyncSeq, GFP_KERNEL))) {
+	usX2Y->AS04.buffer = kmalloc_array(URBS_AsyncSeq,
+					   URB_DataLen_AsyncSeq, GFP_KERNEL);
+	if (NULL == usX2Y->AS04.buffer) {
 		err = -ENOMEM;
 	} else
 		for (i = 0; i < URBS_AsyncSeq; ++i) {
@@ -291,10 +293,8 @@ int usX2Y_In04_init(struct usX2Ydev *usX2Y)
 	if (! (usX2Y->In04urb = usb_alloc_urb(0, GFP_KERNEL)))
 		return -ENOMEM;
 
-	if (! (usX2Y->In04Buf = kmalloc(21, GFP_KERNEL))) {
-		usb_free_urb(usX2Y->In04urb);
+	if (! (usX2Y->In04Buf = kmalloc(21, GFP_KERNEL)))
 		return -ENOMEM;
-	}
 	 
 	init_waitqueue_head(&usX2Y->In04WaitQueue);
 	usb_fill_int_urb(usX2Y->In04urb, usX2Y->dev, usb_rcvintpipe(usX2Y->dev, 0x4),
@@ -435,7 +435,8 @@ static void snd_usX2Y_card_private_free(struct snd_card *card)
 	kfree(usX2Y(card)->In04Buf);
 	usb_free_urb(usX2Y(card)->In04urb);
 	if (usX2Y(card)->us428ctls_sharedmem)
-		snd_free_pages(usX2Y(card)->us428ctls_sharedmem, sizeof(*usX2Y(card)->us428ctls_sharedmem));
+		free_pages_exact(usX2Y(card)->us428ctls_sharedmem,
+				 sizeof(*usX2Y(card)->us428ctls_sharedmem));
 	if (usX2Y(card)->card_index >= 0  &&  usX2Y(card)->card_index < SNDRV_CARDS)
 		snd_usX2Y_card_used[usX2Y(card)->card_index] = 0;
 }

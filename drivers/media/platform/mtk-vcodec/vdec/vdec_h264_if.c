@@ -55,10 +55,11 @@ struct h264_fb {
 
 /**
  * struct h264_ring_fb_list - ring frame buffer list
- * @fb_list   : frame buffer arrary
+ * @fb_list   : frame buffer array
  * @read_idx  : read index
  * @write_idx : write index
  * @count     : buffer count in list
+ * @reserved  : for 8 bytes alignment
  */
 struct h264_ring_fb_list {
 	struct h264_fb fb_list[H264_MAX_FB_NUM];
@@ -71,7 +72,7 @@ struct h264_ring_fb_list {
 /**
  * struct vdec_h264_dec_info - decode information
  * @dpb_sz		: decoding picture buffer size
- * @resolution_changed  : resoltion change happen
+ * @resolution_changed  : resolution change happen
  * @realloc_mv_buf	: flag to notify driver to re-allocate mv buffer
  * @reserved		: for 8 bytes alignment
  * @bs_dma		: Input bit-stream buffer dma address
@@ -252,8 +253,8 @@ static void get_pic_info(struct vdec_h264_inst *inst,
 	*pic = inst->vsi->pic;
 	mtk_vcodec_debug(inst, "pic(%d, %d), buf(%d, %d)",
 			 pic->pic_w, pic->pic_h, pic->buf_w, pic->buf_h);
-	mtk_vcodec_debug(inst, "Y(%d, %d), C(%d, %d)", pic->y_bs_sz,
-			 pic->y_len_sz, pic->c_bs_sz, pic->c_len_sz);
+	mtk_vcodec_debug(inst, "fb size: Y(%d), C(%d)",
+			 pic->fb_sz[0], pic->fb_sz[1]);
 }
 
 static void get_crop_info(struct vdec_h264_inst *inst, struct v4l2_rect *cr)

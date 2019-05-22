@@ -25,6 +25,8 @@
 #include <asm/asm-offsets.h>
 #include <asm/ptrace.h>
 #include <asm/export.h>
+#include <asm/asm-compat.h>
+#include <asm/feature-fixups.h>
 
 #ifdef CONFIG_VSX
 #define __REST_32FPVSRS(n,c,base)					\
@@ -61,6 +63,7 @@ _GLOBAL(load_fp_state)
 	REST_32FPVSRS(0, R4, R3)
 	blr
 EXPORT_SYMBOL(load_fp_state)
+_ASM_NOKPROBE_SYMBOL(load_fp_state); /* used by restore_math */
 
 /*
  * Store FP state into memory, including FPSCR

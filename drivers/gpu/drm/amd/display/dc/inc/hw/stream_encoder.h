@@ -1,4 +1,26 @@
 /*
+ * Copyright 2017 Advanced Micro Devices, Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ *
+ */
+/*
  * stream_encoder.h
  *
  */
@@ -7,36 +29,47 @@
 #define STREAM_ENCODER_H_
 
 #include "audio_types.h"
+#include "hw_shared.h"
 
 struct dc_bios;
 struct dc_context;
 struct dc_crtc_timing;
 
-struct encoder_info_packet {
-	bool valid;
-	uint8_t hb0;
-	uint8_t hb1;
-	uint8_t hb2;
-	uint8_t hb3;
-	uint8_t sb[32];
+enum dp_pixel_encoding_type {
+	DP_PIXEL_ENCODING_TYPE_RGB444		= 0x00000000,
+	DP_PIXEL_ENCODING_TYPE_YCBCR422		= 0x00000001,
+	DP_PIXEL_ENCODING_TYPE_YCBCR444		= 0x00000002,
+	DP_PIXEL_ENCODING_TYPE_RGB_WIDE_GAMUT	= 0x00000003,
+	DP_PIXEL_ENCODING_TYPE_Y_ONLY		= 0x00000004,
+	DP_PIXEL_ENCODING_TYPE_YCBCR420		= 0x00000005
+};
+
+enum dp_component_depth {
+	DP_COMPONENT_PIXEL_DEPTH_6BPC		= 0x00000000,
+	DP_COMPONENT_PIXEL_DEPTH_8BPC		= 0x00000001,
+	DP_COMPONENT_PIXEL_DEPTH_10BPC		= 0x00000002,
+	DP_COMPONENT_PIXEL_DEPTH_12BPC		= 0x00000003,
+	DP_COMPONENT_PIXEL_DEPTH_16BPC		= 0x00000004
 };
 
 struct encoder_info_frame {
 	/* auxiliary video information */
-	struct encoder_info_packet avi;
-	struct encoder_info_packet gamut;
-	struct encoder_info_packet vendor;
+	struct dc_info_packet avi;
+	struct dc_info_packet gamut;
+	struct dc_info_packet vendor;
 	/* source product description */
-	struct encoder_info_packet spd;
+	struct dc_info_packet spd;
 	/* video stream configuration */
-	struct encoder_info_packet vsc;
+	struct dc_info_packet vsc;
 	/* HDR Static MetaData */
-	struct encoder_info_packet hdrsmd;
+	struct dc_info_packet hdrsmd;
+	/* custom sdp message */
+	struct dc_info_packet dpsdp;
 };
 
 struct encoder_unblank_param {
 	struct dc_link_settings link_settings;
-	unsigned int pixel_clk_khz;
+	struct dc_crtc_timing timing;
 };
 
 struct encoder_set_dp_phy_pattern_param {
@@ -57,7 +90,8 @@ struct stream_encoder_funcs {
 	void (*dp_set_stream_attribute)(
 		struct stream_encoder *enc,
 		struct dc_crtc_timing *crtc_timing,
-		enum dc_color_space output_color_space);
+		enum dc_color_space output_color_space,
+		uint32_t enable_sdp_splitting);
 
 	void (*hdmi_set_stream_attribute)(
 		struct stream_encoder *enc,
@@ -69,6 +103,10 @@ struct stream_encoder_funcs {
 		struct stream_encoder *enc,
 		struct dc_crtc_timing *crtc_timing,
 		bool is_dual_link);
+
+	void (*lvds_set_stream_attribute)(
+		struct stream_encoder *enc,
+		struct dc_crtc_timing *crtc_timing);
 
 	void (*set_mst_bandwidth)(
 		struct stream_encoder *enc,
@@ -125,6 +163,11 @@ struct stream_encoder_funcs {
 
 	void (*set_avmute)(
 		struct stream_encoder *enc, bool enable);
+
+	void (*dig_connect_to_otg)(
+		struct stream_encoder *enc,
+		int tg_inst);
+
 };
 
 #endif /* STREAM_ENCODER_H_ */

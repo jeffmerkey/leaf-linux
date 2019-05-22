@@ -375,16 +375,8 @@ struct dummy_hrtimer_pcm {
 	ktime_t period_time;
 	atomic_t running;
 	struct hrtimer timer;
-	struct tasklet_struct tasklet;
 	struct snd_pcm_substream *substream;
 };
-
-static void dummy_hrtimer_pcm_elapsed(unsigned long priv)
-{
-	struct dummy_hrtimer_pcm *dpcm = (struct dummy_hrtimer_pcm *)priv;
-	if (atomic_read(&dpcm->running))
-		snd_pcm_period_elapsed(dpcm->substream);
-}
 
 static enum hrtimer_restart dummy_hrtimer_callback(struct hrtimer *timer)
 {
@@ -393,7 +385,14 @@ static enum hrtimer_restart dummy_hrtimer_callback(struct hrtimer *timer)
 	dpcm = container_of(timer, struct dummy_hrtimer_pcm, timer);
 	if (!atomic_read(&dpcm->running))
 		return HRTIMER_NORESTART;
-	tasklet_schedule(&dpcm->tasklet);
+	/*
+	 * In cases of XRUN and draining, this calls .trigger to stop PCM
+	 * substream.
+	 */
+	snd_pcm_period_elapsed(dpcm->substream);
+	if (!atomic_read(&dpcm->running))
+		return HRTIMER_NORESTART;
+
 	hrtimer_forward_now(timer, dpcm->period_time);
 	return HRTIMER_RESTART;
 }
@@ -403,7 +402,7 @@ static int dummy_hrtimer_start(struct snd_pcm_substream *substream)
 	struct dummy_hrtimer_pcm *dpcm = substream->runtime->private_data;
 
 	dpcm->base_time = hrtimer_cb_get_time(&dpcm->timer);
-	hrtimer_start(&dpcm->timer, dpcm->period_time, HRTIMER_MODE_REL);
+	hrtimer_start(&dpcm->timer, dpcm->period_time, HRTIMER_MODE_REL_SOFT);
 	atomic_set(&dpcm->running, 1);
 	return 0;
 }
@@ -413,14 +412,14 @@ static int dummy_hrtimer_stop(struct snd_pcm_substream *substream)
 	struct dummy_hrtimer_pcm *dpcm = substream->runtime->private_data;
 
 	atomic_set(&dpcm->running, 0);
-	hrtimer_cancel(&dpcm->timer);
+	if (!hrtimer_callback_running(&dpcm->timer))
+		hrtimer_cancel(&dpcm->timer);
 	return 0;
 }
 
 static inline void dummy_hrtimer_sync(struct dummy_hrtimer_pcm *dpcm)
 {
 	hrtimer_cancel(&dpcm->timer);
-	tasklet_kill(&dpcm->tasklet);
 }
 
 static snd_pcm_uframes_t
@@ -465,12 +464,10 @@ static int dummy_hrtimer_create(struct snd_pcm_substream *substream)
 	if (!dpcm)
 		return -ENOMEM;
 	substream->runtime->private_data = dpcm;
-	hrtimer_init(&dpcm->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(&dpcm->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
 	dpcm->timer.function = dummy_hrtimer_callback;
 	dpcm->substream = substream;
 	atomic_set(&dpcm->running, 0);
-	tasklet_init(&dpcm->tasklet, dummy_hrtimer_pcm_elapsed,
-		     (unsigned long)dpcm);
 	return 0;
 }
 
@@ -830,7 +827,7 @@ static int snd_dummy_capsrc_put(struct snd_kcontrol *kcontrol, struct snd_ctl_el
 static int snd_dummy_iobox_info(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_info *info)
 {
-	const char *const names[] = { "None", "CD Player" };
+	static const char *const names[] = { "None", "CD Player" };
 
 	return snd_ctl_enum_info(info, 1, 2, names);
 }
@@ -1040,14 +1037,8 @@ static void dummy_proc_write(struct snd_info_entry *entry,
 
 static void dummy_proc_init(struct snd_dummy *chip)
 {
-	struct snd_info_entry *entry;
-
-	if (!snd_card_proc_new(chip->card, "dummy_pcm", &entry)) {
-		snd_info_set_text_ops(entry, chip, dummy_proc_read);
-		entry->c.text.write = dummy_proc_write;
-		entry->mode |= S_IWUSR;
-		entry->private_data = chip;
-	}
+	snd_card_rw_proc_new(chip->card, "dummy_pcm", chip,
+			     dummy_proc_read, dummy_proc_write);
 }
 #else
 #define dummy_proc_init(x)
@@ -1141,10 +1132,8 @@ static int snd_dummy_remove(struct platform_device *devptr)
 static int snd_dummy_suspend(struct device *pdev)
 {
 	struct snd_card *card = dev_get_drvdata(pdev);
-	struct snd_dummy *dummy = card->private_data;
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
-	snd_pcm_suspend_all(dummy->pcm);
 	return 0;
 }
 	

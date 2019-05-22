@@ -184,8 +184,6 @@ static inline void writel(u32 data, volatile void __iomem *addr)
 #define writew_relaxed __raw_writew
 #define writel_relaxed __raw_writel
 
-#define mmiowb()
-
 /*
  * Need an mtype somewhere in here, for cache type deals?
  * This is probably too long for an inline.
@@ -214,6 +212,12 @@ static inline void memcpy_toio(volatile void __iomem *dst, const void *src,
 	int count)
 {
 	memcpy((void *) dst, src, count);
+}
+
+static inline void memset_io(volatile void __iomem *addr, int value,
+			     size_t size)
+{
+	memset((void __force *)addr, value, size);
 }
 
 #define PCI_IO_ADDR	(volatile void __iomem *)
@@ -329,8 +333,6 @@ static inline void outsl(unsigned long port, const void *buffer, int count)
 		} while (--count);
 	}
 }
-
-#define flush_write_buffers() do { } while (0)
 
 #endif /* __KERNEL__ */
 

@@ -191,7 +191,9 @@ static const unsigned short full_speed_maxpacket_maxes[4] = {
 static const unsigned short high_speed_maxpacket_maxes[4] = {
 	[USB_ENDPOINT_XFER_CONTROL] = 64,
 	[USB_ENDPOINT_XFER_ISOC] = 1024,
-	[USB_ENDPOINT_XFER_BULK] = 512,
+
+	/* Bulk should be 512, but some devices use 1024: we will warn below */
+	[USB_ENDPOINT_XFER_BULK] = 1024,
 	[USB_ENDPOINT_XFER_INT] = 1024,
 };
 static const unsigned short super_speed_maxpacket_maxes[4] = {
@@ -550,11 +552,14 @@ static int usb_parse_configuration(struct usb_device *dev, int cfgidx,
 	unsigned char *buffer2;
 	int size2;
 	struct usb_descriptor_header *header;
-	int len, retval;
+	int retval;
 	u8 inums[USB_MAXINTERFACES], nalts[USB_MAXINTERFACES];
 	unsigned iad_num = 0;
 
 	memcpy(&config->desc, buffer, USB_DT_CONFIG_SIZE);
+	nintf = nintf_orig = config->desc.bNumInterfaces;
+	config->desc.bNumInterfaces = 0;	// Adjusted later
+
 	if (config->desc.bDescriptorType != USB_DT_CONFIG ||
 	    config->desc.bLength < USB_DT_CONFIG_SIZE ||
 	    config->desc.bLength > size) {
@@ -568,7 +573,6 @@ static int usb_parse_configuration(struct usb_device *dev, int cfgidx,
 	buffer += config->desc.bLength;
 	size -= config->desc.bLength;
 
-	nintf = nintf_orig = config->desc.bNumInterfaces;
 	if (nintf > USB_MAXINTERFACES) {
 		dev_warn(ddev, "config %d has too many interfaces: %d, "
 		    "using maximum allowed: %d\n",
@@ -703,8 +707,8 @@ static int usb_parse_configuration(struct usb_device *dev, int cfgidx,
 			nalts[i] = j = USB_MAXALTSETTING;
 		}
 
-		len = sizeof(*intfc) + sizeof(struct usb_host_interface) * j;
-		config->intf_cache[i] = intfc = kzalloc(len, GFP_KERNEL);
+		intfc = kzalloc(struct_size(intfc, altsetting, j), GFP_KERNEL);
+		config->intf_cache[i] = intfc;
 		if (!intfc)
 			return -ENOMEM;
 		kref_init(&intfc->ref);
@@ -796,13 +800,11 @@ int usb_get_configuration(struct usb_device *dev)
 {
 	struct device *ddev = &dev->dev;
 	int ncfg = dev->descriptor.bNumConfigurations;
-	int result = 0;
+	int result = -ENOMEM;
 	unsigned int cfgno, length;
 	unsigned char *bigbuffer;
 	struct usb_config_descriptor *desc;
 
-	cfgno = 0;
-	result = -ENOMEM;
 	if (ncfg > USB_MAXCONFIG) {
 		dev_warn(ddev, "too many configurations: %d, "
 		    "using maximum allowed: %d\n", ncfg, USB_MAXCONFIG);
@@ -828,8 +830,7 @@ int usb_get_configuration(struct usb_device *dev)
 	if (!desc)
 		goto err2;
 
-	result = 0;
-	for (; cfgno < ncfg; cfgno++) {
+	for (cfgno = 0; cfgno < ncfg; cfgno++) {
 		/* We grab just the first descriptor so we know how long
 		 * the whole configuration is */
 		result = usb_get_descriptor(dev, USB_DT_CONFIG, cfgno,
@@ -885,7 +886,6 @@ int usb_get_configuration(struct usb_device *dev)
 			goto err;
 		}
 	}
-	result = 0;
 
 err:
 	kfree(desc);
@@ -1005,7 +1005,7 @@ int usb_get_bos_descriptor(struct usb_device *dev)
 		case USB_SSP_CAP_TYPE:
 			ssp_cap = (struct usb_ssp_cap_descriptor *)buffer;
 			ssac = (le32_to_cpu(ssp_cap->bmAttributes) &
-				USB_SSP_SUBLINK_SPEED_ATTRIBS) + 1;
+				USB_SSP_SUBLINK_SPEED_ATTRIBS);
 			if (length >= USB_DT_USB_SSP_CAP_SIZE(ssac))
 				dev->bos->ssp_cap = ssp_cap;
 			break;

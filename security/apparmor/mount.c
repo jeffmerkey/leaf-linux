@@ -15,10 +15,11 @@
 #include <linux/fs.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
+#include <uapi/linux/mount.h>
 
 #include "include/apparmor.h"
 #include "include/audit.h"
-#include "include/context.h"
+#include "include/cred.h"
 #include "include/domain.h"
 #include "include/file.h"
 #include "include/match.h"
@@ -121,7 +122,7 @@ static void audit_cb(struct audit_buffer *ab, void *va)
  * @src_name: src_name of object being mediated (MAYBE_NULL)
  * @type: type of filesystem (MAYBE_NULL)
  * @trans: name of trans (MAYBE NULL)
- * @flags: filesystem idependent mount flags
+ * @flags: filesystem independent mount flags
  * @data: filesystem mount flags
  * @request: permissions requested
  * @perms: the permissions computed for the request (NOT NULL)
@@ -329,6 +330,9 @@ static int match_mnt_path_str(struct aa_profile *profile,
 	AA_BUG(!mntpath);
 	AA_BUG(!buffer);
 
+	if (!PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
+		return 0;
+
 	error = aa_path_name(mntpath, path_flags(profile, mntpath), buffer,
 			     &mntpnt, &info, profile->disconnected);
 	if (error)
@@ -379,6 +383,9 @@ static int match_mnt(struct aa_profile *profile, const struct path *path,
 
 	AA_BUG(!profile);
 	AA_BUG(devpath && !devbuffer);
+
+	if (!PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
+		return 0;
 
 	if (devpath) {
 		error = aa_path_name(devpath, path_flags(profile, devpath),
@@ -558,6 +565,9 @@ static int profile_umount(struct aa_profile *profile, struct path *path,
 	AA_BUG(!profile);
 	AA_BUG(!path);
 
+	if (!PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
+		return 0;
+
 	error = aa_path_name(path, path_flags(profile, path), buffer, &name,
 			     &info, profile->disconnected);
 	if (error)
@@ -613,7 +623,8 @@ static struct aa_label *build_pivotroot(struct aa_profile *profile,
 	AA_BUG(!new_path);
 	AA_BUG(!old_path);
 
-	if (profile_unconfined(profile))
+	if (profile_unconfined(profile) ||
+	    !PROFILE_MEDIATES(profile, AA_CLASS_MOUNT))
 		return aa_get_newest_label(&profile->label);
 
 	error = aa_path_name(old_path, path_flags(profile, old_path),

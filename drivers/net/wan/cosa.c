@@ -769,7 +769,7 @@ static int cosa_net_tx_done(struct channel_data *chan, int size)
 		chan->netdev->stats.tx_aborted_errors++;
 		return 1;
 	}
-	dev_kfree_skb_irq(chan->tx_skb);
+	dev_consume_skb_irq(chan->tx_skb);
 	chan->tx_skb = NULL;
 	chan->netdev->stats.tx_packets++;
 	chan->netdev->stats.tx_bytes += size;
@@ -924,7 +924,7 @@ static int chrdev_tx_done(struct channel_data *chan, int size)
 	return 1;
 }
 
-static unsigned int cosa_poll(struct file *file, poll_table *poll)
+static __poll_t cosa_poll(struct file *file, poll_table *poll)
 {
 	pr_info("cosa_poll is here\n");
 	return 0;

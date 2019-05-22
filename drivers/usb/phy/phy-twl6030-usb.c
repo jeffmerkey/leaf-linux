@@ -168,7 +168,7 @@ static int twl6030_usb_ldo_init(struct twl6030_usb *twl)
 	return 0;
 }
 
-static ssize_t twl6030_usb_vbus_show(struct device *dev,
+static ssize_t vbus_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	struct twl6030_usb *twl = dev_get_drvdata(dev);
@@ -194,7 +194,7 @@ static ssize_t twl6030_usb_vbus_show(struct device *dev,
 
 	return ret;
 }
-static DEVICE_ATTR(vbus, 0444, twl6030_usb_vbus_show, NULL);
+static DEVICE_ATTR_RO(vbus);
 
 static irqreturn_t twl6030_usb_irq(int irq, void *_twl)
 {
@@ -400,7 +400,7 @@ static int twl6030_usb_remove(struct platform_device *pdev)
 {
 	struct twl6030_usb *twl = platform_get_drvdata(pdev);
 
-	cancel_delayed_work(&twl->get_status_work);
+	cancel_delayed_work_sync(&twl->get_status_work);
 	twl6030_interrupt_mask(TWL6030_USBOTG_INT_MASK,
 		REG_INT_MSK_LINE_C);
 	twl6030_interrupt_mask(TWL6030_USBOTG_INT_MASK,

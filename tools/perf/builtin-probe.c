@@ -32,6 +32,7 @@
 
 #include "perf.h"
 #include "builtin.h"
+#include "namespaces.h"
 #include "util/util.h"
 #include "util/strlist.h"
 #include "util/strfilter.h"
@@ -81,8 +82,7 @@ static int parse_probe_event(const char *str)
 		params.target_used = true;
 	}
 
-	if (params.nsi)
-		pev->nsi = nsinfo__get(params.nsi);
+	pev->nsi = nsinfo__get(params.nsi);
 
 	/* Parse a perf-probe command into event */
 	ret = parse_perf_probe_command(str, pev);

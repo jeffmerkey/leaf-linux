@@ -23,12 +23,13 @@
 #define __CRYPTO4XX_CORE_H__
 
 #include <linux/ratelimit.h>
+#include <linux/mutex.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/aead.h>
+#include <crypto/internal/rng.h>
+#include <crypto/internal/skcipher.h>
 #include "crypto4xx_reg_def.h"
 #include "crypto4xx_sa.h"
-
-#define MODULE_NAME "crypto4xx"
 
 #define PPC460SX_SDR0_SRST                      0x201
 #define PPC405EX_SDR0_SRST                      0x200
@@ -63,7 +64,6 @@ union shadow_sa_buf {
 struct pd_uinfo {
 	struct crypto4xx_device *dev;
 	u32   state;
-	u32 using_sd;
 	u32 first_gd;		/* first gather discriptor
 				used by this packet */
 	u32 num_gd;             /* number of gather discriptor
@@ -82,7 +82,6 @@ struct pd_uinfo {
 
 struct crypto4xx_device {
 	struct crypto4xx_core_device *core_dev;
-	char *name;
 	void __iomem *ce_base;
 	void __iomem *trng_base;
 
@@ -109,6 +108,7 @@ struct crypto4xx_device {
 	struct list_head alg_list;	/* List of algorithm supported
 					by this device */
 	struct ratelimit_state aead_ratelimit;
+	bool is_revb;
 };
 
 struct crypto4xx_core_device {
@@ -120,6 +120,7 @@ struct crypto4xx_core_device {
 	u32 irq;
 	struct tasklet_struct tasklet;
 	spinlock_t lock;
+	struct mutex rng_lock;
 };
 
 struct crypto4xx_ctx {
@@ -129,16 +130,22 @@ struct crypto4xx_ctx {
 	__le32 iv_nonce;
 	u32 sa_len;
 	union {
+		struct crypto_sync_skcipher *cipher;
 		struct crypto_aead *aead;
 	} sw_cipher;
+};
+
+struct crypto4xx_aead_reqctx {
+	struct scatterlist dst[2];
 };
 
 struct crypto4xx_alg_common {
 	u32 type;
 	union {
-		struct crypto_alg cipher;
+		struct skcipher_alg cipher;
 		struct ahash_alg hash;
 		struct aead_alg aead;
+		struct rng_alg rng;
 	} u;
 };
 
@@ -159,21 +166,28 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
 		       const __le32 *iv, const u32 iv_len,
 		       const struct dynamic_sa_ctl *sa,
 		       const unsigned int sa_len,
-		       const unsigned int assoclen);
-int crypto4xx_setkey_aes_cbc(struct crypto_ablkcipher *cipher,
+		       const unsigned int assoclen,
+		       struct scatterlist *dst_tmp);
+int crypto4xx_setkey_aes_cbc(struct crypto_skcipher *cipher,
 			     const u8 *key, unsigned int keylen);
-int crypto4xx_setkey_aes_cfb(struct crypto_ablkcipher *cipher,
+int crypto4xx_setkey_aes_cfb(struct crypto_skcipher *cipher,
 			     const u8 *key, unsigned int keylen);
-int crypto4xx_setkey_aes_ecb(struct crypto_ablkcipher *cipher,
+int crypto4xx_setkey_aes_ctr(struct crypto_skcipher *cipher,
 			     const u8 *key, unsigned int keylen);
-int crypto4xx_setkey_aes_ofb(struct crypto_ablkcipher *cipher,
+int crypto4xx_setkey_aes_ecb(struct crypto_skcipher *cipher,
 			     const u8 *key, unsigned int keylen);
-int crypto4xx_setkey_rfc3686(struct crypto_ablkcipher *cipher,
+int crypto4xx_setkey_aes_ofb(struct crypto_skcipher *cipher,
 			     const u8 *key, unsigned int keylen);
-int crypto4xx_encrypt(struct ablkcipher_request *req);
-int crypto4xx_decrypt(struct ablkcipher_request *req);
-int crypto4xx_rfc3686_encrypt(struct ablkcipher_request *req);
-int crypto4xx_rfc3686_decrypt(struct ablkcipher_request *req);
+int crypto4xx_setkey_rfc3686(struct crypto_skcipher *cipher,
+			     const u8 *key, unsigned int keylen);
+int crypto4xx_encrypt_ctr(struct skcipher_request *req);
+int crypto4xx_decrypt_ctr(struct skcipher_request *req);
+int crypto4xx_encrypt_iv(struct skcipher_request *req);
+int crypto4xx_decrypt_iv(struct skcipher_request *req);
+int crypto4xx_encrypt_noiv(struct skcipher_request *req);
+int crypto4xx_decrypt_noiv(struct skcipher_request *req);
+int crypto4xx_rfc3686_encrypt(struct skcipher_request *req);
+int crypto4xx_rfc3686_decrypt(struct skcipher_request *req);
 int crypto4xx_sha1_alg_init(struct crypto_tfm *tfm);
 int crypto4xx_hash_digest(struct ahash_request *req);
 int crypto4xx_hash_final(struct ahash_request *req);

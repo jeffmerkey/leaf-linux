@@ -19,12 +19,8 @@
 #include <linux/pci.h>
 #include <linux/cdev.h>
 
-#define MICROSEMI_VENDOR_ID         0x11f8
-#define MICROSEMI_NTB_CLASSCODE     0x068000
-#define MICROSEMI_MGMT_CLASSCODE    0x058000
-
 #define SWITCHTEC_MRPC_PAYLOAD_SIZE 1024
-#define SWITCHTEC_MAX_PFF_CSR 48
+#define SWITCHTEC_MAX_PFF_CSR 255
 
 #define SWITCHTEC_EVENT_OCCURRED BIT(0)
 #define SWITCHTEC_EVENT_CLEAR    BIT(0)
@@ -33,6 +29,7 @@
 #define SWITCHTEC_EVENT_EN_IRQ   BIT(3)
 #define SWITCHTEC_EVENT_FATAL    BIT(4)
 
+#define SWITCHTEC_DMA_MRPC_EN	BIT(0)
 enum {
 	SWITCHTEC_GAS_MRPC_OFFSET       = 0x0000,
 	SWITCHTEC_GAS_TOP_CFG_OFFSET    = 0x1000,
@@ -50,6 +47,10 @@ struct mrpc_regs {
 	u32 cmd;
 	u32 status;
 	u32 ret_value;
+	u32 dma_en;
+	u64 dma_addr;
+	u32 dma_vector;
+	u32 dma_ver;
 } __packed;
 
 enum mrpc_status {
@@ -100,6 +101,9 @@ struct sw_event_regs {
 	u32 gpio_interrupt_hdr;
 	u32 gpio_interrupt_data;
 	u32 reserved16[4];
+	u32 gfms_event_hdr;
+	u32 gfms_event_data;
+	u32 reserved17[4];
 } __packed;
 
 enum {
@@ -168,6 +172,14 @@ struct ntb_info_regs {
 	u16 reserved1;
 	u64 ep_map;
 	u16 requester_id;
+	u16 reserved2;
+	u32 reserved3[4];
+	struct nt_partition_info {
+		u32 xlink_enabled;
+		u32 target_part_low;
+		u32 target_part_high;
+		u32 reserved;
+	} ntp_info[48];
 } __packed;
 
 struct part_cfg_regs {
@@ -236,9 +248,13 @@ struct ntb_ctrl_regs {
 		u32 win_size;
 		u64 xlate_addr;
 	} bar_entry[6];
-	u32 reserved2[216];
-	u32 req_id_table[256];
-	u32 reserved3[512];
+	struct {
+		u32 win_size;
+		u32 reserved[3];
+	} bar_ext_entry[6];
+	u32 reserved2[192];
+	u32 req_id_table[512];
+	u32 reserved3[256];
 	u64 lut_entry[512];
 } __packed;
 
@@ -284,7 +300,20 @@ enum {
 struct pff_csr_regs {
 	u16 vendor_id;
 	u16 device_id;
-	u32 pci_cfg_header[15];
+	u16 pcicmd;
+	u16 pcists;
+	u32 pci_class;
+	u32 pci_opts;
+	union {
+		u32 pci_bar[6];
+		u64 pci_bar64[3];
+	};
+	u32 pci_cardbus;
+	u32 pci_subsystem_id;
+	u32 pci_expansion_rom;
+	u32 pci_cap_ptr;
+	u32 reserved1;
+	u32 pci_irq;
 	u32 pci_cap_region[48];
 	u32 pcie_cap_region[448];
 	u32 indirect_gas_window[128];
@@ -321,6 +350,14 @@ struct pff_csr_regs {
 } __packed;
 
 struct switchtec_ntb;
+
+struct dma_mrpc_output {
+	u32 status;
+	u32 cmd_id;
+	u32 rtn_code;
+	u32 output_size;
+	u8 data[SWITCHTEC_MRPC_PAYLOAD_SIZE];
+};
 
 struct switchtec_dev {
 	struct pci_dev *pdev;
@@ -361,6 +398,9 @@ struct switchtec_dev {
 	u8 link_event_count[SWITCHTEC_MAX_PFF_CSR];
 
 	struct switchtec_ntb *sndev;
+
+	struct dma_mrpc_output *dma_mrpc;
+	dma_addr_t dma_mrpc_dma_addr;
 };
 
 static inline struct switchtec_dev *to_stdev(struct device *dev)

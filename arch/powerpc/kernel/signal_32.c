@@ -25,9 +25,10 @@
 #include <linux/errno.h>
 #include <linux/elf.h>
 #include <linux/ptrace.h>
+#include <linux/pagemap.h>
 #include <linux/ratelimit.h>
-#ifdef CONFIG_PPC64
 #include <linux/syscalls.h>
+#ifdef CONFIG_PPC64
 #include <linux/compat.h>
 #else
 #include <linux/wait.h>
@@ -57,10 +58,6 @@
 
 
 #ifdef CONFIG_PPC64
-#define sys_rt_sigreturn	compat_sys_rt_sigreturn
-#define sys_swapcontext	compat_sys_swapcontext
-#define sys_sigreturn	compat_sys_sigreturn
-
 #define old_sigaction	old_sigaction32
 #define sigcontext	sigcontext32
 #define mcontext	mcontext32
@@ -111,12 +108,20 @@ static inline int save_general_regs(struct pt_regs *regs,
 {
 	elf_greg_t64 *gregs = (elf_greg_t64 *)regs;
 	int i;
+	/* Force usr to alway see softe as 1 (interrupts enabled) */
+	elf_greg_t64 softe = 0x1;
 
 	WARN_ON(!FULL_REGS(regs));
 
 	for (i = 0; i <= PT_RESULT; i ++) {
 		if (i == 14 && !FULL_REGS(regs))
 			i = 32;
+		if ( i == PT_SOFTE) {
+			if(__put_user((unsigned int)softe, &frame->mc_gregs[i]))
+				return -EFAULT;
+			else
+				continue;
+		}
 		if (__put_user((unsigned int)gregs[i], &frame->mc_gregs[i]))
 			return -EFAULT;
 	}
@@ -465,9 +470,9 @@ static int save_user_regs(struct pt_regs *regs, struct mcontext __user *frame,
 		return 1;
 
 	if (sigret) {
-		/* Set up the sigreturn trampoline: li r0,sigret; sc */
-		if (__put_user(0x38000000UL + sigret, &frame->tramp[0])
-		    || __put_user(0x44000002UL, &frame->tramp[1]))
+		/* Set up the sigreturn trampoline: li 0,sigret; sc */
+		if (__put_user(PPC_INST_ADDI + sigret, &frame->tramp[0])
+		    || __put_user(PPC_INST_SC, &frame->tramp[1]))
 			return 1;
 		flush_icache_range((unsigned long) &frame->tramp[0],
 				   (unsigned long) &frame->tramp[2]);
@@ -614,9 +619,9 @@ static int save_tm_user_regs(struct pt_regs *regs,
 	if (__put_user(msr, &frame->mc_gregs[PT_MSR]))
 		return 1;
 	if (sigret) {
-		/* Set up the sigreturn trampoline: li r0,sigret; sc */
-		if (__put_user(0x38000000UL + sigret, &frame->tramp[0])
-		    || __put_user(0x44000002UL, &frame->tramp[1]))
+		/* Set up the sigreturn trampoline: li 0,sigret; sc */
+		if (__put_user(PPC_INST_ADDI + sigret, &frame->tramp[0])
+		    || __put_user(PPC_INST_SC, &frame->tramp[1]))
 			return 1;
 		flush_icache_range((unsigned long) &frame->tramp[0],
 				   (unsigned long) &frame->tramp[2]);
@@ -843,7 +848,23 @@ static long restore_tm_user_regs(struct pt_regs *regs,
 	/* If TM bits are set to the reserved value, it's an invalid context */
 	if (MSR_TM_RESV(msr_hi))
 		return 1;
-	/* Pull in the MSR TM bits from the user context */
+
+	/*
+	 * Disabling preemption, since it is unsafe to be preempted
+	 * with MSR[TS] set without recheckpointing.
+	 */
+	preempt_disable();
+
+	/*
+	 * CAUTION:
+	 * After regs->MSR[TS] being updated, make sure that get_user(),
+	 * put_user() or similar functions are *not* called. These
+	 * functions can generate page faults which will cause the process
+	 * to be de-scheduled with MSR[TS] set but without calling
+	 * tm_recheckpoint(). This can cause a bug.
+	 *
+	 * Pull in the MSR TM bits from the user context
+	 */
 	regs->msr = (regs->msr & ~MSR_TS_MASK) | (msr_hi & MSR_TS_MASK);
 	/* Now, recheckpoint.  This loads up all of the checkpointed (older)
 	 * registers, including FP and V[S]Rs.  After recheckpointing, the
@@ -868,80 +889,16 @@ static long restore_tm_user_regs(struct pt_regs *regs,
 	}
 #endif
 
+	preempt_enable();
+
 	return 0;
 }
 #endif
 
 #ifdef CONFIG_PPC64
-int copy_siginfo_to_user32(struct compat_siginfo __user *d, const siginfo_t *s)
-{
-	int err;
-
-	if (!access_ok (VERIFY_WRITE, d, sizeof(*d)))
-		return -EFAULT;
-
-	/* If you change siginfo_t structure, please be sure
-	 * this code is fixed accordingly.
-	 * It should never copy any pad contained in the structure
-	 * to avoid security leaks, but must copy the generic
-	 * 3 ints plus the relevant union member.
-	 * This routine must convert siginfo from 64bit to 32bit as well
-	 * at the same time.
-	 */
-	err = __put_user(s->si_signo, &d->si_signo);
-	err |= __put_user(s->si_errno, &d->si_errno);
-	err |= __put_user(s->si_code, &d->si_code);
-	if (s->si_code < 0)
-		err |= __copy_to_user(&d->_sifields._pad, &s->_sifields._pad,
-				      SI_PAD_SIZE32);
-	else switch(siginfo_layout(s->si_signo, s->si_code)) {
-	case SIL_CHLD:
-		err |= __put_user(s->si_pid, &d->si_pid);
-		err |= __put_user(s->si_uid, &d->si_uid);
-		err |= __put_user(s->si_utime, &d->si_utime);
-		err |= __put_user(s->si_stime, &d->si_stime);
-		err |= __put_user(s->si_status, &d->si_status);
-		break;
-	case SIL_FAULT:
-		err |= __put_user((unsigned int)(unsigned long)s->si_addr,
-				  &d->si_addr);
-		break;
-	case SIL_POLL:
-		err |= __put_user(s->si_band, &d->si_band);
-		err |= __put_user(s->si_fd, &d->si_fd);
-		break;
-	case SIL_TIMER:
-		err |= __put_user(s->si_tid, &d->si_tid);
-		err |= __put_user(s->si_overrun, &d->si_overrun);
-		err |= __put_user(s->si_int, &d->si_int);
-		break;
-	case SIL_SYS:
-		err |= __put_user(ptr_to_compat(s->si_call_addr), &d->si_call_addr);
-		err |= __put_user(s->si_syscall, &d->si_syscall);
-		err |= __put_user(s->si_arch, &d->si_arch);
-		break;
-	case SIL_RT:
-		err |= __put_user(s->si_int, &d->si_int);
-		/* fallthrough */
-	case SIL_KILL:
-		err |= __put_user(s->si_pid, &d->si_pid);
-		err |= __put_user(s->si_uid, &d->si_uid);
-		break;
-	}
-	return err;
-}
 
 #define copy_siginfo_to_user	copy_siginfo_to_user32
 
-int copy_siginfo_from_user32(siginfo_t *to, struct compat_siginfo __user *from)
-{
-	if (copy_from_user(to, from, 3*sizeof(int)) ||
-	    copy_from_user(to->_sifields._pad,
-			   from->_sifields._pad, SI_PAD_SIZE32))
-		return -EFAULT;
-
-	return 0;
-}
 #endif /* CONFIG_PPC64 */
 
 /*
@@ -1060,7 +1017,7 @@ static int do_setcontext(struct ucontext __user *ucp, struct pt_regs *regs, int 
 #else
 	if (__get_user(mcp, &ucp->uc_regs))
 		return -EFAULT;
-	if (!access_ok(VERIFY_READ, mcp, sizeof(*mcp)))
+	if (!access_ok(mcp, sizeof(*mcp)))
 		return -EFAULT;
 #endif
 	set_current_blocked(&set);
@@ -1099,11 +1056,15 @@ static int do_setcontext_tm(struct ucontext __user *ucp,
 }
 #endif
 
-long sys_swapcontext(struct ucontext __user *old_ctx,
-		     struct ucontext __user *new_ctx,
-		     int ctx_size, int r6, int r7, int r8, struct pt_regs *regs)
+#ifdef CONFIG_PPC64
+COMPAT_SYSCALL_DEFINE3(swapcontext, struct ucontext __user *, old_ctx,
+		       struct ucontext __user *, new_ctx, int, ctx_size)
+#else
+SYSCALL_DEFINE3(swapcontext, struct ucontext __user *, old_ctx,
+		       struct ucontext __user *, new_ctx, long, ctx_size)
+#endif
 {
-	unsigned char tmp;
+	struct pt_regs *regs = current_pt_regs();
 	int ctx_has_vsx_region = 0;
 
 #ifdef CONFIG_PPC64
@@ -1159,7 +1120,7 @@ long sys_swapcontext(struct ucontext __user *old_ctx,
 		 */
 		mctx = (struct mcontext __user *)
 			((unsigned long) &old_ctx->uc_mcontext & ~0xfUL);
-		if (!access_ok(VERIFY_WRITE, old_ctx, ctx_size)
+		if (!access_ok(old_ctx, ctx_size)
 		    || save_user_regs(regs, mctx, NULL, 0, ctx_has_vsx_region)
 		    || put_sigset_t(&old_ctx->uc_sigmask, &current->blocked)
 		    || __put_user(to_user_ptr(mctx), &old_ctx->uc_regs))
@@ -1167,9 +1128,8 @@ long sys_swapcontext(struct ucontext __user *old_ctx,
 	}
 	if (new_ctx == NULL)
 		return 0;
-	if (!access_ok(VERIFY_READ, new_ctx, ctx_size)
-	    || __get_user(tmp, (u8 __user *) new_ctx)
-	    || __get_user(tmp, (u8 __user *) new_ctx + ctx_size - 1))
+	if (!access_ok(new_ctx, ctx_size) ||
+	    fault_in_pages_readable((u8 __user *)new_ctx, ctx_size))
 		return -EFAULT;
 
 	/*
@@ -1190,22 +1150,26 @@ long sys_swapcontext(struct ucontext __user *old_ctx,
 	return 0;
 }
 
-long sys_rt_sigreturn(int r3, int r4, int r5, int r6, int r7, int r8,
-		     struct pt_regs *regs)
+#ifdef CONFIG_PPC64
+COMPAT_SYSCALL_DEFINE0(rt_sigreturn)
+#else
+SYSCALL_DEFINE0(rt_sigreturn)
+#endif
 {
 	struct rt_sigframe __user *rt_sf;
+	struct pt_regs *regs = current_pt_regs();
+	int tm_restore = 0;
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
 	struct ucontext __user *uc_transact;
 	unsigned long msr_hi;
 	unsigned long tmp;
-	int tm_restore = 0;
 #endif
 	/* Always make any pending restarted system calls return -EINTR */
 	current->restart_block.fn = do_no_restart_syscall;
 
 	rt_sf = (struct rt_sigframe __user *)
 		(regs->gpr[1] + __SIGNAL_FRAMESIZE + 16);
-	if (!access_ok(VERIFY_READ, rt_sf, sizeof(*rt_sf)))
+	if (!access_ok(rt_sf, sizeof(*rt_sf)))
 		goto bad;
 
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
@@ -1246,11 +1210,19 @@ long sys_rt_sigreturn(int r3, int r4, int r5, int r6, int r7, int r8,
 				goto bad;
 		}
 	}
-	if (!tm_restore)
-		/* Fall through, for non-TM restore */
+	if (!tm_restore) {
+		/*
+		 * Unset regs->msr because ucontext MSR TS is not
+		 * set, and recheckpoint was not called. This avoid
+		 * hitting a TM Bad thing at RFID
+		 */
+		regs->msr &= ~MSR_TS_MASK;
+	}
+	/* Fall through, for non-TM restore */
 #endif
-	if (do_setcontext(&rt_sf->uc, regs, 1))
-		goto bad;
+	if (!tm_restore)
+		if (do_setcontext(&rt_sf->uc, regs, 1))
+			goto bad;
 
 	/*
 	 * It's not clear whether or why it is desirable to save the
@@ -1282,14 +1254,12 @@ long sys_rt_sigreturn(int r3, int r4, int r5, int r6, int r7, int r8,
 }
 
 #ifdef CONFIG_PPC32
-int sys_debug_setcontext(struct ucontext __user *ctx,
-			 int ndbg, struct sig_dbg_op __user *dbg,
-			 int r6, int r7, int r8,
-			 struct pt_regs *regs)
+SYSCALL_DEFINE3(debug_setcontext, struct ucontext __user *, ctx,
+			 int, ndbg, struct sig_dbg_op __user *, dbg)
 {
+	struct pt_regs *regs = current_pt_regs();
 	struct sig_dbg_op op;
 	int i;
-	unsigned char tmp;
 	unsigned long new_msr = regs->msr;
 #ifdef CONFIG_PPC_ADV_DEBUG_REGS
 	unsigned long new_dbcr0 = current->thread.debug.dbcr0;
@@ -1345,9 +1315,8 @@ int sys_debug_setcontext(struct ucontext __user *ctx,
 	current->thread.debug.dbcr0 = new_dbcr0;
 #endif
 
-	if (!access_ok(VERIFY_READ, ctx, sizeof(*ctx))
-	    || __get_user(tmp, (u8 __user *) ctx)
-	    || __get_user(tmp, (u8 __user *) (ctx + 1) - 1))
+	if (!access_ok(ctx, sizeof(*ctx)) ||
+	    fault_in_pages_readable((u8 __user *)ctx, sizeof(*ctx)))
 		return -EFAULT;
 
 	/*
@@ -1477,9 +1446,13 @@ badframe:
 /*
  * Do a signal return; undo the signal stack.
  */
-long sys_sigreturn(int r3, int r4, int r5, int r6, int r7, int r8,
-		       struct pt_regs *regs)
+#ifdef CONFIG_PPC64
+COMPAT_SYSCALL_DEFINE0(sigreturn)
+#else
+SYSCALL_DEFINE0(sigreturn)
+#endif
 {
+	struct pt_regs *regs = current_pt_regs();
 	struct sigframe __user *sf;
 	struct sigcontext __user *sc;
 	struct sigcontext sigctx;
@@ -1527,7 +1500,7 @@ long sys_sigreturn(int r3, int r4, int r5, int r6, int r7, int r8,
 	{
 		sr = (struct mcontext __user *)from_user_ptr(sigctx.regs);
 		addr = sr;
-		if (!access_ok(VERIFY_READ, sr, sizeof(*sr))
+		if (!access_ok(sr, sizeof(*sr))
 		    || restore_user_regs(regs, sr, 1))
 			goto badframe;
 	}

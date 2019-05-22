@@ -27,7 +27,11 @@ void __hyp_text __kvm_timer_set_cntvoff(u32 cntvoff_low, u32 cntvoff_high)
 	write_sysreg(cntvoff, cntvoff_el2);
 }
 
-void __hyp_text enable_el1_phys_timer_access(void)
+/*
+ * Should only be called on non-VHE systems.
+ * VHE systems use EL2 timers and configure EL1 timers in kvm_timer_init_vhe().
+ */
+void __hyp_text __timer_disable_traps(struct kvm_vcpu *vcpu)
 {
 	u64 val;
 
@@ -37,7 +41,11 @@ void __hyp_text enable_el1_phys_timer_access(void)
 	write_sysreg(val, cnthctl_el2);
 }
 
-void __hyp_text disable_el1_phys_timer_access(void)
+/*
+ * Should only be called on non-VHE systems.
+ * VHE systems use EL2 timers and configure EL1 timers in kvm_timer_init_vhe().
+ */
+void __hyp_text __timer_enable_traps(struct kvm_vcpu *vcpu)
 {
 	u64 val;
 
@@ -49,20 +57,4 @@ void __hyp_text disable_el1_phys_timer_access(void)
 	val &= ~CNTHCTL_EL1PCEN;
 	val |= CNTHCTL_EL1PCTEN;
 	write_sysreg(val, cnthctl_el2);
-}
-
-void __hyp_text __timer_disable_traps(struct kvm_vcpu *vcpu)
-{
-	/*
-	 * We don't need to do this for VHE since the host kernel runs in EL2
-	 * with HCR_EL2.TGE ==1, which makes those bits have no impact.
-	 */
-	if (!has_vhe())
-		enable_el1_phys_timer_access();
-}
-
-void __hyp_text __timer_enable_traps(struct kvm_vcpu *vcpu)
-{
-	if (!has_vhe())
-		disable_el1_phys_timer_access();
 }

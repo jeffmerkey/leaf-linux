@@ -15,6 +15,14 @@
 #include "aq_common.h"
 
 struct page;
+struct aq_nic_cfg_s;
+
+struct aq_rxpage {
+	struct page *page;
+	dma_addr_t daddr;
+	unsigned int order;
+	unsigned int pg_off;
+};
 
 /*           TxC       SOP        DX         EOP
  *         +----------+----------+----------+-----------
@@ -30,27 +38,20 @@ struct page;
  */
 struct __packed aq_ring_buff_s {
 	union {
+		/* RX/TX */
+		dma_addr_t pa;
 		/* RX */
 		struct {
 			u32 rss_hash;
 			u16 next;
 			u8 is_hash_l4;
 			u8 rsvd1;
-			struct page *page;
+			struct aq_rxpage rxdata;
 		};
 		/* EOP */
 		struct {
 			dma_addr_t pa_eop;
 			struct sk_buff *skb;
-		};
-		/* DX */
-		struct {
-			dma_addr_t pa;
-		};
-		/* SOP */
-		struct {
-			dma_addr_t pa_sop;
-			u32 len_pkt_sop;
 		};
 		/* TxC */
 		struct {
@@ -90,6 +91,9 @@ struct aq_ring_stats_rx_s {
 	u64 bytes;
 	u64 lro_packets;
 	u64 jumbo_packets;
+	u64 pg_losts;
+	u64 pg_flips;
+	u64 pg_reuses;
 };
 
 struct aq_ring_stats_tx_s {
@@ -105,7 +109,6 @@ union aq_ring_stats_s {
 };
 
 struct aq_ring_s {
-	struct aq_obj_s header;
 	struct aq_ring_buff_s *buff_ring;
 	u8 *dx_ring;		/* descriptors ring, dma shared mem */
 	struct aq_nic_s *aq_nic;
@@ -116,6 +119,7 @@ struct aq_ring_s {
 	unsigned int size;	/* descriptors number */
 	unsigned int dx_size;	/* TX or RX descriptor size,  */
 				/* stored here for fater math */
+	unsigned int page_order;
 	union aq_ring_stats_s stats;
 	dma_addr_t dx_ring_pa;
 };
@@ -125,6 +129,16 @@ struct aq_ring_param_s {
 	unsigned int cpu;
 	cpumask_t affinity_mask;
 };
+
+static inline void *aq_buf_vaddr(struct aq_rxpage *rxpage)
+{
+	return page_to_virt(rxpage->page) + rxpage->pg_off;
+}
+
+static inline dma_addr_t aq_buf_daddr(struct aq_rxpage *rxpage)
+{
+	return rxpage->daddr + rxpage->pg_off;
+}
 
 static inline unsigned int aq_ring_next_dx(struct aq_ring_s *self,
 					   unsigned int dx)
@@ -153,7 +167,7 @@ void aq_ring_free(struct aq_ring_s *self);
 void aq_ring_update_queue_state(struct aq_ring_s *ring);
 void aq_ring_queue_wake(struct aq_ring_s *ring);
 void aq_ring_queue_stop(struct aq_ring_s *ring);
-void aq_ring_tx_clean(struct aq_ring_s *self);
+bool aq_ring_tx_clean(struct aq_ring_s *self);
 int aq_ring_rx_clean(struct aq_ring_s *self,
 		     struct napi_struct *napi,
 		     int *work_done,

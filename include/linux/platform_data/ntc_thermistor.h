@@ -24,10 +24,11 @@
 struct iio_channel;
 
 enum ntc_thermistor_type {
-	TYPE_NCPXXWB473,
-	TYPE_NCPXXWL333,
 	TYPE_B57330V2103,
+	TYPE_B57891S0103,
+	TYPE_NCPXXWB473,
 	TYPE_NCPXXWF104,
+	TYPE_NCPXXWL333,
 	TYPE_NCPXXXH103,
 };
 
@@ -41,7 +42,7 @@ struct ntc_thermistor_platform_data {
 	 * read_uV()
 	 *
 	 * How to setup pullup_ohm, pulldown_ohm, and connect is
-	 * described at Documentation/hwmon/ntc_thermistor
+	 * described at Documentation/hwmon/ntc_thermistor.rst
 	 *
 	 * pullup/down_ohm: 0 for infinite / not-connected
 	 *

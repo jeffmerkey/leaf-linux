@@ -18,7 +18,7 @@
 #include <linux/oid_registry.h>
 #include <crypto/public_key.h>
 #include "pkcs7_parser.h"
-#include "pkcs7-asn1.h"
+#include "pkcs7.asn1.h"
 
 MODULE_DESCRIPTION("PKCS#7 parser");
 MODULE_AUTHOR("Red Hat, Inc.");
@@ -148,8 +148,10 @@ struct pkcs7_message *pkcs7_parse_message(const void *data, size_t datalen)
 	}
 
 	ret = pkcs7_check_authattrs(ctx->msg);
-	if (ret < 0)
+	if (ret < 0) {
+		msg = ERR_PTR(ret);
 		goto out;
+	}
 
 	msg = ctx->msg;
 	ctx->msg = NULL;
@@ -269,6 +271,7 @@ int pkcs7_sig_note_pkey_algo(void *context, size_t hdrlen,
 	switch (ctx->last_oid) {
 	case OID_rsaEncryption:
 		ctx->sinfo->sig->pkey_algo = "rsa";
+		ctx->sinfo->sig->encoding = "pkcs1";
 		break;
 	default:
 		printk("Unsupported pkey algo: %u\n", ctx->last_oid);

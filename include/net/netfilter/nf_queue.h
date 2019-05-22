@@ -25,7 +25,7 @@ struct nf_queue_entry {
 struct nf_queue_handler {
 	int		(*outfn)(struct nf_queue_entry *entry,
 				 unsigned int queuenum);
-	unsigned int	(*nf_hook_drop)(struct net *net);
+	void		(*nf_hook_drop)(struct net *net);
 };
 
 void nf_register_queue_handler(struct net *net, const struct nf_queue_handler *qh);
@@ -119,4 +119,7 @@ nfqueue_hash(const struct sk_buff *skb, u16 queue, u16 queues_total, u8 family,
 	return queue;
 }
 
+int nf_queue(struct sk_buff *skb, struct nf_hook_state *state,
+	     const struct nf_hook_entries *entries, unsigned int index,
+	     unsigned int verdict);
 #endif /* _NF_QUEUE_H */

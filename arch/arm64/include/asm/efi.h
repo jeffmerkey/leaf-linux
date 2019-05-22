@@ -31,7 +31,7 @@ int efi_set_mapping_permissions(struct mm_struct *mm, efi_memory_desc_t *md);
 ({									\
 	efi_##f##_t *__f;						\
 	__f = p->f;							\
-	__f(args);							\
+	__efi_rt_asm_wrapper(__f, #f, args);				\
 })
 
 #define arch_efi_call_virt_teardown()					\
@@ -40,7 +40,20 @@ int efi_set_mapping_permissions(struct mm_struct *mm, efi_memory_desc_t *md);
 	efi_virtmap_unload();						\
 })
 
+efi_status_t __efi_rt_asm_wrapper(void *, const char *, ...);
+
 #define ARCH_EFI_IRQ_FLAGS_MASK (PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT)
+
+/*
+ * Even when Linux uses IRQ priorities for IRQ disabling, EFI does not.
+ * And EFI shouldn't really play around with priority masking as it is not aware
+ * which priorities the OS has assigned to its interrupts.
+ */
+#define arch_efi_save_flags(state_flags)		\
+	((void)((state_flags) = read_sysreg(daif)))
+
+#define arch_efi_restore_flags(state_flags)	write_sysreg(state_flags, daif)
+
 
 /* arch specific definitions used by the stub code */
 
@@ -85,6 +98,9 @@ static inline unsigned long efi_get_max_initrd_addr(unsigned long dram_base,
 #define efi_call_runtime(f, ...)	sys_table_arg->runtime->f(__VA_ARGS__)
 #define efi_is_64bit()			(true)
 
+#define efi_table_attr(table, attr, instance)				\
+	((table##_t *)instance)->attr
+
 #define efi_call_proto(protocol, f, instance, ...)			\
 	((protocol##_t *)instance)->f(instance, ##__VA_ARGS__)
 
@@ -121,22 +137,22 @@ static inline void efi_set_pgd(struct mm_struct *mm)
 		if (mm != current->active_mm) {
 			/*
 			 * Update the current thread's saved ttbr0 since it is
-			 * restored as part of a return from exception. Set
-			 * the hardware TTBR0_EL1 using cpu_switch_mm()
-			 * directly to enable potential errata workarounds.
+			 * restored as part of a return from exception. Enable
+			 * access to the valid TTBR0_EL1 and invoke the errata
+			 * workaround directly since there is no return from
+			 * exception when invoking the EFI run-time services.
 			 */
 			update_saved_ttbr0(current, mm);
-			cpu_switch_mm(mm->pgd, mm);
+			uaccess_ttbr0_enable();
+			post_ttbr_update_workaround();
 		} else {
 			/*
 			 * Defer the switch to the current thread's TTBR0_EL1
 			 * until uaccess_enable(). Restore the current
 			 * thread's saved ttbr0 corresponding to its active_mm
-			 * (if different from init_mm).
 			 */
-			cpu_set_reserved_ttbr0();
-			if (current->active_mm != &init_mm)
-				update_saved_ttbr0(current, current->active_mm);
+			uaccess_ttbr0_disable();
+			update_saved_ttbr0(current, current->active_mm);
 		}
 	}
 }

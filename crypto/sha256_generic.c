@@ -271,7 +271,7 @@ static struct shash_alg sha256_algs[2] = { {
 	.base		=	{
 		.cra_name	=	"sha256",
 		.cra_driver_name=	"sha256-generic",
-		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
+		.cra_priority	=	100,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -285,7 +285,7 @@ static struct shash_alg sha256_algs[2] = { {
 	.base		=	{
 		.cra_name	=	"sha224",
 		.cra_driver_name=	"sha224-generic",
-		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
+		.cra_priority	=	100,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -301,7 +301,7 @@ static void __exit sha256_generic_mod_fini(void)
 	crypto_unregister_shashes(sha256_algs, ARRAY_SIZE(sha256_algs));
 }
 
-module_init(sha256_generic_mod_init);
+subsys_initcall(sha256_generic_mod_init);
 module_exit(sha256_generic_mod_fini);
 
 MODULE_LICENSE("GPL");

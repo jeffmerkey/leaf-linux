@@ -1,7 +1,6 @@
 /*
- * ti_hdmi_4xxx_ip.c
- *
  * HDMI TI81xx, TI38xx, TI OMAP4 etc IP driver Library
+ *
  * Copyright (C) 2010-2011 Texas Instruments Incorporated - http://www.ti.com/
  * Authors: Yong Zhi
  *	Mythri pk <mythripk@ti.com>
@@ -709,7 +708,7 @@ int hdmi4_audio_config(struct hdmi_core_data *core, struct hdmi_wp_data *wp,
 	else
 		acore.i2s_cfg.justification = HDMI_AUDIO_JUSTIFY_RIGHT;
 	/*
-	 * The I2S input word length is twice the lenght given in the IEC-60958
+	 * The I2S input word length is twice the length given in the IEC-60958
 	 * status word. If the word size is greater than
 	 * 20 bits, increment by one.
 	 */
@@ -923,8 +922,13 @@ int hdmi4_core_init(struct platform_device *pdev, struct hdmi_core_data *core)
 {
 	const struct hdmi4_features *features;
 	struct resource *res;
+	const struct soc_device_attribute *soc;
 
-	features = soc_device_match(hdmi4_soc_devices)->data;
+	soc = soc_device_match(hdmi4_soc_devices);
+	if (!soc)
+		return -ENODEV;
+
+	features = soc->data;
 	core->cts_swmode = features->cts_swmode;
 	core->audio_use_mclk = features->audio_use_mclk;
 

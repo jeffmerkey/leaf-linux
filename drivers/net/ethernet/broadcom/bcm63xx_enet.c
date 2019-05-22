@@ -568,12 +568,13 @@ static irqreturn_t bcm_enet_isr_dma(int irq, void *dev_id)
 /*
  * tx request callback
  */
-static int bcm_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t
+bcm_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct bcm_enet_priv *priv;
 	struct bcm_enet_desc *desc;
 	u32 len_stat;
-	int ret;
+	netdev_tx_t ret;
 
 	priv = netdev_priv(dev);
 
@@ -890,19 +891,10 @@ static int bcm_enet_open(struct net_device *dev)
 		}
 
 		/* mask with MAC supported features */
-		phydev->supported &= (SUPPORTED_10baseT_Half |
-				      SUPPORTED_10baseT_Full |
-				      SUPPORTED_100baseT_Half |
-				      SUPPORTED_100baseT_Full |
-				      SUPPORTED_Autoneg |
-				      SUPPORTED_Pause |
-				      SUPPORTED_MII);
-		phydev->advertising = phydev->supported;
-
-		if (priv->pause_auto && priv->pause_rx && priv->pause_tx)
-			phydev->advertising |= SUPPORTED_Pause;
-		else
-			phydev->advertising &= ~SUPPORTED_Pause;
+		phy_support_sym_pause(phydev);
+		phy_set_max_speed(phydev, SPEED_100);
+		phy_set_sym_pause(phydev, priv->pause_rx, priv->pause_rx,
+				  priv->pause_auto);
 
 		phy_attached_info(phydev);
 
@@ -944,7 +936,7 @@ static int bcm_enet_open(struct net_device *dev)
 
 	/* allocate rx dma ring */
 	size = priv->rx_ring_size * sizeof(struct bcm_enet_desc);
-	p = dma_zalloc_coherent(kdev, size, &priv->rx_desc_dma, GFP_KERNEL);
+	p = dma_alloc_coherent(kdev, size, &priv->rx_desc_dma, GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto out_freeirq_tx;
@@ -955,7 +947,7 @@ static int bcm_enet_open(struct net_device *dev)
 
 	/* allocate tx dma ring */
 	size = priv->tx_ring_size * sizeof(struct bcm_enet_desc);
-	p = dma_zalloc_coherent(kdev, size, &priv->tx_desc_dma, GFP_KERNEL);
+	p = dma_alloc_coherent(kdev, size, &priv->tx_desc_dma, GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto out_free_rx_ring;
@@ -1716,7 +1708,6 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	struct bcm63xx_enet_platform_data *pd;
 	struct resource *res_mem, *res_irq, *res_irq_rx, *res_irq_tx;
 	struct mii_bus *bus;
-	const char *clk_name;
 	int i, ret;
 
 	if (!bcm_enet_shared_base[0])
@@ -1751,20 +1742,8 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	dev->irq = priv->irq = res_irq->start;
 	priv->irq_rx = res_irq_rx->start;
 	priv->irq_tx = res_irq_tx->start;
-	priv->mac_id = pdev->id;
 
-	/* get rx & tx dma channel id for this mac */
-	if (priv->mac_id == 0) {
-		priv->rx_chan = 0;
-		priv->tx_chan = 1;
-		clk_name = "enet0";
-	} else {
-		priv->rx_chan = 2;
-		priv->tx_chan = 3;
-		clk_name = "enet1";
-	}
-
-	priv->mac_clk = devm_clk_get(&pdev->dev, clk_name);
+	priv->mac_clk = devm_clk_get(&pdev->dev, "enet");
 	if (IS_ERR(priv->mac_clk)) {
 		ret = PTR_ERR(priv->mac_clk);
 		goto out;
@@ -1795,9 +1774,11 @@ static int bcm_enet_probe(struct platform_device *pdev)
 		priv->dma_chan_width = pd->dma_chan_width;
 		priv->dma_has_sram = pd->dma_has_sram;
 		priv->dma_desc_shift = pd->dma_desc_shift;
+		priv->rx_chan = pd->rx_chan;
+		priv->tx_chan = pd->tx_chan;
 	}
 
-	if (priv->mac_id == 0 && priv->has_phy && !priv->use_external_mii) {
+	if (priv->has_phy && !priv->use_external_mii) {
 		/* using internal PHY, enable clock */
 		priv->phy_clk = devm_clk_get(&pdev->dev, "ephy");
 		if (IS_ERR(priv->phy_clk)) {
@@ -1828,7 +1809,7 @@ static int bcm_enet_probe(struct platform_device *pdev)
 		bus->priv = priv;
 		bus->read = bcm_enet_mdio_read_phylib;
 		bus->write = bcm_enet_mdio_write_phylib;
-		sprintf(bus->id, "%s-%d", pdev->name, priv->mac_id);
+		sprintf(bus->id, "%s-%d", pdev->name, pdev->id);
 
 		/* only probe bus where we think the PHY is, because
 		 * the mdio read operation return 0 instead of 0xffff
@@ -2146,7 +2127,6 @@ static int bcm_enetsw_open(struct net_device *dev)
 		goto out_freeirq_tx;
 	}
 
-	memset(p, 0, size);
 	priv->rx_desc_alloc_size = size;
 	priv->rx_desc_cpu = p;
 
@@ -2159,11 +2139,10 @@ static int bcm_enetsw_open(struct net_device *dev)
 		goto out_free_rx_ring;
 	}
 
-	memset(p, 0, size);
 	priv->tx_desc_alloc_size = size;
 	priv->tx_desc_cpu = p;
 
-	priv->tx_skb = kzalloc(sizeof(struct sk_buff *) * priv->tx_ring_size,
+	priv->tx_skb = kcalloc(priv->tx_ring_size, sizeof(struct sk_buff *),
 			       GFP_KERNEL);
 	if (!priv->tx_skb) {
 		dev_err(kdev, "cannot allocate rx skb queue\n");
@@ -2177,7 +2156,7 @@ static int bcm_enetsw_open(struct net_device *dev)
 	spin_lock_init(&priv->tx_lock);
 
 	/* init & fill rx ring with skbs */
-	priv->rx_skb = kzalloc(sizeof(struct sk_buff *) * priv->rx_ring_size,
+	priv->rx_skb = kcalloc(priv->rx_ring_size, sizeof(struct sk_buff *),
 			       GFP_KERNEL);
 	if (!priv->rx_skb) {
 		dev_err(kdev, "cannot allocate rx skb queue\n");

@@ -79,8 +79,8 @@ static int addr_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	ASSERT_RTNL();
 
-	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFA_MAX, ifa_phonet_policy,
-			  extack);
+	err = nlmsg_parse_deprecated(nlh, sizeof(*ifm), tb, IFA_MAX,
+				     ifa_phonet_policy, extack);
 	if (err < 0)
 		return err;
 
@@ -246,8 +246,8 @@ static int route_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	ASSERT_RTNL();
 
-	err = nlmsg_parse(nlh, sizeof(*rtm), tb, RTA_MAX, rtm_phonet_policy,
-			  extack);
+	err = nlmsg_parse_deprecated(nlh, sizeof(*rtm), tb, RTA_MAX,
+				     rtm_phonet_policy, extack);
 	if (err < 0)
 		return err;
 
@@ -299,16 +299,21 @@ out:
 
 int __init phonet_netlink_register(void)
 {
-	int err = __rtnl_register(PF_PHONET, RTM_NEWADDR, addr_doit,
-				  NULL, 0);
+	int err = rtnl_register_module(THIS_MODULE, PF_PHONET, RTM_NEWADDR,
+				       addr_doit, NULL, 0);
 	if (err)
 		return err;
 
-	/* Further __rtnl_register() cannot fail */
-	__rtnl_register(PF_PHONET, RTM_DELADDR, addr_doit, NULL, 0);
-	__rtnl_register(PF_PHONET, RTM_GETADDR, NULL, getaddr_dumpit, 0);
-	__rtnl_register(PF_PHONET, RTM_NEWROUTE, route_doit, NULL, 0);
-	__rtnl_register(PF_PHONET, RTM_DELROUTE, route_doit, NULL, 0);
-	__rtnl_register(PF_PHONET, RTM_GETROUTE, NULL, route_dumpit, 0);
+	/* Further rtnl_register_module() cannot fail */
+	rtnl_register_module(THIS_MODULE, PF_PHONET, RTM_DELADDR,
+			     addr_doit, NULL, 0);
+	rtnl_register_module(THIS_MODULE, PF_PHONET, RTM_GETADDR,
+			     NULL, getaddr_dumpit, 0);
+	rtnl_register_module(THIS_MODULE, PF_PHONET, RTM_NEWROUTE,
+			     route_doit, NULL, 0);
+	rtnl_register_module(THIS_MODULE, PF_PHONET, RTM_DELROUTE,
+			     route_doit, NULL, 0);
+	rtnl_register_module(THIS_MODULE, PF_PHONET, RTM_GETROUTE,
+			     NULL, route_dumpit, 0);
 	return 0;
 }

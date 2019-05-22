@@ -49,12 +49,11 @@
 #define DRIVER_VERSION "1.02"
 #define DRIVER_AUTHOR "Wim Van Sebroeck <wim@iguana.be>"
 #define DRIVER_DESC "Berkshire USB-PC Watchdog driver"
-#define DRIVER_LICENSE "GPL"
 #define DRIVER_NAME "pcwd_usb"
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_LICENSE(DRIVER_LICENSE);
+MODULE_LICENSE("GPL");
 
 #define WATCHDOG_HEARTBEAT 0	/* default heartbeat =
 						delay-time from dip-switches */
@@ -456,8 +455,8 @@ static long usb_pcwd_ioctl(struct file *file, unsigned int cmd,
 			return -EINVAL;
 
 		usb_pcwd_keepalive(usb_pcwd_device);
-		/* Fall */
 	}
+		/* fall through */
 
 	case WDIOC_GETTIMEOUT:
 		return put_user(heartbeat, p);
@@ -486,7 +485,7 @@ static int usb_pcwd_open(struct inode *inode, struct file *file)
 	/* Activate */
 	usb_pcwd_start(usb_pcwd_device);
 	usb_pcwd_keepalive(usb_pcwd_device);
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 static int usb_pcwd_release(struct inode *inode, struct file *file)
@@ -525,7 +524,7 @@ static ssize_t usb_pcwd_temperature_read(struct file *file, char __user *data,
 
 static int usb_pcwd_temperature_open(struct inode *inode, struct file *file)
 {
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 static int usb_pcwd_temperature_release(struct inode *inode, struct file *file)

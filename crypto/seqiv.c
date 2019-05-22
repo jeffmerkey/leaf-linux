@@ -73,9 +73,9 @@ static int seqiv_aead_encrypt(struct aead_request *req)
 	info = req->iv;
 
 	if (req->src != req->dst) {
-		SKCIPHER_REQUEST_ON_STACK(nreq, ctx->sknull);
+		SYNC_SKCIPHER_REQUEST_ON_STACK(nreq, ctx->sknull);
 
-		skcipher_request_set_tfm(nreq, ctx->sknull);
+		skcipher_request_set_sync_tfm(nreq, ctx->sknull);
 		skcipher_request_set_callback(nreq, req->base.flags,
 					      NULL, NULL);
 		skcipher_request_set_crypt(nreq, req->src, req->dst,
@@ -89,13 +89,12 @@ static int seqiv_aead_encrypt(struct aead_request *req)
 
 	if (unlikely(!IS_ALIGNED((unsigned long)info,
 				 crypto_aead_alignmask(geniv) + 1))) {
-		info = kmalloc(ivsize, req->base.flags &
-				       CRYPTO_TFM_REQ_MAY_SLEEP ? GFP_KERNEL:
-								  GFP_ATOMIC);
+		info = kmemdup(req->iv, ivsize, req->base.flags &
+			       CRYPTO_TFM_REQ_MAY_SLEEP ? GFP_KERNEL :
+			       GFP_ATOMIC);
 		if (!info)
 			return -ENOMEM;
 
-		memcpy(info, req->iv, ivsize);
 		compl = seqiv_aead_encrypt_complete;
 		data = req;
 	}
@@ -144,17 +143,12 @@ static int seqiv_aead_decrypt(struct aead_request *req)
 static int seqiv_aead_create(struct crypto_template *tmpl, struct rtattr **tb)
 {
 	struct aead_instance *inst;
-	struct crypto_aead_spawn *spawn;
-	struct aead_alg *alg;
 	int err;
 
 	inst = aead_geniv_alloc(tmpl, tb, 0, 0);
 
 	if (IS_ERR(inst))
 		return PTR_ERR(inst);
-
-	spawn = aead_instance_ctx(inst);
-	alg = crypto_spawn_aead_alg(spawn);
 
 	err = -EINVAL;
 	if (inst->alg.ivsize != sizeof(u64))
@@ -217,7 +211,7 @@ static void __exit seqiv_module_exit(void)
 	crypto_unregister_template(&seqiv_tmpl);
 }
 
-module_init(seqiv_module_init);
+subsys_initcall(seqiv_module_init);
 module_exit(seqiv_module_exit);
 
 MODULE_LICENSE("GPL");

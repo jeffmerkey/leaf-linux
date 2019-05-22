@@ -59,6 +59,7 @@
 #include <asm/hardware.h>
 
 #include "gsc.h"
+#include "iommu.h"
 
 #undef DINO_DEBUG
 
@@ -153,12 +154,10 @@ struct dino_device
 #endif
 };
 
-/* Looks nice and keeps the compiler happy */
-#define DINO_DEV(d) ({				\
-	void *__pdata = d;			\
-	BUG_ON(!__pdata);			\
-	(struct dino_device *)__pdata; })
-
+static inline struct dino_device *DINO_DEV(struct pci_hba_data *hba)
+{
+	return container_of(hba, struct dino_device, hba);
+}
 
 /*
  * Dino Configuration Space Accessor Functions
@@ -303,7 +302,7 @@ static void dino_mask_irq(struct irq_data *d)
 	struct dino_device *dino_dev = irq_data_get_irq_chip_data(d);
 	int local_irq = gsc_find_local_irq(d->irq, dino_dev->global_irq, DINO_LOCAL_IRQS);
 
-	DBG(KERN_WARNING "%s(0x%p, %d)\n", __func__, dino_dev, d->irq);
+	DBG(KERN_WARNING "%s(0x%px, %d)\n", __func__, dino_dev, d->irq);
 
 	/* Clear the matching bit in the IMR register */
 	dino_dev->imr &= ~(DINO_MASK_IRQ(local_irq));
@@ -316,7 +315,7 @@ static void dino_unmask_irq(struct irq_data *d)
 	int local_irq = gsc_find_local_irq(d->irq, dino_dev->global_irq, DINO_LOCAL_IRQS);
 	u32 tmp;
 
-	DBG(KERN_WARNING "%s(0x%p, %d)\n", __func__, dino_dev, d->irq);
+	DBG(KERN_WARNING "%s(0x%px, %d)\n", __func__, dino_dev, d->irq);
 
 	/*
 	** clear pending IRQ bits
@@ -382,7 +381,7 @@ ilr_again:
 		DBG(KERN_DEBUG "%s(%d, %p) mask 0x%x\n",
 			__func__, irq, intr_dev, mask);
 		generic_handle_irq(irq);
-		mask &= ~(1 << local_irq);
+		mask &= ~DINO_MASK_IRQ(local_irq);
 	} while (mask);
 
 	/* Support for level triggered IRQ lines.
@@ -396,9 +395,8 @@ ilr_again:
 	if (mask) {
 		if (--ilr_loop > 0)
 			goto ilr_again;
-		printk(KERN_ERR "Dino 0x%p: stuck interrupt %d\n", 
+		pr_warn_ratelimited("Dino 0x%px: stuck interrupt %d\n",
 		       dino_dev->hba.base_addr, mask);
-		return IRQ_NONE;
 	}
 	return IRQ_HANDLED;
 }
@@ -553,7 +551,7 @@ dino_fixup_bus(struct pci_bus *bus)
         struct pci_dev *dev;
         struct dino_device *dino_dev = DINO_DEV(parisc_walk_tree(bus->bridge));
 
-	DBG(KERN_WARNING "%s(0x%p) bus %d platform_data 0x%p\n",
+	DBG(KERN_WARNING "%s(0x%px) bus %d platform_data 0x%px\n",
 	    __func__, bus, bus->busn_res.start,
 	    bus->bridge->platform_data);
 
@@ -854,7 +852,7 @@ static int __init dino_common_init(struct parisc_device *dev,
 	res->flags = IORESOURCE_IO; /* do not mark it busy ! */
 	if (request_resource(&ioport_resource, res) < 0) {
 		printk(KERN_ERR "%s: request I/O Port region failed "
-		       "0x%lx/%lx (hpa 0x%p)\n",
+		       "0x%lx/%lx (hpa 0x%px)\n",
 		       name, (unsigned long)res->start, (unsigned long)res->end,
 		       dino_dev->hba.base_addr);
 		return 1;

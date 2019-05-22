@@ -278,7 +278,7 @@ static const struct file_operations ccp_debugfs_stats_ops = {
 };
 
 static struct dentry *ccp_debugfs_dir;
-static DEFINE_RWLOCK(ccp_debugfs_lock);
+static DEFINE_MUTEX(ccp_debugfs_lock);
 
 #define	MAX_NAME_LEN	20
 
@@ -286,38 +286,24 @@ void ccp5_debugfs_setup(struct ccp_device *ccp)
 {
 	struct ccp_cmd_queue *cmd_q;
 	char name[MAX_NAME_LEN + 1];
-	struct dentry *debugfs_info;
-	struct dentry *debugfs_stats;
 	struct dentry *debugfs_q_instance;
-	struct dentry *debugfs_q_stats;
-	unsigned long flags;
 	int i;
 
 	if (!debugfs_initialized())
 		return;
 
-	write_lock_irqsave(&ccp_debugfs_lock, flags);
+	mutex_lock(&ccp_debugfs_lock);
 	if (!ccp_debugfs_dir)
 		ccp_debugfs_dir = debugfs_create_dir(KBUILD_MODNAME, NULL);
-	write_unlock_irqrestore(&ccp_debugfs_lock, flags);
-	if (!ccp_debugfs_dir)
-		return;
+	mutex_unlock(&ccp_debugfs_lock);
 
 	ccp->debugfs_instance = debugfs_create_dir(ccp->name, ccp_debugfs_dir);
-	if (!ccp->debugfs_instance)
-		goto err;
 
-	debugfs_info = debugfs_create_file("info", 0400,
-					   ccp->debugfs_instance, ccp,
-					   &ccp_debugfs_info_ops);
-	if (!debugfs_info)
-		goto err;
+	debugfs_create_file("info", 0400, ccp->debugfs_instance, ccp,
+			    &ccp_debugfs_info_ops);
 
-	debugfs_stats = debugfs_create_file("stats", 0600,
-					    ccp->debugfs_instance, ccp,
-					    &ccp_debugfs_stats_ops);
-	if (!debugfs_stats)
-		goto err;
+	debugfs_create_file("stats", 0600, ccp->debugfs_instance, ccp,
+			    &ccp_debugfs_stats_ops);
 
 	for (i = 0; i < ccp->cmd_q_count; i++) {
 		cmd_q = &ccp->cmd_q[i];
@@ -326,21 +312,12 @@ void ccp5_debugfs_setup(struct ccp_device *ccp)
 
 		debugfs_q_instance =
 			debugfs_create_dir(name, ccp->debugfs_instance);
-		if (!debugfs_q_instance)
-			goto err;
 
-		debugfs_q_stats =
-			debugfs_create_file("stats", 0600,
-					    debugfs_q_instance, cmd_q,
-					    &ccp_debugfs_queue_ops);
-		if (!debugfs_q_stats)
-			goto err;
+		debugfs_create_file("stats", 0600, debugfs_q_instance, cmd_q,
+				    &ccp_debugfs_queue_ops);
 	}
 
 	return;
-
-err:
-	debugfs_remove_recursive(ccp->debugfs_instance);
 }
 
 void ccp5_debugfs_destroy(void)

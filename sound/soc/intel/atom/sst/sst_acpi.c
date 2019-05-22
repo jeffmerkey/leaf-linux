@@ -143,10 +143,11 @@ static struct sst_platform_info byt_rvp_platform_data = {
 	.lib_info = &byt_lib_dnld_info,
 	.res_info = &byt_rvp_res_info,
 	.platform = "sst-mfld-platform",
+	.streams_lost_on_suspend = true,
 };
 
 /* Cherryview (Cherrytrail and Braswell) uses same mrfld dpcm fw as Baytrail,
- * so pdata is same as Baytrail.
+ * so pdata is same as Baytrail, minus the streams_lost_on_suspend quirk.
  */
 static struct sst_platform_info chv_platform_data = {
 	.probe_data = &byt_fwparse_info,
@@ -236,6 +237,9 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 	/* Find the IRQ */
 	ctx->irq_num = platform_get_irq(pdev,
 				ctx->pdata->res_info->acpi_ipc_irq_index);
+	if (ctx->irq_num <= 0)
+		return ctx->irq_num < 0 ? ctx->irq_num : -EIO;
+
 	return 0;
 }
 
@@ -251,18 +255,16 @@ static int is_byt(void)
 	return status;
 }
 
-static int is_byt_cr(struct device *dev, bool *bytcr)
+static bool is_byt_cr(struct platform_device *pdev)
 {
+	struct device *dev = &pdev->dev;
 	int status = 0;
 
-	if (IS_ENABLED(CONFIG_IOSF_MBI)) {
+	if (!is_byt())
+		return false;
+
+	if (iosf_mbi_available()) {
 		u32 bios_status;
-
-		if (!is_byt() || !iosf_mbi_available()) {
-			/* bail silently */
-			return status;
-		}
-
 		status = iosf_mbi_read(BT_MBI_UNIT_PMC, /* 0x04 PUNIT */
 				       MBI_REG_READ, /* 0x10 */
 				       0x006, /* BIOS_CONFIG */
@@ -274,15 +276,28 @@ static int is_byt_cr(struct device *dev, bool *bytcr)
 			/* bits 26:27 mirror PMIC options */
 			bios_status = (bios_status >> 26) & 3;
 
-			if ((bios_status == 1) || (bios_status == 3))
-				*bytcr = true;
-			else
-				dev_info(dev, "BYT-CR not detected\n");
+			if (bios_status == 1 || bios_status == 3) {
+				dev_info(dev, "Detected Baytrail-CR platform\n");
+				return true;
+			}
+
+			dev_info(dev, "BYT-CR not detected\n");
 		}
 	} else {
-		dev_info(dev, "IOSF_MBI not enabled, no BYT-CR detection\n");
+		dev_info(dev, "IOSF_MBI not available, no BYT-CR detection\n");
 	}
-	return status;
+
+	if (platform_get_resource(pdev, IORESOURCE_IRQ, 5) == NULL) {
+		/*
+		 * Some devices detected as BYT-T have only a single IRQ listed,
+		 * causing platform_get_irq with index 5 to return -ENXIO.
+		 * The correct IRQ in this case is at index 0, as on BYT-CR.
+		 */
+		dev_info(dev, "Falling back to Baytrail-CR platform\n");
+		return true;
+	}
+
+	return false;
 }
 
 
@@ -297,7 +312,6 @@ static int sst_acpi_probe(struct platform_device *pdev)
 	struct platform_device *plat_dev;
 	struct sst_platform_info *pdata;
 	unsigned int dev_id;
-	bool bytcr = false;
 
 	id = acpi_match_device(dev->driver->acpi_match_table, dev);
 	if (!id)
@@ -329,13 +343,14 @@ static int sst_acpi_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	ret = is_byt_cr(dev, &bytcr);
-	if (!((ret < 0) || (bytcr == false))) {
-		dev_info(dev, "Detected Baytrail-CR platform\n");
-
+	if (is_byt_cr(pdev)) {
 		/* override resource info */
 		byt_rvp_platform_data.res_info = &bytcr_res_info;
 	}
+
+	/* update machine parameters */
+	mach->mach_params.acpi_ipc_irq_index =
+		pdata->res_info->acpi_ipc_irq_index;
 
 	plat_dev = platform_device_register_data(dev, pdata->platform, -1,
 						NULL, 0);

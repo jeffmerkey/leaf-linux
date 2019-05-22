@@ -11,7 +11,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -108,6 +108,7 @@ struct meson_pinctrl_data {
 	struct meson_bank *banks;
 	unsigned int num_banks;
 	const struct pinmux_ops *pmx_ops;
+	void *pmx_data;
 };
 
 struct meson_pinctrl {
@@ -119,6 +120,7 @@ struct meson_pinctrl {
 	struct regmap *reg_pullen;
 	struct regmap *reg_pull;
 	struct regmap *reg_gpio;
+	struct regmap *reg_ds;
 	struct gpio_chip chip;
 	struct device_node *of_node;
 };

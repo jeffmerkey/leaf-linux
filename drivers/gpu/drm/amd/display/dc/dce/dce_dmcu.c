@@ -28,7 +28,7 @@
 #include "dce_dmcu.h"
 #include "dm_services.h"
 #include "reg_helper.h"
-#include "fixed32_32.h"
+#include "fixed31_32.h"
 #include "dc.h"
 
 #define TO_DCE_DMCU(dmcu)\
@@ -49,8 +49,18 @@
 #define PSR_EXIT 0x21
 #define PSR_SET 0x23
 #define PSR_SET_WAITLOOP 0x31
+#define MCP_INIT_DMCU 0x88
+#define MCP_INIT_IRAM 0x89
+#define MCP_SYNC_PHY_LOCK 0x90
+#define MCP_SYNC_PHY_UNLOCK 0x91
+#define MCP_BL_SET_PWM_FRAC 0x6A  /* Enable or disable Fractional PWM */
 #define MASTER_COMM_CNTL_REG__MASTER_COMM_INTERRUPT_MASK   0x00000001L
-unsigned int cached_wait_loop_number = 0;
+
+static bool dce_dmcu_init(struct dmcu *dmcu)
+{
+	// Do nothing
+	return true;
+}
 
 bool dce_dmcu_load_iram(struct dmcu *dmcu,
 		unsigned int start_offset,
@@ -84,7 +94,7 @@ static void dce_get_dmcu_psr_state(struct dmcu *dmcu, uint32_t *psr_state)
 {
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
 
-	uint32_t psrStateOffset = 0xf0;
+	uint32_t psr_state_offset = 0xf0;
 
 	/* Enable write access to IRAM */
 	REG_UPDATE(DMCU_RAM_ACCESS_CTRL, IRAM_HOST_ACCESS_EN, 1);
@@ -92,7 +102,7 @@ static void dce_get_dmcu_psr_state(struct dmcu *dmcu, uint32_t *psr_state)
 	REG_WAIT(DCI_MEM_PWR_STATUS, DMCU_IRAM_MEM_PWR_STATE, 0, 2, 10);
 
 	/* Write address to IRAM_RD_ADDR in DMCU_IRAM_RD_CTRL */
-	REG_WRITE(DMCU_IRAM_RD_CTRL, psrStateOffset);
+	REG_WRITE(DMCU_IRAM_RD_CTRL, psr_state_offset);
 
 	/* Read data from IRAM_RD_DATA in DMCU_IRAM_RD_DATA*/
 	*psr_state = REG_READ(DMCU_IRAM_RD_DATA);
@@ -142,7 +152,7 @@ static void dce_dmcu_set_psr_enable(struct dmcu *dmcu, bool enable, bool wait)
 	}
 }
 
-static void dce_dmcu_setup_psr(struct dmcu *dmcu,
+static bool dce_dmcu_setup_psr(struct dmcu *dmcu,
 		struct dc_link *link,
 		struct psr_context *psr_context)
 {
@@ -205,9 +215,6 @@ static void dce_dmcu_setup_psr(struct dmcu *dmcu,
 
 	link->link_enc->funcs->psr_program_secondary_packet(link->link_enc,
 			psr_context->sdpTransmitLineNumDeadline);
-
-	if (psr_context->psr_level.bits.SKIP_SMU_NOTIFICATION)
-		REG_UPDATE(SMU_INTERRUPT_CONTROL, DC_SMU_INT_ENABLE, 1);
 
 	/* waitDMCUReadyForCmd */
 	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0,
@@ -253,6 +260,23 @@ static void dce_dmcu_setup_psr(struct dmcu *dmcu,
 
 	/* notifyDMCUMsg */
 	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+	return true;
+}
+
+static bool dce_is_dmcu_initialized(struct dmcu *dmcu)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+	unsigned int dmcu_uc_reset;
+
+	/* microcontroller is not running */
+	REG_GET(DMCU_STATUS, UC_IN_RESET, &dmcu_uc_reset);
+
+	/* DMCU is not running */
+	if (dmcu_uc_reset)
+		return false;
+
+	return true;
 }
 
 static void dce_psr_wait_loop(
@@ -261,7 +285,12 @@ static void dce_psr_wait_loop(
 {
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
 	union dce_dmcu_psr_config_data_wait_loop_reg1 masterCmdData1;
-	if (cached_wait_loop_number == wait_loop_number)
+
+	if (dmcu->cached_wait_loop_number == wait_loop_number)
+		return;
+
+	/* DMCU is not running */
+	if (!dce_is_dmcu_initialized(dmcu))
 		return;
 
 	/* waitDMCUReadyForCmd */
@@ -269,7 +298,7 @@ static void dce_psr_wait_loop(
 
 	masterCmdData1.u32 = 0;
 	masterCmdData1.bits.wait_loop = wait_loop_number;
-	cached_wait_loop_number = wait_loop_number;
+	dmcu->cached_wait_loop_number = wait_loop_number;
 	dm_write_reg(dmcu->ctx, REG(MASTER_COMM_DATA_REG1), masterCmdData1.u32);
 
 	/* setDMCUParam_Cmd */
@@ -279,14 +308,126 @@ static void dce_psr_wait_loop(
 	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
 }
 
-static void dce_get_psr_wait_loop(unsigned int *psr_wait_loop_number)
+static void dce_get_psr_wait_loop(
+		struct dmcu *dmcu, unsigned int *psr_wait_loop_number)
 {
-	*psr_wait_loop_number = cached_wait_loop_number;
+	*psr_wait_loop_number = dmcu->cached_wait_loop_number;
 	return;
 }
 
 #if defined(CONFIG_DRM_AMD_DC_DCN1_0)
-bool dcn10_dmcu_load_iram(struct dmcu *dmcu,
+static void dcn10_get_dmcu_version(struct dmcu *dmcu)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+	uint32_t dmcu_version_offset = 0xf1;
+
+	/* Enable write access to IRAM */
+	REG_UPDATE_2(DMCU_RAM_ACCESS_CTRL,
+			IRAM_HOST_ACCESS_EN, 1,
+			IRAM_RD_ADDR_AUTO_INC, 1);
+
+	REG_WAIT(DMU_MEM_PWR_CNTL, DMCU_IRAM_MEM_PWR_STATE, 0, 2, 10);
+
+	/* Write address to IRAM_RD_ADDR and read from DATA register */
+	REG_WRITE(DMCU_IRAM_RD_CTRL, dmcu_version_offset);
+	dmcu->dmcu_version.interface_version = REG_READ(DMCU_IRAM_RD_DATA);
+	dmcu->dmcu_version.abm_version = REG_READ(DMCU_IRAM_RD_DATA);
+	dmcu->dmcu_version.psr_version = REG_READ(DMCU_IRAM_RD_DATA);
+	dmcu->dmcu_version.build_version = ((REG_READ(DMCU_IRAM_RD_DATA) << 8) |
+						REG_READ(DMCU_IRAM_RD_DATA));
+
+	/* Disable write access to IRAM to allow dynamic sleep state */
+	REG_UPDATE_2(DMCU_RAM_ACCESS_CTRL,
+			IRAM_HOST_ACCESS_EN, 0,
+			IRAM_RD_ADDR_AUTO_INC, 0);
+}
+
+static void dcn10_dmcu_enable_fractional_pwm(struct dmcu *dmcu,
+		uint32_t fractional_pwm)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+
+	/* Wait until microcontroller is ready to process interrupt */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 100, 800);
+
+	/* Set PWM fractional enable/disable */
+	REG_WRITE(MASTER_COMM_DATA_REG1, fractional_pwm);
+
+	/* Set command to enable or disable fractional PWM microcontroller */
+	REG_UPDATE(MASTER_COMM_CMD_REG, MASTER_COMM_CMD_REG_BYTE0,
+			MCP_BL_SET_PWM_FRAC);
+
+	/* Notify microcontroller of new command */
+	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+	/* Ensure command has been executed before continuing */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 100, 800);
+}
+
+static bool dcn10_dmcu_init(struct dmcu *dmcu)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+	const struct dc_config *config = &dmcu->ctx->dc->config;
+	bool status = false;
+
+	/*  Definition of DC_DMCU_SCRATCH
+	 *  0 : firmare not loaded
+	 *  1 : PSP load DMCU FW but not initialized
+	 *  2 : Firmware already initialized
+	 */
+	dmcu->dmcu_state = REG_READ(DC_DMCU_SCRATCH);
+
+	switch (dmcu->dmcu_state) {
+	case DMCU_UNLOADED:
+		status = false;
+		break;
+	case DMCU_LOADED_UNINITIALIZED:
+		/* Wait until microcontroller is ready to process interrupt */
+		REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 100, 800);
+
+		/* Set initialized ramping boundary value */
+		REG_WRITE(MASTER_COMM_DATA_REG1, 0xFFFF);
+
+		/* Set command to initialize microcontroller */
+		REG_UPDATE(MASTER_COMM_CMD_REG, MASTER_COMM_CMD_REG_BYTE0,
+			MCP_INIT_DMCU);
+
+		/* Notify microcontroller of new command */
+		REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+		/* Ensure command has been executed before continuing */
+		REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 100, 800);
+
+		// Check state is initialized
+		dmcu->dmcu_state = REG_READ(DC_DMCU_SCRATCH);
+
+		// If microcontroller is not in running state, fail
+		if (dmcu->dmcu_state == DMCU_RUNNING) {
+			/* Retrieve and cache the DMCU firmware version. */
+			dcn10_get_dmcu_version(dmcu);
+
+			/* Initialize DMCU to use fractional PWM or not */
+			dcn10_dmcu_enable_fractional_pwm(dmcu,
+				(config->disable_fractional_pwm == false) ? 1 : 0);
+			status = true;
+		} else {
+			status = false;
+		}
+
+		break;
+	case DMCU_RUNNING:
+		status = true;
+		break;
+	default:
+		status = false;
+		break;
+	}
+
+	return status;
+}
+
+
+static bool dcn10_dmcu_load_iram(struct dmcu *dmcu,
 		unsigned int start_offset,
 		const char *src,
 		unsigned int bytes)
@@ -294,7 +435,9 @@ bool dcn10_dmcu_load_iram(struct dmcu *dmcu,
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
 	unsigned int count = 0;
 
-	REG_UPDATE(DMCU_CTRL, DMCU_ENABLE, 1);
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return false;
 
 	/* Enable write access to IRAM */
 	REG_UPDATE_2(DMCU_RAM_ACCESS_CTRL,
@@ -313,6 +456,19 @@ bool dcn10_dmcu_load_iram(struct dmcu *dmcu,
 			IRAM_HOST_ACCESS_EN, 0,
 			IRAM_WR_ADDR_AUTO_INC, 0);
 
+	/* Wait until microcontroller is ready to process interrupt */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 100, 800);
+
+	/* Set command to signal IRAM is loaded and to initialize IRAM */
+	REG_UPDATE(MASTER_COMM_CMD_REG, MASTER_COMM_CMD_REG_BYTE0,
+			MCP_INIT_IRAM);
+
+	/* Notify microcontroller of new command */
+	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+	/* Ensure command has been executed before continuing */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 100, 800);
+
 	return true;
 }
 
@@ -320,7 +476,11 @@ static void dcn10_get_dmcu_psr_state(struct dmcu *dmcu, uint32_t *psr_state)
 {
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
 
-	uint32_t psrStateOffset = 0xf0;
+	uint32_t psr_state_offset = 0xf0;
+
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return;
 
 	/* Enable write access to IRAM */
 	REG_UPDATE(DMCU_RAM_ACCESS_CTRL, IRAM_HOST_ACCESS_EN, 1);
@@ -328,7 +488,7 @@ static void dcn10_get_dmcu_psr_state(struct dmcu *dmcu, uint32_t *psr_state)
 	REG_WAIT(DMU_MEM_PWR_CNTL, DMCU_IRAM_MEM_PWR_STATE, 0, 2, 10);
 
 	/* Write address to IRAM_RD_ADDR in DMCU_IRAM_RD_CTRL */
-	REG_WRITE(DMCU_IRAM_RD_CTRL, psrStateOffset);
+	REG_WRITE(DMCU_IRAM_RD_CTRL, psr_state_offset);
 
 	/* Read data from IRAM_RD_DATA in DMCU_IRAM_RD_DATA*/
 	*psr_state = REG_READ(DMCU_IRAM_RD_DATA);
@@ -348,6 +508,13 @@ static void dcn10_dmcu_set_psr_enable(struct dmcu *dmcu, bool enable, bool wait)
 	unsigned int retryCount;
 	uint32_t psr_state = 0;
 
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return;
+
+	dcn10_get_dmcu_psr_state(dmcu, &psr_state);
+	if (psr_state == 0 && !enable)
+		return;
 	/* waitDMCUReadyForCmd */
 	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0,
 				dmcu_wait_reg_ready_interval,
@@ -369,24 +536,25 @@ static void dcn10_dmcu_set_psr_enable(struct dmcu *dmcu, bool enable, bool wait)
 	 *  least a few frames. Should never hit the max retry assert below.
 	 */
 	if (wait == true) {
-	for (retryCount = 0; retryCount <= 1000; retryCount++) {
-		dcn10_get_dmcu_psr_state(dmcu, &psr_state);
-		if (enable) {
-			if (psr_state != 0)
-				break;
-		} else {
-			if (psr_state == 0)
-				break;
+		for (retryCount = 0; retryCount <= 1000; retryCount++) {
+			dcn10_get_dmcu_psr_state(dmcu, &psr_state);
+			if (enable) {
+				if (psr_state != 0)
+					break;
+			} else {
+				if (psr_state == 0)
+					break;
+			}
+			udelay(500);
 		}
-		udelay(500);
-	}
 
-	/* assert if max retry hit */
-	ASSERT(retryCount <= 1000);
+		/* assert if max retry hit */
+		if (retryCount >= 1000)
+			ASSERT(0);
 	}
 }
 
-static void dcn10_dmcu_setup_psr(struct dmcu *dmcu,
+static bool dcn10_dmcu_setup_psr(struct dmcu *dmcu,
 		struct dc_link *link,
 		struct psr_context *psr_context)
 {
@@ -398,6 +566,10 @@ static void dcn10_dmcu_setup_psr(struct dmcu *dmcu,
 	union dce_dmcu_psr_config_data_reg1 masterCmdData1;
 	union dce_dmcu_psr_config_data_reg2 masterCmdData2;
 	union dce_dmcu_psr_config_data_reg3 masterCmdData3;
+
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return false;
 
 	link->link_enc->funcs->psr_program_dp_dphy_fast_training(link->link_enc,
 			psr_context->psrExitLinkTrainingRequired);
@@ -450,7 +622,7 @@ static void dcn10_dmcu_setup_psr(struct dmcu *dmcu,
 	link->link_enc->funcs->psr_program_secondary_packet(link->link_enc,
 			psr_context->sdpTransmitLineNumDeadline);
 
-	if (psr_context->psr_level.bits.SKIP_SMU_NOTIFICATION)
+	if (psr_context->allow_smu_optimizations)
 		REG_UPDATE(SMU_INTERRUPT_CONTROL, DC_SMU_INT_ENABLE, 1);
 
 	/* waitDMCUReadyForCmd */
@@ -471,6 +643,7 @@ static void dcn10_dmcu_setup_psr(struct dmcu *dmcu,
 			psr_context->psrFrameCaptureIndicationReq;
 	masterCmdData1.bits.aux_chan = psr_context->channel;
 	masterCmdData1.bits.aux_repeat = psr_context->aux_repeats;
+	masterCmdData1.bits.allow_smu_optimizations = psr_context->allow_smu_optimizations;
 	dm_write_reg(dmcu->ctx, REG(MASTER_COMM_DATA_REG1),
 					masterCmdData1.u32All);
 
@@ -491,12 +664,18 @@ static void dcn10_dmcu_setup_psr(struct dmcu *dmcu,
 	dm_write_reg(dmcu->ctx, REG(MASTER_COMM_DATA_REG3),
 			masterCmdData3.u32All);
 
+
 	/* setDMCUParam_Cmd */
 	REG_UPDATE(MASTER_COMM_CMD_REG,
 			MASTER_COMM_CMD_REG_BYTE0, PSR_SET);
 
 	/* notifyDMCUMsg */
 	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+	/* waitDMCUReadyForCmd */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 1, 10000);
+
+	return true;
 }
 
 static void dcn10_psr_wait_loop(
@@ -505,13 +684,18 @@ static void dcn10_psr_wait_loop(
 {
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
 	union dce_dmcu_psr_config_data_wait_loop_reg1 masterCmdData1;
+
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return;
+
 	if (wait_loop_number != 0) {
 	/* waitDMCUReadyForCmd */
 	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 1, 10000);
 
 	masterCmdData1.u32 = 0;
 	masterCmdData1.bits.wait_loop = wait_loop_number;
-	cached_wait_loop_number = wait_loop_number;
+	dmcu->cached_wait_loop_number = wait_loop_number;
 	dm_write_reg(dmcu->ctx, REG(MASTER_COMM_DATA_REG1), masterCmdData1.u32);
 
 	/* setDMCUParam_Cmd */
@@ -522,31 +706,44 @@ static void dcn10_psr_wait_loop(
 	}
 }
 
-static void dcn10_get_psr_wait_loop(unsigned int *psr_wait_loop_number)
+static void dcn10_get_psr_wait_loop(
+		struct dmcu *dmcu, unsigned int *psr_wait_loop_number)
 {
-	*psr_wait_loop_number = cached_wait_loop_number;
+	*psr_wait_loop_number = dmcu->cached_wait_loop_number;
 	return;
 }
 
-#endif
+static bool dcn10_is_dmcu_initialized(struct dmcu *dmcu)
+{
+	/* microcontroller is not running */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return false;
+	return true;
+}
+
+#endif //(CONFIG_DRM_AMD_DC_DCN1_0)
 
 static const struct dmcu_funcs dce_funcs = {
+	.dmcu_init = dce_dmcu_init,
 	.load_iram = dce_dmcu_load_iram,
 	.set_psr_enable = dce_dmcu_set_psr_enable,
 	.setup_psr = dce_dmcu_setup_psr,
 	.get_psr_state = dce_get_dmcu_psr_state,
 	.set_psr_wait_loop = dce_psr_wait_loop,
-	.get_psr_wait_loop = dce_get_psr_wait_loop
+	.get_psr_wait_loop = dce_get_psr_wait_loop,
+	.is_dmcu_initialized = dce_is_dmcu_initialized
 };
 
 #if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 static const struct dmcu_funcs dcn10_funcs = {
+	.dmcu_init = dcn10_dmcu_init,
 	.load_iram = dcn10_dmcu_load_iram,
 	.set_psr_enable = dcn10_dmcu_set_psr_enable,
 	.setup_psr = dcn10_dmcu_setup_psr,
 	.get_psr_state = dcn10_get_dmcu_psr_state,
 	.set_psr_wait_loop = dcn10_psr_wait_loop,
-	.get_psr_wait_loop = dcn10_get_psr_wait_loop
+	.get_psr_wait_loop = dcn10_get_psr_wait_loop,
+	.is_dmcu_initialized = dcn10_is_dmcu_initialized
 };
 #endif
 
@@ -561,6 +758,7 @@ static void dce_dmcu_construct(
 
 	base->ctx = ctx;
 	base->funcs = &dce_funcs;
+	base->cached_wait_loop_number = 0;
 
 	dmcu_dce->regs = regs;
 	dmcu_dce->dmcu_shift = dmcu_shift;

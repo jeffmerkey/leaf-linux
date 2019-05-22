@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM tcp
 
@@ -8,22 +9,37 @@
 #include <linux/tcp.h>
 #include <linux/tracepoint.h>
 #include <net/ipv6.h>
+#include <net/tcp.h>
+#include <linux/sock_diag.h>
 
-#define tcp_state_name(state)	{ state, #state }
-#define show_tcp_state_name(val)			\
-	__print_symbolic(val,				\
-		tcp_state_name(TCP_ESTABLISHED),	\
-		tcp_state_name(TCP_SYN_SENT),		\
-		tcp_state_name(TCP_SYN_RECV),		\
-		tcp_state_name(TCP_FIN_WAIT1),		\
-		tcp_state_name(TCP_FIN_WAIT2),		\
-		tcp_state_name(TCP_TIME_WAIT),		\
-		tcp_state_name(TCP_CLOSE),		\
-		tcp_state_name(TCP_CLOSE_WAIT),		\
-		tcp_state_name(TCP_LAST_ACK),		\
-		tcp_state_name(TCP_LISTEN),		\
-		tcp_state_name(TCP_CLOSING),		\
-		tcp_state_name(TCP_NEW_SYN_RECV))
+#define TP_STORE_V4MAPPED(__entry, saddr, daddr)		\
+	do {							\
+		struct in6_addr *pin6;				\
+								\
+		pin6 = (struct in6_addr *)__entry->saddr_v6;	\
+		ipv6_addr_set_v4mapped(saddr, pin6);		\
+		pin6 = (struct in6_addr *)__entry->daddr_v6;	\
+		ipv6_addr_set_v4mapped(daddr, pin6);		\
+	} while (0)
+
+#if IS_ENABLED(CONFIG_IPV6)
+#define TP_STORE_ADDRS(__entry, saddr, daddr, saddr6, daddr6)		\
+	do {								\
+		if (sk->sk_family == AF_INET6) {			\
+			struct in6_addr *pin6;				\
+									\
+			pin6 = (struct in6_addr *)__entry->saddr_v6;	\
+			*pin6 = saddr6;					\
+			pin6 = (struct in6_addr *)__entry->daddr_v6;	\
+			*pin6 = daddr6;					\
+		} else {						\
+			TP_STORE_V4MAPPED(__entry, saddr, daddr);	\
+		}							\
+	} while (0)
+#else
+#define TP_STORE_ADDRS(__entry, saddr, daddr, saddr6, daddr6)	\
+	TP_STORE_V4MAPPED(__entry, saddr, daddr)
+#endif
 
 /*
  * tcp event with arguments sk and skb
@@ -40,6 +56,7 @@ DECLARE_EVENT_CLASS(tcp_event_sk_skb,
 	TP_STRUCT__entry(
 		__field(const void *, skbaddr)
 		__field(const void *, skaddr)
+		__field(int, state)
 		__field(__u16, sport)
 		__field(__u16, dport)
 		__array(__u8, saddr, 4)
@@ -50,11 +67,11 @@ DECLARE_EVENT_CLASS(tcp_event_sk_skb,
 
 	TP_fast_assign(
 		struct inet_sock *inet = inet_sk(sk);
-		struct in6_addr *pin6;
 		__be32 *p32;
 
 		__entry->skbaddr = skb;
 		__entry->skaddr = sk;
+		__entry->state = sk->sk_state;
 
 		__entry->sport = ntohs(inet->inet_sport);
 		__entry->dport = ntohs(inet->inet_dport);
@@ -65,25 +82,14 @@ DECLARE_EVENT_CLASS(tcp_event_sk_skb,
 		p32 = (__be32 *) __entry->daddr;
 		*p32 =  inet->inet_daddr;
 
-#if IS_ENABLED(CONFIG_IPV6)
-		if (sk->sk_family == AF_INET6) {
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			*pin6 = sk->sk_v6_rcv_saddr;
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			*pin6 = sk->sk_v6_daddr;
-		} else
-#endif
-		{
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			ipv6_addr_set_v4mapped(inet->inet_saddr, pin6);
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			ipv6_addr_set_v4mapped(inet->inet_daddr, pin6);
-		}
+		TP_STORE_ADDRS(__entry, inet->inet_saddr, inet->inet_daddr,
+			      sk->sk_v6_rcv_saddr, sk->sk_v6_daddr);
 	),
 
-	TP_printk("sport=%hu dport=%hu saddr=%pI4 daddr=%pI4 saddrv6=%pI6c daddrv6=%pI6c",
+	TP_printk("sport=%hu dport=%hu saddr=%pI4 daddr=%pI4 saddrv6=%pI6c daddrv6=%pI6c state=%s\n",
 		  __entry->sport, __entry->dport, __entry->saddr, __entry->daddr,
-		  __entry->saddr_v6, __entry->daddr_v6)
+		  __entry->saddr_v6, __entry->daddr_v6,
+		  show_tcp_state_name(__entry->state))
 );
 
 DEFINE_EVENT(tcp_event_sk_skb, tcp_retransmit_skb,
@@ -111,7 +117,7 @@ DEFINE_EVENT(tcp_event_sk_skb, tcp_send_reset,
  */
 DECLARE_EVENT_CLASS(tcp_event_sk,
 
-	TP_PROTO(const struct sock *sk),
+	TP_PROTO(struct sock *sk),
 
 	TP_ARGS(sk),
 
@@ -123,11 +129,11 @@ DECLARE_EVENT_CLASS(tcp_event_sk,
 		__array(__u8, daddr, 4)
 		__array(__u8, saddr_v6, 16)
 		__array(__u8, daddr_v6, 16)
+		__field(__u64, sock_cookie)
 	),
 
 	TP_fast_assign(
 		struct inet_sock *inet = inet_sk(sk);
-		struct in6_addr *pin6;
 		__be32 *p32;
 
 		__entry->skaddr = sk;
@@ -141,100 +147,38 @@ DECLARE_EVENT_CLASS(tcp_event_sk,
 		p32 = (__be32 *) __entry->daddr;
 		*p32 =  inet->inet_daddr;
 
-#if IS_ENABLED(CONFIG_IPV6)
-		if (sk->sk_family == AF_INET6) {
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			*pin6 = sk->sk_v6_rcv_saddr;
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			*pin6 = sk->sk_v6_daddr;
-		} else
-#endif
-		{
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			ipv6_addr_set_v4mapped(inet->inet_saddr, pin6);
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			ipv6_addr_set_v4mapped(inet->inet_daddr, pin6);
-		}
+		TP_STORE_ADDRS(__entry, inet->inet_saddr, inet->inet_daddr,
+			       sk->sk_v6_rcv_saddr, sk->sk_v6_daddr);
+
+		__entry->sock_cookie = sock_gen_cookie(sk);
 	),
 
-	TP_printk("sport=%hu dport=%hu saddr=%pI4 daddr=%pI4 saddrv6=%pI6c daddrv6=%pI6c",
+	TP_printk("sport=%hu dport=%hu saddr=%pI4 daddr=%pI4 saddrv6=%pI6c daddrv6=%pI6c sock_cookie=%llx",
 		  __entry->sport, __entry->dport,
 		  __entry->saddr, __entry->daddr,
-		  __entry->saddr_v6, __entry->daddr_v6)
+		  __entry->saddr_v6, __entry->daddr_v6,
+		  __entry->sock_cookie)
 );
 
 DEFINE_EVENT(tcp_event_sk, tcp_receive_reset,
 
-	TP_PROTO(const struct sock *sk),
+	TP_PROTO(struct sock *sk),
 
 	TP_ARGS(sk)
 );
 
 DEFINE_EVENT(tcp_event_sk, tcp_destroy_sock,
 
-	TP_PROTO(const struct sock *sk),
+	TP_PROTO(struct sock *sk),
 
 	TP_ARGS(sk)
 );
 
-TRACE_EVENT(tcp_set_state,
+DEFINE_EVENT(tcp_event_sk, tcp_rcv_space_adjust,
 
-	TP_PROTO(const struct sock *sk, const int oldstate, const int newstate),
+	TP_PROTO(struct sock *sk),
 
-	TP_ARGS(sk, oldstate, newstate),
-
-	TP_STRUCT__entry(
-		__field(const void *, skaddr)
-		__field(int, oldstate)
-		__field(int, newstate)
-		__field(__u16, sport)
-		__field(__u16, dport)
-		__array(__u8, saddr, 4)
-		__array(__u8, daddr, 4)
-		__array(__u8, saddr_v6, 16)
-		__array(__u8, daddr_v6, 16)
-	),
-
-	TP_fast_assign(
-		struct inet_sock *inet = inet_sk(sk);
-		struct in6_addr *pin6;
-		__be32 *p32;
-
-		__entry->skaddr = sk;
-		__entry->oldstate = oldstate;
-		__entry->newstate = newstate;
-
-		__entry->sport = ntohs(inet->inet_sport);
-		__entry->dport = ntohs(inet->inet_dport);
-
-		p32 = (__be32 *) __entry->saddr;
-		*p32 = inet->inet_saddr;
-
-		p32 = (__be32 *) __entry->daddr;
-		*p32 =  inet->inet_daddr;
-
-#if IS_ENABLED(CONFIG_IPV6)
-		if (sk->sk_family == AF_INET6) {
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			*pin6 = sk->sk_v6_rcv_saddr;
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			*pin6 = sk->sk_v6_daddr;
-		} else
-#endif
-		{
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			ipv6_addr_set_v4mapped(inet->inet_saddr, pin6);
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			ipv6_addr_set_v4mapped(inet->inet_daddr, pin6);
-		}
-	),
-
-	TP_printk("sport=%hu dport=%hu saddr=%pI4 daddr=%pI4 saddrv6=%pI6c daddrv6=%pI6c oldstate=%s newstate=%s",
-		  __entry->sport, __entry->dport,
-		  __entry->saddr, __entry->daddr,
-		  __entry->saddr_v6, __entry->daddr_v6,
-		  show_tcp_state_name(__entry->oldstate),
-		  show_tcp_state_name(__entry->newstate))
+	TP_ARGS(sk)
 );
 
 TRACE_EVENT(tcp_retransmit_synack,
@@ -256,7 +200,6 @@ TRACE_EVENT(tcp_retransmit_synack,
 
 	TP_fast_assign(
 		struct inet_request_sock *ireq = inet_rsk(req);
-		struct in6_addr *pin6;
 		__be32 *p32;
 
 		__entry->skaddr = sk;
@@ -271,26 +214,73 @@ TRACE_EVENT(tcp_retransmit_synack,
 		p32 = (__be32 *) __entry->daddr;
 		*p32 = ireq->ir_rmt_addr;
 
-#if IS_ENABLED(CONFIG_IPV6)
-		if (sk->sk_family == AF_INET6) {
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			*pin6 = ireq->ir_v6_loc_addr;
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			*pin6 = ireq->ir_v6_rmt_addr;
-		} else
-#endif
-		{
-			pin6 = (struct in6_addr *)__entry->saddr_v6;
-			ipv6_addr_set_v4mapped(ireq->ir_loc_addr, pin6);
-			pin6 = (struct in6_addr *)__entry->daddr_v6;
-			ipv6_addr_set_v4mapped(ireq->ir_rmt_addr, pin6);
-		}
+		TP_STORE_ADDRS(__entry, ireq->ir_loc_addr, ireq->ir_rmt_addr,
+			      ireq->ir_v6_loc_addr, ireq->ir_v6_rmt_addr);
 	),
 
 	TP_printk("sport=%hu dport=%hu saddr=%pI4 daddr=%pI4 saddrv6=%pI6c daddrv6=%pI6c",
 		  __entry->sport, __entry->dport,
 		  __entry->saddr, __entry->daddr,
 		  __entry->saddr_v6, __entry->daddr_v6)
+);
+
+#include <trace/events/net_probe_common.h>
+
+TRACE_EVENT(tcp_probe,
+
+	TP_PROTO(struct sock *sk, struct sk_buff *skb),
+
+	TP_ARGS(sk, skb),
+
+	TP_STRUCT__entry(
+		/* sockaddr_in6 is always bigger than sockaddr_in */
+		__array(__u8, saddr, sizeof(struct sockaddr_in6))
+		__array(__u8, daddr, sizeof(struct sockaddr_in6))
+		__field(__u16, sport)
+		__field(__u16, dport)
+		__field(__u32, mark)
+		__field(__u16, data_len)
+		__field(__u32, snd_nxt)
+		__field(__u32, snd_una)
+		__field(__u32, snd_cwnd)
+		__field(__u32, ssthresh)
+		__field(__u32, snd_wnd)
+		__field(__u32, srtt)
+		__field(__u32, rcv_wnd)
+		__field(__u64, sock_cookie)
+	),
+
+	TP_fast_assign(
+		const struct tcphdr *th = (const struct tcphdr *)skb->data;
+		const struct inet_sock *inet = inet_sk(sk);
+		const struct tcp_sock *tp = tcp_sk(sk);
+
+		memset(__entry->saddr, 0, sizeof(struct sockaddr_in6));
+		memset(__entry->daddr, 0, sizeof(struct sockaddr_in6));
+
+		TP_STORE_ADDR_PORTS(__entry, inet, sk);
+
+		/* For filtering use */
+		__entry->sport = ntohs(inet->inet_sport);
+		__entry->dport = ntohs(inet->inet_dport);
+		__entry->mark = skb->mark;
+
+		__entry->data_len = skb->len - __tcp_hdrlen(th);
+		__entry->snd_nxt = tp->snd_nxt;
+		__entry->snd_una = tp->snd_una;
+		__entry->snd_cwnd = tp->snd_cwnd;
+		__entry->snd_wnd = tp->snd_wnd;
+		__entry->rcv_wnd = tp->rcv_wnd;
+		__entry->ssthresh = tcp_current_ssthresh(sk);
+		__entry->srtt = tp->srtt_us >> 3;
+		__entry->sock_cookie = sock_gen_cookie(sk);
+	),
+
+	TP_printk("src=%pISpc dest=%pISpc mark=%#x data_len=%d snd_nxt=%#x snd_una=%#x snd_cwnd=%u ssthresh=%u snd_wnd=%u srtt=%u rcv_wnd=%u sock_cookie=%llx",
+		  __entry->saddr, __entry->daddr, __entry->mark,
+		  __entry->data_len, __entry->snd_nxt, __entry->snd_una,
+		  __entry->snd_cwnd, __entry->ssthresh, __entry->snd_wnd,
+		  __entry->srtt, __entry->rcv_wnd, __entry->sock_cookie)
 );
 
 #endif /* _TRACE_TCP_H */

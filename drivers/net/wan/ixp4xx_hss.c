@@ -22,8 +22,8 @@
 #include <linux/platform_device.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
-#include <mach/npe.h>
-#include <mach/qmgr.h>
+#include <linux/soc/ixp4xx/npe.h>
+#include <linux/soc/ixp4xx/qmgr.h>
 
 #define DEBUG_DESC		0
 #define DEBUG_RX		0
@@ -246,7 +246,7 @@
 #ifdef __ARMEB__
 typedef struct sk_buff buffer_t;
 #define free_buffer dev_kfree_skb
-#define free_buffer_irq dev_kfree_skb_irq
+#define free_buffer_irq dev_consume_skb_irq
 #else
 typedef void buffer_t;
 #define free_buffer kfree

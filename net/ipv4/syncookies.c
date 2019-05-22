@@ -88,7 +88,7 @@ u64 cookie_init_timestamp(struct request_sock *req)
 		ts <<= TSBITS;
 		ts |= options;
 	}
-	return (u64)ts * (USEC_PER_SEC / TCP_TS_HZ);
+	return (u64)ts * (NSEC_PER_SEC / TCP_TS_HZ);
 }
 
 
@@ -216,11 +216,15 @@ struct sock *tcp_get_cookie_sock(struct sock *sk, struct sk_buff *skb,
 		refcount_set(&req->rsk_refcnt, 1);
 		tcp_sk(child)->tsoffset = tsoff;
 		sock_rps_save_rxhash(child, skb);
-		inet_csk_reqsk_queue_add(sk, req, child);
-	} else {
-		reqsk_free(req);
+		if (inet_csk_reqsk_queue_add(sk, req, child))
+			return child;
+
+		bh_unlock_sock(child);
+		sock_put(child);
 	}
-	return child;
+	__reqsk_free(req);
+
+	return NULL;
 }
 EXPORT_SYMBOL(tcp_get_cookie_sock);
 
@@ -349,6 +353,8 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	req->ts_recent		= tcp_opt.saw_tstamp ? tcp_opt.rcv_tsval : 0;
 	treq->snt_synack	= 0;
 	treq->tfo_listener	= false;
+	if (IS_ENABLED(CONFIG_SMC))
+		ireq->smc_ok = 0;
 
 	ireq->ir_iif = inet_request_bound_dev_if(sk, skb);
 

@@ -21,14 +21,13 @@ static const char *const afs_voltypes[] = { "R/W", "R/O", "BAK" };
 /*
  * Allocate a volume record and load it up from a vldb record.
  */
-static struct afs_volume *afs_alloc_volume(struct afs_mount_params *params,
+static struct afs_volume *afs_alloc_volume(struct afs_fs_context *params,
 					   struct afs_vldb_entry *vldb,
 					   unsigned long type_mask)
 {
 	struct afs_server_list *slist;
-	struct afs_server *server;
 	struct afs_volume *volume;
-	int ret = -ENOMEM, nr_servers = 0, i, j;
+	int ret = -ENOMEM, nr_servers = 0, i;
 
 	for (i = 0; i < vldb->nr_servers; i++)
 		if (vldb->fs_mask[i] & type_mask)
@@ -58,50 +57,10 @@ static struct afs_volume *afs_alloc_volume(struct afs_mount_params *params,
 
 	refcount_set(&slist->usage, 1);
 	volume->servers = slist;
-
-	/* Make sure a records exists for each server this volume occupies. */
-	for (i = 0; i < nr_servers; i++) {
-		if (!(vldb->fs_mask[i] & type_mask))
-			continue;
-
-		server = afs_lookup_server(params->cell, params->key,
-					   &vldb->fs_server[i]);
-		if (IS_ERR(server)) {
-			ret = PTR_ERR(server);
-			if (ret == -ENOENT)
-				continue;
-			goto error_2;
-		}
-
-		/* Insertion-sort by server pointer */
-		for (j = 0; j < slist->nr_servers; j++)
-			if (slist->servers[j].server >= server)
-				break;
-		if (j < slist->nr_servers) {
-			if (slist->servers[j].server == server) {
-				afs_put_server(params->net, server);
-				continue;
-			}
-
-			memmove(slist->servers + j + 1,
-				slist->servers + j,
-				(slist->nr_servers - j) * sizeof(struct afs_server_entry));
-		}
-
-		slist->servers[j].server = server;
-		slist->nr_servers++;
-	}
-
-	if (slist->nr_servers == 0) {
-		ret = -EDESTADDRREQ;
-		goto error_2;
-	}
-
 	return volume;
 
-error_2:
-	afs_put_serverlist(params->net, slist);
 error_1:
+	afs_put_cell(params->net, volume->cell);
 	kfree(volume);
 error_0:
 	return ERR_PTR(ret);
@@ -115,55 +74,19 @@ static struct afs_vldb_entry *afs_vl_lookup_vldb(struct afs_cell *cell,
 						 const char *volname,
 						 size_t volnamesz)
 {
-	struct afs_addr_cursor ac;
-	struct afs_vldb_entry *vldb;
+	struct afs_vldb_entry *vldb = ERR_PTR(-EDESTADDRREQ);
+	struct afs_vl_cursor vc;
 	int ret;
 
-	ret = afs_set_vl_cursor(&ac, cell);
-	if (ret < 0)
-		return ERR_PTR(ret);
+	if (!afs_begin_vlserver_operation(&vc, cell, key))
+		return ERR_PTR(-ERESTARTSYS);
 
-	while (afs_iterate_addresses(&ac)) {
-		if (!test_bit(ac.index, &ac.alist->probed)) {
-			ret = afs_vl_get_capabilities(cell->net, &ac, key);
-			switch (ret) {
-			case VL_SERVICE:
-				clear_bit(ac.index, &ac.alist->yfs);
-				set_bit(ac.index, &ac.alist->probed);
-				ac.addr->srx_service = ret;
-				break;
-			case YFS_VL_SERVICE:
-				set_bit(ac.index, &ac.alist->yfs);
-				set_bit(ac.index, &ac.alist->probed);
-				ac.addr->srx_service = ret;
-				break;
-			}
-		}
-		
-		vldb = afs_vl_get_entry_by_name_u(cell->net, &ac, key,
-						  volname, volnamesz);
-		switch (ac.error) {
-		case 0:
-			afs_end_cursor(&ac);
-			return vldb;
-		case -ECONNABORTED:
-			ac.error = afs_abort_to_error(ac.abort_code);
-			goto error;
-		case -ENOMEM:
-		case -ENONET:
-			goto error;
-		case -ENETUNREACH:
-		case -EHOSTUNREACH:
-		case -ECONNREFUSED:
-			break;
-		default:
-			ac.error = -EIO;
-			goto error;
-		}
+	while (afs_select_vlserver(&vc)) {
+		vldb = afs_vl_get_entry_by_name_u(&vc, volname, volnamesz);
 	}
 
-error:
-	return ERR_PTR(afs_end_cursor(&ac));
+	ret = afs_end_vlserver_operation(&vc);
+	return ret < 0 ? ERR_PTR(ret) : vldb;
 }
 
 /*
@@ -190,7 +113,7 @@ error:
  * - Rule 3: If parent volume is R/W, then only mount R/W volume unless
  *           explicitly told otherwise
  */
-struct afs_volume *afs_create_volume(struct afs_mount_params *params)
+struct afs_volume *afs_create_volume(struct afs_fs_context *params)
 {
 	struct afs_vldb_entry *vldb;
 	struct afs_volume *volume;
@@ -266,7 +189,9 @@ void afs_activate_volume(struct afs_volume *volume)
 #ifdef CONFIG_AFS_FSCACHE
 	volume->cache = fscache_acquire_cookie(volume->cell->cache,
 					       &afs_volume_cache_index_def,
-					       volume, true);
+					       &volume->vid, sizeof(volume->vid),
+					       NULL, 0,
+					       volume, 0, true);
 #endif
 
 	write_lock(&volume->cell->proc_lock);
@@ -286,7 +211,7 @@ void afs_deactivate_volume(struct afs_volume *volume)
 	write_unlock(&volume->cell->proc_lock);
 
 #ifdef CONFIG_AFS_FSCACHE
-	fscache_relinquish_cookie(volume->cache,
+	fscache_relinquish_cookie(volume->cache, NULL,
 				  test_bit(AFS_VOLUME_DELETED, &volume->flags));
 	volume->cache = NULL;
 #endif
@@ -309,7 +234,7 @@ static int afs_update_volume_status(struct afs_volume *volume, struct key *key)
 	/* We look up an ID by passing it as a decimal string in the
 	 * operation's name parameter.
 	 */
-	idsz = sprintf(idbuf, "%u", volume->vid);
+	idsz = sprintf(idbuf, "%llu", volume->vid);
 
 	vldb = afs_vl_lookup_vldb(volume->cell, key, idbuf, idsz);
 	if (IS_ERR(vldb)) {
@@ -327,7 +252,7 @@ static int afs_update_volume_status(struct afs_volume *volume, struct key *key)
 
 	/* See if the volume's server list got updated. */
 	new = afs_alloc_server_list(volume->cell, key,
-				      vldb, (1 << volume->type));
+				    vldb, (1 << volume->type));
 	if (IS_ERR(new)) {
 		ret = PTR_ERR(new);
 		goto error_vldb;

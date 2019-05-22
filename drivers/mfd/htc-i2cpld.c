@@ -27,7 +27,6 @@
 
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/i2c.h>
@@ -477,12 +476,12 @@ static int htcpld_setup_chips(struct platform_device *pdev)
 
 	/* Setup each chip's output GPIOs */
 	htcpld->nchips = pdata->num_chip;
-	htcpld->chip = devm_kzalloc(dev, sizeof(struct htcpld_chip) * htcpld->nchips,
+	htcpld->chip = devm_kcalloc(dev,
+				    htcpld->nchips,
+				    sizeof(struct htcpld_chip),
 				    GFP_KERNEL);
-	if (!htcpld->chip) {
-		dev_warn(dev, "Unable to allocate memory for chips\n");
+	if (!htcpld->chip)
 		return -ENOMEM;
-	}
 
 	/* Add the chips as best we can */
 	for (i = 0; i < htcpld->nchips; i++) {
@@ -614,8 +613,6 @@ static const struct i2c_device_id htcpld_chip_id[] = {
 	{ "htcpld-chip", 0 },
 	{ }
 };
-MODULE_DEVICE_TABLE(i2c, htcpld_chip_id);
-
 
 static struct i2c_driver htcpld_chip_driver = {
 	.driver = {
@@ -643,17 +640,4 @@ static int __init htcpld_core_init(void)
 	/* Probe for our chips */
 	return platform_driver_probe(&htcpld_core_driver, htcpld_core_probe);
 }
-
-static void __exit htcpld_core_exit(void)
-{
-	i2c_del_driver(&htcpld_chip_driver);
-	platform_driver_unregister(&htcpld_core_driver);
-}
-
-module_init(htcpld_core_init);
-module_exit(htcpld_core_exit);
-
-MODULE_AUTHOR("Cory Maccarrone <darkstar6262@gmail.com>");
-MODULE_DESCRIPTION("I2C HTC PLD Driver");
-MODULE_LICENSE("GPL");
-
+device_initcall(htcpld_core_init);

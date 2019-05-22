@@ -395,6 +395,7 @@ static void dm9000_set_io(struct board_info *db, int byte_width)
 
 	case 3:
 		dev_dbg(db->dev, ": 3 byte IO, falling back to 16bit\n");
+		/* fall through */
 	case 2:
 		db->dumpblk = dm9000_dumpblk_16bit;
 		db->outblk  = dm9000_outblk_16bit;
@@ -1411,8 +1412,8 @@ static struct dm9000_plat_data *dm9000_parse_dt(struct device *dev)
 		pdata->flags |= DM9000_PLATF_NO_EEPROM;
 
 	mac_addr = of_get_mac_address(np);
-	if (mac_addr)
-		memcpy(pdata->dev_addr, mac_addr, sizeof(pdata->dev_addr));
+	if (!IS_ERR(mac_addr))
+		ether_addr_copy(pdata->dev_addr, mac_addr);
 
 	return pdata;
 }
@@ -1722,8 +1723,7 @@ out:
 static int
 dm9000_drv_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct net_device *ndev = platform_get_drvdata(pdev);
+	struct net_device *ndev = dev_get_drvdata(dev);
 	struct board_info *db;
 
 	if (ndev) {
@@ -1745,8 +1745,7 @@ dm9000_drv_suspend(struct device *dev)
 static int
 dm9000_drv_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct net_device *ndev = platform_get_drvdata(pdev);
+	struct net_device *ndev = dev_get_drvdata(dev);
 	struct board_info *db = netdev_priv(ndev);
 
 	if (ndev) {

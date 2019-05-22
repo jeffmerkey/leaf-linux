@@ -175,6 +175,7 @@ static int squashfs_fill_super(struct super_block *sb, void *data, int silent)
 	msblk->inode_table = le64_to_cpu(sblk->inode_table_start);
 	msblk->directory_table = le64_to_cpu(sblk->directory_table_start);
 	msblk->inodes = le32_to_cpu(sblk->inodes);
+	msblk->fragments = le32_to_cpu(sblk->fragments);
 	flags = le16_to_cpu(sblk->flags);
 
 	TRACE("Found valid superblock on %pg\n", sb->s_bdev);
@@ -185,7 +186,7 @@ static int squashfs_fill_super(struct super_block *sb, void *data, int silent)
 	TRACE("Filesystem size %lld bytes\n", msblk->bytes_used);
 	TRACE("Block size %d\n", msblk->block_size);
 	TRACE("Number of inodes %d\n", msblk->inodes);
-	TRACE("Number of fragments %d\n", le32_to_cpu(sblk->fragments));
+	TRACE("Number of fragments %d\n", msblk->fragments);
 	TRACE("Number of ids %d\n", le16_to_cpu(sblk->no_ids));
 	TRACE("sblk->inode_table_start %llx\n", msblk->inode_table);
 	TRACE("sblk->directory_table_start %llx\n", msblk->directory_table);
@@ -272,7 +273,7 @@ allocate_id_index_table:
 	sb->s_export_op = &squashfs_export_ops;
 
 handle_fragments:
-	fragments = le32_to_cpu(sblk->fragments);
+	fragments = msblk->fragments;
 	if (fragments == 0)
 		goto check_directory_table;
 
@@ -472,17 +473,10 @@ static struct inode *squashfs_alloc_inode(struct super_block *sb)
 }
 
 
-static void squashfs_i_callback(struct rcu_head *head)
+static void squashfs_free_inode(struct inode *inode)
 {
-	struct inode *inode = container_of(head, struct inode, i_rcu);
 	kmem_cache_free(squashfs_inode_cachep, squashfs_i(inode));
 }
-
-static void squashfs_destroy_inode(struct inode *inode)
-{
-	call_rcu(&inode->i_rcu, squashfs_i_callback);
-}
-
 
 static struct file_system_type squashfs_fs_type = {
 	.owner = THIS_MODULE,
@@ -495,7 +489,7 @@ MODULE_ALIAS_FS("squashfs");
 
 static const struct super_operations squashfs_super_ops = {
 	.alloc_inode = squashfs_alloc_inode,
-	.destroy_inode = squashfs_destroy_inode,
+	.free_inode = squashfs_free_inode,
 	.statfs = squashfs_statfs,
 	.put_super = squashfs_put_super,
 	.remount_fs = squashfs_remount

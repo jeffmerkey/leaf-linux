@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <media/drv-intf/saa7146_vv.h>
@@ -105,7 +106,7 @@ void saa7146_buffer_finish(struct saa7146_dev *dev,
 	}
 
 	q->curr->vb.state = state;
-	v4l2_get_timestamp(&q->curr->vb.ts);
+	q->curr->vb.ts = ktime_get_ns();
 	wake_up(&q->curr->vb.done);
 
 	q->curr = NULL;
@@ -320,19 +321,19 @@ static int fops_mmap(struct file *file, struct vm_area_struct * vma)
 	return res;
 }
 
-static unsigned int __fops_poll(struct file *file, struct poll_table_struct *wait)
+static __poll_t __fops_poll(struct file *file, struct poll_table_struct *wait)
 {
 	struct video_device *vdev = video_devdata(file);
 	struct saa7146_fh *fh = file->private_data;
 	struct videobuf_buffer *buf = NULL;
 	struct videobuf_queue *q;
-	unsigned int res = v4l2_ctrl_poll(file, wait);
+	__poll_t res = v4l2_ctrl_poll(file, wait);
 
 	DEB_EE("file:%p, poll:%p\n", file, wait);
 
 	if (vdev->vfl_type == VFL_TYPE_VBI) {
 		if (fh->dev->ext_vv_data->capabilities & V4L2_CAP_SLICED_VBI_OUTPUT)
-			return res | POLLOUT | POLLWRNORM;
+			return res | EPOLLOUT | EPOLLWRNORM;
 		if( 0 == fh->vbi_q.streaming )
 			return res | videobuf_poll_stream(file, &fh->vbi_q, wait);
 		q = &fh->vbi_q;
@@ -346,23 +347,23 @@ static unsigned int __fops_poll(struct file *file, struct poll_table_struct *wai
 
 	if (!buf) {
 		DEB_D("buf == NULL!\n");
-		return res | POLLERR;
+		return res | EPOLLERR;
 	}
 
 	poll_wait(file, &buf->done, wait);
 	if (buf->state == VIDEOBUF_DONE || buf->state == VIDEOBUF_ERROR) {
 		DEB_D("poll succeeded!\n");
-		return res | POLLIN | POLLRDNORM;
+		return res | EPOLLIN | EPOLLRDNORM;
 	}
 
 	DEB_D("nothing to poll for, buf->state:%d\n", buf->state);
 	return res;
 }
 
-static unsigned int fops_poll(struct file *file, struct poll_table_struct *wait)
+static __poll_t fops_poll(struct file *file, struct poll_table_struct *wait)
 {
 	struct video_device *vdev = video_devdata(file);
-	unsigned int res;
+	__poll_t res;
 
 	mutex_lock(vdev->lock);
 	res = __fops_poll(file, wait);
@@ -606,7 +607,7 @@ int saa7146_register_device(struct video_device *vfd, struct saa7146_dev *dev,
 	vfd->tvnorms = 0;
 	for (i = 0; i < dev->ext_vv_data->num_stds; i++)
 		vfd->tvnorms |= dev->ext_vv_data->stds[i].id;
-	strlcpy(vfd->name, name, sizeof(vfd->name));
+	strscpy(vfd->name, name, sizeof(vfd->name));
 	video_set_drvdata(vfd, dev);
 
 	err = video_register_device(vfd, type, -1);

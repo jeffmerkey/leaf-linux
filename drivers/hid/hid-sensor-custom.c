@@ -157,8 +157,7 @@ static int usage_id_cmp(const void *p1, const void *p2)
 static ssize_t enable_sensor_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
+	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%d\n", sensor_inst->enable);
 }
@@ -237,8 +236,7 @@ static ssize_t enable_sensor_store(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
+	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
 	int value;
 	int ret = -EINVAL;
 
@@ -283,8 +281,7 @@ static const struct attribute_group enable_sensor_attr_group = {
 static ssize_t show_value(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
+	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
 	struct hid_sensor_hub_attribute_info *attribute;
 	int index, usage, field_index;
 	char name[HID_CUSTOM_NAME_LENGTH];
@@ -358,7 +355,7 @@ static ssize_t show_value(struct device *dev, struct device_attribute *attr,
 						sensor_inst->hsdev,
 						sensor_inst->hsdev->usage,
 						usage, report_id,
-						SENSOR_HUB_SYNC);
+						SENSOR_HUB_SYNC, false);
 	} else if (!strncmp(name, "units", strlen("units")))
 		value = sensor_inst->fields[field_index].attribute.units;
 	else if (!strncmp(name, "unit-expo", strlen("unit-expo")))
@@ -392,8 +389,7 @@ static ssize_t show_value(struct device *dev, struct device_attribute *attr,
 static ssize_t store_value(struct device *dev, struct device_attribute *attr,
 			   const char *buf, size_t count)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
+	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
 	int index, field_index, usage;
 	char name[HID_CUSTOM_NAME_LENGTH];
 	int value;
@@ -702,11 +698,11 @@ static int hid_sensor_custom_open(struct inode *inode, struct file *file)
 	return nonseekable_open(inode, file);
 }
 
-static unsigned int hid_sensor_custom_poll(struct file *file,
+static __poll_t hid_sensor_custom_poll(struct file *file,
 					   struct poll_table_struct *wait)
 {
 	struct hid_sensor_custom *sensor_inst;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 
 	sensor_inst = container_of(file->private_data,
 				   struct hid_sensor_custom, custom_dev);
@@ -714,7 +710,7 @@ static unsigned int hid_sensor_custom_poll(struct file *file,
 	poll_wait(file, &sensor_inst->wait, wait);
 
 	if (!kfifo_is_empty(&sensor_inst->data_fifo))
-		mask = POLLIN | POLLRDNORM;
+		mask = EPOLLIN | EPOLLRDNORM;
 
 	return mask;
 }

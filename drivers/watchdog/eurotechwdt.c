@@ -290,7 +290,7 @@ static long eurwdt_ioctl(struct file *file,
 		eurwdt_timeout = time;
 		eurwdt_set_timeout(time);
 		spin_unlock(&eurwdt_lock);
-		/* Fall */
+		/* fall through */
 
 	case WDIOC_GETTIMEOUT:
 		return put_user(eurwdt_timeout, p);
@@ -316,7 +316,7 @@ static int eurwdt_open(struct inode *inode, struct file *file)
 	eurwdt_timeout = WDT_TIMEOUT;	/* initial timeout */
 	/* Activate the WDT */
 	eurwdt_activate_timer();
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 /**

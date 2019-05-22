@@ -1,35 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Linux MegaRAID driver for SAS based RAID controllers
  *
  *  Copyright (c) 2009-2013  LSI Corporation
- *  Copyright (c) 2013-2014  Avago Technologies
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU General Public License
- *  as published by the Free Software Foundation; either version 2
- *  of the License, or (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *  Copyright (c) 2013-2016  Avago Technologies
+ *  Copyright (c) 2016-2018  Broadcom Inc.
  *
  *  FILE: megaraid_sas_fp.c
  *
- *  Authors: Avago Technologies
+ *  Authors: Broadcom Inc.
  *           Sumant Patro
  *           Varad Talamacki
  *           Manoj Jose
- *           Kashyap Desai <kashyap.desai@avagotech.com>
- *           Sumit Saxena <sumit.saxena@avagotech.com>
+ *           Kashyap Desai <kashyap.desai@broadcom.com>
+ *           Sumit Saxena <sumit.saxena@broadcom.com>
  *
- *  Send feedback to: megaraidlinux.pdl@avagotech.com
- *
- *  Mail to: Avago Technologies, 350 West Trimble Road, Building 90,
- *  San Jose, California 95131
+ *  Send feedback to: megaraidlinux.pdl@broadcom.com
  */
 
 #include <linux/kernel.h>
@@ -168,7 +154,7 @@ static struct MR_LD_SPAN *MR_LdSpanPtrGet(u32 ld, u32 span,
 /*
  * This function will Populate Driver Map using firmware raid map
  */
-void MR_PopulateDrvRaidMap(struct megasas_instance *instance)
+static int MR_PopulateDrvRaidMap(struct megasas_instance *instance, u64 map_id)
 {
 	struct fusion_context *fusion = instance->ctrl_context;
 	struct MR_FW_RAID_MAP_ALL     *fw_map_old    = NULL;
@@ -181,7 +167,7 @@ void MR_PopulateDrvRaidMap(struct megasas_instance *instance)
 
 
 	struct MR_DRV_RAID_MAP_ALL *drv_map =
-			fusion->ld_drv_map[(instance->map_id & 1)];
+			fusion->ld_drv_map[(map_id & 1)];
 	struct MR_DRV_RAID_MAP *pDrvRaidMap = &drv_map->raidMap;
 	void *raid_map_data = NULL;
 
@@ -190,7 +176,7 @@ void MR_PopulateDrvRaidMap(struct megasas_instance *instance)
 	       0xff, (sizeof(u16) * MAX_LOGICAL_DRIVES_DYN));
 
 	if (instance->max_raid_mapsize) {
-		fw_map_dyn = fusion->ld_map[(instance->map_id & 1)];
+		fw_map_dyn = fusion->ld_map[(map_id & 1)];
 		desc_table =
 		(struct MR_RAID_MAP_DESC_TABLE *)((void *)fw_map_dyn + le32_to_cpu(fw_map_dyn->desc_table_offset));
 		if (desc_table != fw_map_dyn->raid_map_desc_table)
@@ -255,11 +241,11 @@ void MR_PopulateDrvRaidMap(struct megasas_instance *instance)
 
 	} else if (instance->supportmax256vd) {
 		fw_map_ext =
-			(struct MR_FW_RAID_MAP_EXT *)fusion->ld_map[(instance->map_id & 1)];
+			(struct MR_FW_RAID_MAP_EXT *)fusion->ld_map[(map_id & 1)];
 		ld_count = (u16)le16_to_cpu(fw_map_ext->ldCount);
 		if (ld_count > MAX_LOGICAL_DRIVES_EXT) {
 			dev_dbg(&instance->pdev->dev, "megaraid_sas: LD count exposed in RAID map in not valid\n");
-			return;
+			return 1;
 		}
 
 		pDrvRaidMap->ldCount = (__le16)cpu_to_le16(ld_count);
@@ -282,9 +268,15 @@ void MR_PopulateDrvRaidMap(struct megasas_instance *instance)
 			cpu_to_le32(sizeof(struct MR_FW_RAID_MAP_EXT));
 	} else {
 		fw_map_old = (struct MR_FW_RAID_MAP_ALL *)
-			fusion->ld_map[(instance->map_id & 1)];
+				fusion->ld_map[(map_id & 1)];
 		pFwRaidMap = &fw_map_old->raidMap;
 		ld_count = (u16)le32_to_cpu(pFwRaidMap->ldCount);
+		if (ld_count > MAX_LOGICAL_DRIVES) {
+			dev_dbg(&instance->pdev->dev,
+				"LD count exposed in RAID map in not valid\n");
+			return 1;
+		}
+
 		pDrvRaidMap->totalSize = pFwRaidMap->totalSize;
 		pDrvRaidMap->ldCount = (__le16)cpu_to_le16(ld_count);
 		pDrvRaidMap->fpPdIoTimeoutSec = pFwRaidMap->fpPdIoTimeoutSec;
@@ -300,12 +292,14 @@ void MR_PopulateDrvRaidMap(struct megasas_instance *instance)
 			sizeof(struct MR_DEV_HANDLE_INFO) *
 			MAX_RAIDMAP_PHYSICAL_DEVICES);
 	}
+
+	return 0;
 }
 
 /*
  * This function will validate Map info data provided by FW
  */
-u8 MR_ValidateMapInfo(struct megasas_instance *instance)
+u8 MR_ValidateMapInfo(struct megasas_instance *instance, u64 map_id)
 {
 	struct fusion_context *fusion;
 	struct MR_DRV_RAID_MAP_ALL *drv_map;
@@ -317,11 +311,11 @@ u8 MR_ValidateMapInfo(struct megasas_instance *instance)
 	u16 ld;
 	u32 expected_size;
 
-
-	MR_PopulateDrvRaidMap(instance);
+	if (MR_PopulateDrvRaidMap(instance, map_id))
+		return 0;
 
 	fusion = instance->ctrl_context;
-	drv_map = fusion->ld_drv_map[(instance->map_id & 1)];
+	drv_map = fusion->ld_drv_map[(map_id & 1)];
 	pDrvRaidMap = &drv_map->raidMap;
 
 	lbInfo = fusion->load_balance_info;
@@ -737,7 +731,7 @@ static u8 mr_spanset_get_phy_params(struct megasas_instance *instance, u32 ld,
 		*pDevHandle = MR_PdDevHandleGet(pd, map);
 		*pPdInterface = MR_PdInterfaceTypeGet(pd, map);
 		/* get second pd also for raid 1/10 fast path writes*/
-		if ((instance->adapter_type == VENTURA_SERIES) &&
+		if ((instance->adapter_type >= VENTURA_SERIES) &&
 		    (raid->level == 1) &&
 		    !io_info->isRead) {
 			r1_alt_pd = MR_ArPdGet(arRef, physArm + 1, map);
@@ -762,7 +756,7 @@ static u8 mr_spanset_get_phy_params(struct megasas_instance *instance, u32 ld,
 	}
 
 	*pdBlock += stripRef + le64_to_cpu(MR_LdSpanPtrGet(ld, span, map)->startBlk);
-	if (instance->adapter_type == VENTURA_SERIES) {
+	if (instance->adapter_type >= VENTURA_SERIES) {
 		((struct RAID_CONTEXT_G35 *)pRAID_Context)->span_arm =
 			(span << RAID_CTX_SPANARM_SPAN_SHIFT) | physArm;
 		io_info->span_arm =
@@ -853,7 +847,7 @@ u8 MR_GetPhyParams(struct megasas_instance *instance, u32 ld, u64 stripRow,
 		*pDevHandle = MR_PdDevHandleGet(pd, map);
 		*pPdInterface = MR_PdInterfaceTypeGet(pd, map);
 		/* get second pd also for raid 1/10 fast path writes*/
-		if ((instance->adapter_type == VENTURA_SERIES) &&
+		if ((instance->adapter_type >= VENTURA_SERIES) &&
 		    (raid->level == 1) &&
 		    !io_info->isRead) {
 			r1_alt_pd = MR_ArPdGet(arRef, physArm + 1, map);
@@ -880,7 +874,7 @@ u8 MR_GetPhyParams(struct megasas_instance *instance, u32 ld, u64 stripRow,
 	}
 
 	*pdBlock += stripRef + le64_to_cpu(MR_LdSpanPtrGet(ld, span, map)->startBlk);
-	if (instance->adapter_type == VENTURA_SERIES) {
+	if (instance->adapter_type >= VENTURA_SERIES) {
 		((struct RAID_CONTEXT_G35 *)pRAID_Context)->span_arm =
 				(span << RAID_CTX_SPANARM_SPAN_SHIFT) | physArm;
 		io_info->span_arm =
@@ -1258,7 +1252,7 @@ void mr_update_load_balance_params(struct MR_DRV_RAID_MAP_ALL *drv_map,
 
 	for (ldCount = 0; ldCount < MAX_LOGICAL_DRIVES_EXT; ldCount++) {
 		ld = MR_TargetIdToLdGet(ldCount, drv_map);
-		if (ld >= MAX_LOGICAL_DRIVES_EXT) {
+		if (ld >= MAX_LOGICAL_DRIVES_EXT - 1) {
 			lbInfo[ldCount].loadBalanceFlag = 0;
 			continue;
 		}

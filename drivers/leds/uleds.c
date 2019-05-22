@@ -74,7 +74,7 @@ static int uleds_open(struct inode *inode, struct file *file)
 	udev->state = ULEDS_STATE_UNKNOWN;
 
 	file->private_data = udev;
-	nonseekable_open(inode, file);
+	stream_open(inode, file);
 
 	return 0;
 }
@@ -176,14 +176,14 @@ static ssize_t uleds_read(struct file *file, char __user *buffer, size_t count,
 	return retval;
 }
 
-static unsigned int uleds_poll(struct file *file, poll_table *wait)
+static __poll_t uleds_poll(struct file *file, poll_table *wait)
 {
 	struct uleds_device *udev = file->private_data;
 
 	poll_wait(file, &udev->waitq, wait);
 
 	if (udev->new_data)
-		return POLLIN | POLLRDNORM;
+		return EPOLLIN | EPOLLRDNORM;
 
 	return 0;
 }

@@ -143,7 +143,7 @@ static int pxa_cpufreq_change_voltage(const struct pxa_freqs *pxa_freq)
 	return ret;
 }
 
-static void __init pxa_cpufreq_init_voltages(void)
+static void pxa_cpufreq_init_voltages(void)
 {
 	vcc_core = regulator_get(NULL, "vcc_core");
 	if (IS_ERR(vcc_core)) {
@@ -159,7 +159,7 @@ static int pxa_cpufreq_change_voltage(const struct pxa_freqs *pxa_freq)
 	return 0;
 }
 
-static void __init pxa_cpufreq_init_voltages(void) { }
+static void pxa_cpufreq_init_voltages(void) { }
 #endif
 
 static void find_freq_tables(struct cpufreq_frequency_table **freq_table,
@@ -292,10 +292,10 @@ static int pxa_cpufreq_init(struct cpufreq_policy *policy)
 		pr_info("using %s frequency table\n",
 			pxa255_turbo_table ? "turbo" : "run");
 
-		cpufreq_table_validate_and_show(policy, pxa255_freq_table);
+		policy->freq_table = pxa255_freq_table;
 	}
 	else if (cpu_is_pxa27x()) {
-		cpufreq_table_validate_and_show(policy, pxa27x_freq_table);
+		policy->freq_table = pxa27x_freq_table;
 	}
 
 	pr_info("frequency change support initialized\n");

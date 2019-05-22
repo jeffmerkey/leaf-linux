@@ -137,7 +137,7 @@ inline u32 i40iw_rd32(struct i40iw_hw *hw, u32 reg)
 }
 
 /**
- * i40iw_inetaddr_event - system notifier for netdev events
+ * i40iw_inetaddr_event - system notifier for ipv4 addr events
  * @notfier: not used
  * @event: event for notifier
  * @ptr: if address
@@ -173,7 +173,12 @@ int i40iw_inetaddr_event(struct notifier_block *notifier,
 
 		rcu_read_lock();
 		in = __in_dev_get_rcu(upper_dev);
-		local_ipaddr = ntohl(in->ifa_list->ifa_address);
+
+		if (!in->ifa_list)
+			local_ipaddr = 0;
+		else
+			local_ipaddr = ntohl(in->ifa_list->ifa_address);
+
 		rcu_read_unlock();
 	} else {
 		local_ipaddr = ntohl(ifa->ifa_address);
@@ -185,6 +190,11 @@ int i40iw_inetaddr_event(struct notifier_block *notifier,
 	case NETDEV_UP:
 		/* Fall through */
 	case NETDEV_CHANGEADDR:
+
+		/* Just skip if no need to handle ARP cache */
+		if (!local_ipaddr)
+			break;
+
 		i40iw_manage_arp_cache(iwdev,
 				       netdev->dev_addr,
 				       &local_ipaddr,
@@ -200,7 +210,7 @@ int i40iw_inetaddr_event(struct notifier_block *notifier,
 }
 
 /**
- * i40iw_inet6addr_event - system notifier for ipv6 netdev events
+ * i40iw_inet6addr_event - system notifier for ipv6 addr events
  * @notfier: not used
  * @event: event for notifier
  * @ptr: if address
@@ -252,7 +262,7 @@ int i40iw_inet6addr_event(struct notifier_block *notifier,
 }
 
 /**
- * i40iw_net_event - system notifier for net events
+ * i40iw_net_event - system notifier for netevents
  * @notfier: not used
  * @event: event for notifier
  * @ptr: neighbor
@@ -289,6 +299,50 @@ int i40iw_net_event(struct notifier_block *notifier, unsigned long event, void *
 					       false,
 					       I40IW_ARP_DELETE);
 		}
+		break;
+	default:
+		break;
+	}
+	return NOTIFY_DONE;
+}
+
+/**
+ * i40iw_netdevice_event - system notifier for netdev events
+ * @notfier: not used
+ * @event: event for notifier
+ * @ptr: netdev
+ */
+int i40iw_netdevice_event(struct notifier_block *notifier,
+			  unsigned long event,
+			  void *ptr)
+{
+	struct net_device *event_netdev;
+	struct net_device *netdev;
+	struct i40iw_device *iwdev;
+	struct i40iw_handler *hdl;
+
+	event_netdev = netdev_notifier_info_to_dev(ptr);
+
+	hdl = i40iw_find_netdev(event_netdev);
+	if (!hdl)
+		return NOTIFY_DONE;
+
+	iwdev = &hdl->device;
+	if (iwdev->init_state < RDMA_DEV_REGISTERED || iwdev->closing)
+		return NOTIFY_DONE;
+
+	netdev = iwdev->ldev->netdev;
+	if (netdev != event_netdev)
+		return NOTIFY_DONE;
+
+	iwdev->iw_status = 1;
+
+	switch (event) {
+	case NETDEV_DOWN:
+		iwdev->iw_status = 0;
+		/* Fall through */
+	case NETDEV_UP:
+		i40iw_port_ibevent(iwdev);
 		break;
 	default:
 		break;
@@ -557,7 +611,6 @@ void i40iw_rem_pdusecount(struct i40iw_pd *iwpd, struct i40iw_device *iwdev)
 	if (!atomic_dec_and_test(&iwpd->usecount))
 		return;
 	i40iw_free_resource(iwdev, iwdev->allocated_pds, iwpd->sc_pd.pd_id);
-	kfree(iwpd);
 }
 
 /**
@@ -701,8 +754,8 @@ enum i40iw_status_code i40iw_allocate_dma_mem(struct i40iw_hw *hw,
 	if (!mem)
 		return I40IW_ERR_PARAM;
 	mem->size = ALIGN(size, alignment);
-	mem->va = dma_zalloc_coherent(&pcidev->dev, mem->size,
-				      (dma_addr_t *)&mem->pa, GFP_KERNEL);
+	mem->va = dma_alloc_coherent(&pcidev->dev, mem->size,
+				     (dma_addr_t *)&mem->pa, GFP_KERNEL);
 	if (!mem->va)
 		return I40IW_ERR_NO_MEMORY;
 	return 0;
@@ -1240,15 +1293,13 @@ void i40iw_cqp_qp_destroy_cmd(struct i40iw_sc_dev *dev, struct i40iw_sc_qp *qp)
  */
 void i40iw_ieq_mpa_crc_ae(struct i40iw_sc_dev *dev, struct i40iw_sc_qp *qp)
 {
-	struct i40iw_qp_flush_info info;
+	struct i40iw_gen_ae_info info;
 	struct i40iw_device *iwdev = (struct i40iw_device *)dev->back_dev;
 
 	i40iw_debug(dev, I40IW_DEBUG_AEQ, "%s entered\n", __func__);
-	memset(&info, 0, sizeof(info));
 	info.ae_code = I40IW_AE_LLP_RECEIVED_MPA_CRC_ERROR;
-	info.generate_ae = true;
-	info.ae_source = 0x3;
-	(void)i40iw_hw_flush_wqes(iwdev, qp, &info, false);
+	info.ae_source = I40IW_AE_SOURCE_RQ;
+	i40iw_gen_ae(iwdev, qp, &info, false);
 }
 
 /**
@@ -1363,7 +1414,7 @@ struct i40iw_sc_qp *i40iw_ieq_get_qp(struct i40iw_sc_dev *dev,
 	rem_port = ntohs(tcph->source);
 
 	cm_node = i40iw_find_node(&iwdev->cm_core, rem_port, rem_addr, loc_port,
-				  loc_addr, false);
+				  loc_addr, false, true);
 	if (!cm_node)
 		return NULL;
 	iwqp = cm_node->iwqp;

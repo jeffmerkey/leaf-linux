@@ -47,8 +47,10 @@ enum lm75_type {		/* keep sorted in alphabetical order */
 	lm75b,
 	max6625,
 	max6626,
+	max31725,
 	mcp980x,
 	stds75,
+	stlm75,
 	tcn75,
 	tmp100,
 	tmp101,
@@ -57,13 +59,13 @@ enum lm75_type {		/* keep sorted in alphabetical order */
 	tmp175,
 	tmp275,
 	tmp75,
+	tmp75b,
 	tmp75c,
 };
 
 /* Addresses scanned */
 static const unsigned short normal_i2c[] = { 0x48, 0x49, 0x4a, 0x4b, 0x4c,
 					0x4d, 0x4e, 0x4f, I2C_CLIENT_END };
-
 
 /* The LM75 registers */
 #define LM75_REG_TEMP		0x00
@@ -76,7 +78,7 @@ struct lm75_data {
 	struct i2c_client	*client;
 	struct regmap		*regmap;
 	u8			orig_conf;
-	u8			resolution;	/* In bits, between 9 and 12 */
+	u8			resolution;	/* In bits, between 9 and 16 */
 	u8			resolution_limits;
 	unsigned int		sample_time;	/* In ms */
 };
@@ -100,7 +102,7 @@ static int lm75_read(struct device *dev, enum hwmon_sensor_types type,
 		switch (attr) {
 		case hwmon_chip_update_interval:
 			*val = data->sample_time;
-			break;;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -175,16 +177,16 @@ static umode_t lm75_is_visible(const void *data, enum hwmon_sensor_types type,
 	case hwmon_chip:
 		switch (attr) {
 		case hwmon_chip_update_interval:
-			return S_IRUGO;
+			return 0444;
 		}
 		break;
 	case hwmon_temp:
 		switch (attr) {
 		case hwmon_temp_input:
-			return S_IRUGO;
+			return 0444;
 		case hwmon_temp_max:
 		case hwmon_temp_max_hyst:
-			return S_IRUGO | S_IWUSR;
+			return 0644;
 		}
 		break;
 	default:
@@ -193,35 +195,11 @@ static umode_t lm75_is_visible(const void *data, enum hwmon_sensor_types type,
 	return 0;
 }
 
-/*-----------------------------------------------------------------------*/
-
-/* device probe and removal */
-
-/* chip configuration */
-
-static const u32 lm75_chip_config[] = {
-	HWMON_C_REGISTER_TZ | HWMON_C_UPDATE_INTERVAL,
-	0
-};
-
-static const struct hwmon_channel_info lm75_chip = {
-	.type = hwmon_chip,
-	.config = lm75_chip_config,
-};
-
-static const u32 lm75_temp_config[] = {
-	HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MAX_HYST,
-	0
-};
-
-static const struct hwmon_channel_info lm75_temp = {
-	.type = hwmon_temp,
-	.config = lm75_temp_config,
-};
-
 static const struct hwmon_channel_info *lm75_info[] = {
-	&lm75_chip,
-	&lm75_temp,
+	HWMON_CHANNEL_INFO(chip,
+			   HWMON_C_REGISTER_TZ | HWMON_C_UPDATE_INTERVAL),
+	HWMON_CHANNEL_INFO(temp,
+			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MAX_HYST),
 	NULL
 };
 
@@ -254,7 +232,8 @@ static const struct regmap_config lm75_regmap_config = {
 	.volatile_reg = lm75_is_volatile_reg,
 	.val_format_endian = REGMAP_ENDIAN_BIG,
 	.cache_type = REGCACHE_RBTREE,
-	.use_single_rw = true,
+	.use_single_read = true,
+	.use_single_write = true,
 };
 
 static void lm75_remove(void *data)
@@ -315,6 +294,10 @@ lm75_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		data->resolution = 11;
 		data->sample_time = MSEC_PER_SEC;
 		break;
+	case stlm75:
+		data->resolution = 9;
+		data->sample_time = MSEC_PER_SEC / 5;
+		break;
 	case ds7505:
 		set_mask |= 3 << 5;		/* 12-bit mode */
 		data->resolution = 12;
@@ -338,6 +321,10 @@ lm75_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		data->resolution = 12;
 		data->resolution_limits = 9;
 		data->sample_time = MSEC_PER_SEC / 4;
+		break;
+	case max31725:
+		data->resolution = 16;
+		data->sample_time = MSEC_PER_SEC / 8;
 		break;
 	case tcn75:
 		data->resolution = 9;
@@ -367,6 +354,11 @@ lm75_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		clr_mask |= 1 << 7;		/* not one-shot mode */
 		data->resolution = 12;
 		data->sample_time = MSEC_PER_SEC / 2;
+		break;
+	case tmp75b:  /* not one-shot mode, Conversion rate 37Hz */
+		clr_mask |= 1 << 15 | 0x3 << 13;
+		data->resolution = 12;
+		data->sample_time = MSEC_PER_SEC / 37;
 		break;
 	case tmp75c:
 		clr_mask |= 1 << 5;		/* not one-shot mode */
@@ -415,8 +407,11 @@ static const struct i2c_device_id lm75_ids[] = {
 	{ "lm75b", lm75b, },
 	{ "max6625", max6625, },
 	{ "max6626", max6626, },
+	{ "max31725", max31725, },
+	{ "max31726", max31725, },
 	{ "mcp980x", mcp980x, },
 	{ "stds75", stds75, },
+	{ "stlm75", stlm75, },
 	{ "tcn75", tcn75, },
 	{ "tmp100", tmp100, },
 	{ "tmp101", tmp101, },
@@ -425,12 +420,13 @@ static const struct i2c_device_id lm75_ids[] = {
 	{ "tmp175", tmp175, },
 	{ "tmp275", tmp275, },
 	{ "tmp75", tmp75, },
+	{ "tmp75b", tmp75b, },
 	{ "tmp75c", tmp75c, },
 	{ /* LIST END */ }
 };
 MODULE_DEVICE_TABLE(i2c, lm75_ids);
 
-static const struct of_device_id lm75_of_match[] = {
+static const struct of_device_id __maybe_unused lm75_of_match[] = {
 	{
 		.compatible = "adi,adt75",
 		.data = (void *)adt75
@@ -472,12 +468,24 @@ static const struct of_device_id lm75_of_match[] = {
 		.data = (void *)max6626
 	},
 	{
+		.compatible = "maxim,max31725",
+		.data = (void *)max31725
+	},
+	{
+		.compatible = "maxim,max31726",
+		.data = (void *)max31725
+	},
+	{
 		.compatible = "maxim,mcp980x",
 		.data = (void *)mcp980x
 	},
 	{
 		.compatible = "st,stds75",
 		.data = (void *)stds75
+	},
+	{
+		.compatible = "st,stlm75",
+		.data = (void *)stlm75
 	},
 	{
 		.compatible = "microchip,tcn75",
@@ -510,6 +518,10 @@ static const struct of_device_id lm75_of_match[] = {
 	{
 		.compatible = "ti,tmp75",
 		.data = (void *)tmp75
+	},
+	{
+		.compatible = "ti,tmp75b",
+		.data = (void *)tmp75b
 	},
 	{
 		.compatible = "ti,tmp75c",

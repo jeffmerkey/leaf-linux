@@ -27,11 +27,6 @@
 #include <net/sock_reuseport.h>
 #include <net/addrconf.h>
 
-#ifdef INET_CSK_DEBUG
-const char inet_csk_timer_bug_msg[] = "inet_csk BUG: unknown timer value\n";
-EXPORT_SYMBOL(inet_csk_timer_bug_msg);
-#endif
-
 #if IS_ENABLED(CONFIG_IPV6)
 /* match_wildcard == true:  IPV6_ADDR_ANY equals to any IPv6 addresses if IPv6
  *                          only, and any IPv4 addresses if not IPv6 only
@@ -112,6 +107,15 @@ bool inet_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 }
 EXPORT_SYMBOL(inet_rcv_saddr_equal);
 
+bool inet_rcv_saddr_any(const struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_IPV6)
+	if (sk->sk_family == AF_INET6)
+		return ipv6_addr_any(&sk->sk_v6_rcv_saddr);
+#endif
+	return !sk->sk_rcv_saddr;
+}
+
 void inet_get_local_port_range(struct net *net, int *low, int *high)
 {
 	unsigned int seq;
@@ -179,7 +183,9 @@ inet_csk_find_open_port(struct sock *sk, struct inet_bind_bucket **tb_ret, int *
 	int i, low, high, attempt_half;
 	struct inet_bind_bucket *tb;
 	u32 remaining, offset;
+	int l3mdev;
 
+	l3mdev = inet_sk_bound_l3mdev(sk);
 	attempt_half = (sk->sk_reuse == SK_CAN_REUSE) ? 1 : 0;
 other_half_scan:
 	inet_get_local_port_range(net, &low, &high);
@@ -215,7 +221,8 @@ other_parity_scan:
 						  hinfo->bhash_size)];
 		spin_lock_bh(&head->lock);
 		inet_bind_bucket_for_each(tb, &head->chain)
-			if (net_eq(ib_net(tb), net) && tb->port == port) {
+			if (net_eq(ib_net(tb), net) && tb->l3mdev == l3mdev &&
+			    tb->port == port) {
 				if (!inet_csk_bind_conflict(sk, tb, false, false))
 					goto success;
 				goto next_port;
@@ -289,6 +296,9 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	struct net *net = sock_net(sk);
 	struct inet_bind_bucket *tb = NULL;
 	kuid_t uid = sock_i_uid(sk);
+	int l3mdev;
+
+	l3mdev = inet_sk_bound_l3mdev(sk);
 
 	if (!port) {
 		head = inet_csk_find_open_port(sk, &tb, &port);
@@ -302,11 +312,12 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 					  hinfo->bhash_size)];
 	spin_lock_bh(&head->lock);
 	inet_bind_bucket_for_each(tb, &head->chain)
-		if (net_eq(ib_net(tb), net) && tb->port == port)
+		if (net_eq(ib_net(tb), net) && tb->l3mdev == l3mdev &&
+		    tb->port == port)
 			goto tb_found;
 tb_not_found:
 	tb = inet_bind_bucket_create(hinfo->bind_bucket_cachep,
-				     net, head, port);
+				     net, head, port, l3mdev);
 	if (!tb)
 		goto fail_unlock;
 tb_found:
@@ -475,7 +486,6 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 		}
 		spin_unlock_bh(&queue->fastopenq.lock);
 	}
-	mem_cgroup_sk_alloc(newsk);
 out:
 	release_sock(sk);
 	if (req)
@@ -541,7 +551,8 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 	struct ip_options_rcu *opt;
 	struct rtable *rt;
 
-	opt = ireq_opt_deref(ireq);
+	rcu_read_lock();
+	opt = rcu_dereference(ireq->ireq_opt);
 
 	flowi4_init_output(fl4, ireq->ir_iif, ireq->ir_mark,
 			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE,
@@ -553,13 +564,15 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 	rt = ip_route_output_flow(net, fl4, sk);
 	if (IS_ERR(rt))
 		goto no_route;
-	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
+	if (opt && opt->opt.is_strictroute && rt->rt_gw_family)
 		goto route_err;
+	rcu_read_unlock();
 	return &rt->dst;
 
 route_err:
 	ip_rt_put(rt);
 no_route:
+	rcu_read_unlock();
 	__IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
 	return NULL;
 }
@@ -589,7 +602,7 @@ struct dst_entry *inet_csk_route_child_sock(const struct sock *sk,
 	rt = ip_route_output_flow(net, fl4, sk);
 	if (IS_ERR(rt))
 		goto no_route;
-	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
+	if (opt && opt->opt.is_strictroute && rt->rt_gw_family)
 		goto route_err;
 	return &rt->dst;
 
@@ -685,7 +698,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 	int max_retries, thresh;
 	u8 defer_accept;
 
-	if (sk_state_load(sk_listener) != TCP_LISTEN)
+	if (inet_sk_state_load(sk_listener) != TCP_LISTEN)
 		goto drop;
 
 	max_retries = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_synack_retries;
@@ -783,7 +796,7 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 	if (newsk) {
 		struct inet_connection_sock *newicsk = inet_csk(newsk);
 
-		newsk->sk_state = TCP_SYN_RECV;
+		inet_sk_set_state(newsk, TCP_SYN_RECV);
 		newicsk->icsk_bind_hash = NULL;
 
 		inet_sk(newsk)->inet_dport = inet_rsk(req)->ir_rmt_port;
@@ -868,7 +881,6 @@ int inet_csk_listen_start(struct sock *sk, int backlog)
 
 	reqsk_queue_alloc(&icsk->icsk_accept_queue);
 
-	sk->sk_max_ack_backlog = backlog;
 	sk->sk_ack_backlog = 0;
 	inet_csk_delack_init(sk);
 
@@ -877,7 +889,7 @@ int inet_csk_listen_start(struct sock *sk, int backlog)
 	 * It is OK, because this socket enters to hash table only
 	 * after validation is complete.
 	 */
-	sk_state_store(sk, TCP_LISTEN);
+	inet_sk_state_store(sk, TCP_LISTEN);
 	if (!sk->sk_prot->get_port(sk, inet->inet_num)) {
 		inet->inet_sport = htons(inet->inet_num);
 
@@ -888,7 +900,7 @@ int inet_csk_listen_start(struct sock *sk, int backlog)
 			return 0;
 	}
 
-	sk->sk_state = TCP_CLOSE;
+	inet_sk_set_state(sk, TCP_CLOSE);
 	return err;
 }
 EXPORT_SYMBOL_GPL(inet_csk_listen_start);

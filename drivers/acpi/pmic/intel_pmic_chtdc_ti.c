@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Dollar Cove TI PMIC operation region driver
  * Copyright (C) 2014 Intel Corporation. All rights reserved.
@@ -131,7 +132,4 @@ static struct platform_driver chtdc_ti_pmic_opregion_driver = {
 	},
 	.id_table = chtdc_ti_pmic_opregion_id_table,
 };
-module_platform_driver(chtdc_ti_pmic_opregion_driver);
-
-MODULE_DESCRIPTION("Dollar Cove TI PMIC opregion driver");
-MODULE_LICENSE("GPL v2");
+builtin_platform_driver(chtdc_ti_pmic_opregion_driver);

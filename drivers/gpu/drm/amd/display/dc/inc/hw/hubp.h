@@ -28,17 +28,32 @@
 
 #include "mem_input.h"
 
+
+enum cursor_pitch {
+	CURSOR_PITCH_64_PIXELS = 0,
+	CURSOR_PITCH_128_PIXELS,
+	CURSOR_PITCH_256_PIXELS
+};
+
+enum cursor_lines_per_chunk {
+	CURSOR_LINE_PER_CHUNK_2 = 1,
+	CURSOR_LINE_PER_CHUNK_4,
+	CURSOR_LINE_PER_CHUNK_8,
+	CURSOR_LINE_PER_CHUNK_16
+};
+
 struct hubp {
-	struct hubp_funcs *funcs;
+	const struct hubp_funcs *funcs;
 	struct dc_context *ctx;
 	struct dc_plane_address request_address;
-	struct dc_plane_address current_address;
 	int inst;
+
+	/* run time states */
 	int opp_id;
 	int mpcc_id;
 	struct dc_cursor_attributes curs_attr;
+	bool power_gated;
 };
-
 
 struct hubp_funcs {
 	void (*hubp_setup)(
@@ -47,6 +62,11 @@ struct hubp_funcs {
 			struct _vcs_dpi_display_ttu_regs_st *ttu_regs,
 			struct _vcs_dpi_display_rq_regs_st *rq_regs,
 			struct _vcs_dpi_display_pipe_dest_params_st *pipe_dest);
+
+	void (*hubp_setup_interdependent)(
+			struct hubp *hubp,
+			struct _vcs_dpi_display_dlg_regs_st *dlg_regs,
+			struct _vcs_dpi_display_ttu_regs_st *ttu_regs);
 
 	void (*dcc_control)(struct hubp *hubp, bool enable,
 			bool independent_64b_blks);
@@ -58,7 +78,8 @@ struct hubp_funcs {
 	bool (*hubp_program_surface_flip_and_addr)(
 		struct hubp *hubp,
 		const struct dc_plane_address *address,
-		bool flip_immediate);
+		bool flip_immediate,
+		uint8_t vmid);
 
 	void (*hubp_program_pte_vm)(
 		struct hubp *hubp,
@@ -81,7 +102,8 @@ struct hubp_funcs {
 		union plane_size *plane_size,
 		enum dc_rotation_angle rotation,
 		struct dc_plane_dcc_param *dcc,
-		bool horizontal_mirror);
+		bool horizontal_mirror,
+		unsigned int compa_level);
 
 	bool (*hubp_is_flip_pending)(struct hubp *hubp);
 
@@ -99,6 +121,16 @@ struct hubp_funcs {
 			struct hubp *hubp,
 			const struct dc_cursor_position *pos,
 			const struct dc_cursor_mi_param *param);
+
+	void (*hubp_disconnect)(struct hubp *hubp);
+
+	void (*hubp_clk_cntl)(struct hubp *hubp, bool enable);
+	void (*hubp_vtg_sel)(struct hubp *hubp, uint32_t otg_inst);
+	void (*hubp_read_state)(struct hubp *hubp);
+	void (*hubp_clear_underflow)(struct hubp *hubp);
+	void (*hubp_disable_control)(struct hubp *hubp, bool disable_hubp);
+	unsigned int (*hubp_get_underflow_status)(struct hubp *hubp);
+	void (*hubp_init)(struct hubp *hubp);
 
 };
 

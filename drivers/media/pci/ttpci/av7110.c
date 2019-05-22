@@ -53,7 +53,7 @@
 
 #include <linux/dvb/frontend.h>
 
-#include "dvb_frontend.h"
+#include <media/dvb_frontend.h>
 
 #include "ttpci-eeprom.h"
 #include "av7110.h"
@@ -324,14 +324,15 @@ static int DvbDmxFilterCallback(u8 *buffer1, size_t buffer1_len,
 		}
 		return dvbdmxfilter->feed->cb.sec(buffer1, buffer1_len,
 						  buffer2, buffer2_len,
-						  &dvbdmxfilter->filter);
+						  &dvbdmxfilter->filter, NULL);
 	case DMX_TYPE_TS:
 		if (!(dvbdmxfilter->feed->ts_type & TS_PACKET))
 			return 0;
 		if (dvbdmxfilter->feed->ts_type & TS_PAYLOAD_ONLY)
 			return dvbdmxfilter->feed->cb.ts(buffer1, buffer1_len,
 							 buffer2, buffer2_len,
-							 &dvbdmxfilter->feed->feed.ts);
+							 &dvbdmxfilter->feed->feed.ts,
+							 NULL);
 		else
 			av7110_p2t_write(buffer1, buffer1_len,
 					 dvbdmxfilter->feed->pid,
@@ -2312,7 +2313,7 @@ static int frontend_init(struct av7110 *av7110)
  * (n in defined in the RPS_THRESH1 counter threshold)
  * I think HS is raised high on the beginning of the n-th line
  * and remains high until this n-th line that triggered
- * it is completely received. When the receiption of n-th line
+ * it is completely received. When the reception of n-th line
  * ends, HS is lowered.
  *
  * To transmit data over DMA, 7146 needs changing state at
@@ -2346,7 +2347,7 @@ static int frontend_init(struct av7110 *av7110)
  * hardware debug note: a working budget card (including budget patch)
  * with vpeirq() interrupt setup in mode "0x90" (every 64K) will
  * generate 3 interrupts per 25-Hz DMA frame of 2*188*512 bytes
- * and that means 3*25=75 Hz of interrupt freqency, as seen by
+ * and that means 3*25=75 Hz of interrupt frequency, as seen by
  * watch cat /proc/interrupts
  *
  * If this frequency is 3x lower (and data received in the DMA
@@ -2355,7 +2356,7 @@ static int frontend_init(struct av7110 *av7110)
  * this means VSYNC line is not connected in the hardware.
  * (check soldering pcb and pins)
  * The same behaviour of missing VSYNC can be duplicated on budget
- * cards, by seting DD1_INIT trigger mode 7 in 3rd nibble.
+ * cards, by setting DD1_INIT trigger mode 7 in 3rd nibble.
  */
 static int av7110_attach(struct saa7146_dev* dev,
 			 struct saa7146_pci_extension_data *pci_ext)
@@ -2481,7 +2482,8 @@ static int av7110_attach(struct saa7146_dev* dev,
 	   get recognized before the main driver is fully loaded */
 	saa7146_write(dev, GPIO_CTRL, 0x500000);
 
-	strlcpy(av7110->i2c_adap.name, pci_ext->ext_priv, sizeof(av7110->i2c_adap.name));
+	strscpy(av7110->i2c_adap.name, pci_ext->ext_priv,
+		sizeof(av7110->i2c_adap.name));
 
 	saa7146_i2c_adapter_prepare(dev, &av7110->i2c_adap, SAA7146_I2C_BUS_BIT_RATE_120); /* 275 kHz */
 

@@ -1290,7 +1290,7 @@ struct vme_error_handler *vme_register_error_handler(
 {
 	struct vme_error_handler *handler;
 
-	handler = kmalloc(sizeof(*handler), GFP_KERNEL);
+	handler = kmalloc(sizeof(*handler), GFP_ATOMIC);
 	if (!handler)
 		return NULL;
 
@@ -1890,7 +1890,6 @@ static int __vme_register_driver_bus(struct vme_driver *drv,
 
 err_reg:
 	put_device(&vdev->dev);
-	kfree(vdev);
 err_devalloc:
 	list_for_each_entry_safe(vdev, tmp, &drv->devices, drv_list) {
 		list_del(&vdev->drv_list);

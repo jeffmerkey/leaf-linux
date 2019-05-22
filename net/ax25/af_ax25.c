@@ -653,15 +653,22 @@ static int ax25_setsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
-		dev = dev_get_by_name(&init_net, devname);
+		rtnl_lock();
+		dev = __dev_get_by_name(&init_net, devname);
 		if (!dev) {
+			rtnl_unlock();
 			res = -ENODEV;
 			break;
 		}
 
 		ax25->ax25_dev = ax25_dev_ax25dev(dev);
+		if (!ax25->ax25_dev) {
+			rtnl_unlock();
+			res = -ENODEV;
+			break;
+		}
 		ax25_fillin_cb(ax25, ax25->ax25_dev);
-		dev_put(dev);
+		rtnl_unlock();
 		break;
 
 	default:
@@ -1388,7 +1395,7 @@ out:
 }
 
 static int ax25_getname(struct socket *sock, struct sockaddr *uaddr,
-	int *uaddr_len, int peer)
+	int peer)
 {
 	struct full_sockaddr_ax25 *fsa = (struct full_sockaddr_ax25 *)uaddr;
 	struct sock *sk = sock->sk;
@@ -1427,7 +1434,7 @@ static int ax25_getname(struct socket *sock, struct sockaddr *uaddr,
 			fsa->fsa_digipeater[0] = null_ax25_address;
 		}
 	}
-	*uaddr_len = sizeof (struct full_sockaddr_ax25);
+	err = sizeof (struct full_sockaddr_ax25);
 
 out:
 	release_sock(sk);
@@ -1707,14 +1714,6 @@ static int ax25_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		break;
 	}
 
-	case SIOCGSTAMP:
-		res = sock_get_timestamp(sk, argp);
-		break;
-
-	case SIOCGSTAMPNS:
-		res = sock_get_timestampns(sk, argp);
-		break;
-
 	case SIOCAX25ADDUID:	/* Add a uid to the uid/call map table */
 	case SIOCAX25DELUID:	/* Delete a uid from the uid/call map table */
 	case SIOCAX25GETUID: {
@@ -1881,8 +1880,8 @@ static int ax25_info_show(struct seq_file *seq, void *v)
 	 * magic dev src_addr dest_addr,digi1,digi2,.. st vs vr va t1 t1 t2 t2 t3 t3 idle idle n2 n2 rtt window paclen Snd-Q Rcv-Q inode
 	 */
 
-	seq_printf(seq, "%8.8lx %s %s%s ",
-		   (long) ax25,
+	seq_printf(seq, "%p %s %s%s ",
+		   ax25,
 		   ax25->ax25_dev == NULL? "???" : ax25->ax25_dev->dev->name,
 		   ax2asc(buf, &ax25->source_addr),
 		   ax25->iamdigi? "*":"");
@@ -1924,20 +1923,6 @@ static const struct seq_operations ax25_info_seqops = {
 	.stop = ax25_info_stop,
 	.show = ax25_info_show,
 };
-
-static int ax25_info_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &ax25_info_seqops);
-}
-
-static const struct file_operations ax25_info_fops = {
-	.owner = THIS_MODULE,
-	.open = ax25_info_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = seq_release,
-};
-
 #endif
 
 static const struct net_proto_family ax25_family_ops = {
@@ -1957,6 +1942,7 @@ static const struct proto_ops ax25_proto_ops = {
 	.getname	= ax25_getname,
 	.poll		= datagram_poll,
 	.ioctl		= ax25_ioctl,
+	.gettstamp	= sock_gettstamp,
 	.listen		= ax25_listen,
 	.shutdown	= ax25_shutdown,
 	.setsockopt	= ax25_setsockopt,
@@ -1990,10 +1976,10 @@ static int __init ax25_init(void)
 	dev_add_pack(&ax25_packet_type);
 	register_netdevice_notifier(&ax25_dev_notifier);
 
-	proc_create("ax25_route", S_IRUGO, init_net.proc_net,
-		    &ax25_route_fops);
-	proc_create("ax25", S_IRUGO, init_net.proc_net, &ax25_info_fops);
-	proc_create("ax25_calls", S_IRUGO, init_net.proc_net, &ax25_uid_fops);
+	proc_create_seq("ax25_route", 0444, init_net.proc_net, &ax25_rt_seqops);
+	proc_create_seq("ax25", 0444, init_net.proc_net, &ax25_info_seqops);
+	proc_create_seq("ax25_calls", 0444, init_net.proc_net,
+			&ax25_uid_seqops);
 out:
 	return rc;
 }

@@ -7,6 +7,9 @@
 #include <asm/ptrace.h>
 #include <asm/stacktrace.h>
 
+#define IRET_FRAME_OFFSET (offsetof(struct pt_regs, ip))
+#define IRET_FRAME_SIZE   (sizeof(struct pt_regs) - IRET_FRAME_OFFSET)
+
 struct unwind_state {
 	struct stack_info stack_info;
 	unsigned long stack_mask;
@@ -20,6 +23,12 @@ struct unwind_state {
 #elif defined(CONFIG_UNWINDER_FRAME_POINTER)
 	bool got_irq;
 	unsigned long *bp, *orig_sp, ip;
+	/*
+	 * If non-NULL: The current frame is incomplete and doesn't contain a
+	 * valid BP. When looking for the next frame, use this instead of the
+	 * non-existent saved BP.
+	 */
+	unsigned long *next_bp;
 	struct pt_regs *regs;
 #else
 	unsigned long *sp;
@@ -52,15 +61,28 @@ void unwind_start(struct unwind_state *state, struct task_struct *task,
 }
 
 #if defined(CONFIG_UNWINDER_ORC) || defined(CONFIG_UNWINDER_FRAME_POINTER)
-static inline struct pt_regs *unwind_get_entry_regs(struct unwind_state *state)
+/*
+ * If 'partial' returns true, only the iret frame registers are valid.
+ */
+static inline struct pt_regs *unwind_get_entry_regs(struct unwind_state *state,
+						    bool *partial)
 {
 	if (unwind_done(state))
 		return NULL;
 
+	if (partial) {
+#ifdef CONFIG_UNWINDER_ORC
+		*partial = !state->full_regs;
+#else
+		*partial = false;
+#endif
+	}
+
 	return state->regs;
 }
 #else
-static inline struct pt_regs *unwind_get_entry_regs(struct unwind_state *state)
+static inline struct pt_regs *unwind_get_entry_regs(struct unwind_state *state,
+						    bool *partial)
 {
 	return NULL;
 }

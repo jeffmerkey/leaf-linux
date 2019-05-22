@@ -26,6 +26,7 @@
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <sound/core.h>
 #include <sound/tlv.h>
 #include <sound/info.h>
@@ -501,9 +502,7 @@ static void proc_regs_read(struct snd_info_entry *entry,
 
 static void proc_init(struct snd_ice1712 *ice)
 {
-	struct snd_info_entry *entry;
-	if (!snd_card_proc_new(ice->card, "quartet", &entry))
-		snd_info_set_text_ops(entry, ice, proc_regs_read);
+	snd_card_ro_proc_new(ice->card, "quartet", ice, proc_regs_read);
 }
 
 static int qtet_mute_get(struct snd_kcontrol *kcontrol,
@@ -785,10 +784,9 @@ DECLARE_TLV_DB_SCALE(qtet_master_db_scale, -6350, 50, 1);
 static struct snd_kcontrol *ctl_find(struct snd_card *card,
 				     const char *name)
 {
-	struct snd_ctl_elem_id sid;
-	memset(&sid, 0, sizeof(sid));
-	/* FIXME: strcpy is bad. */
-	strcpy(sid.name, name);
+	struct snd_ctl_elem_id sid = {0};
+
+	strlcpy(sid.name, name, sizeof(sid.name));
 	sid.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
 	return snd_ctl_find_id(card, &sid);
 }

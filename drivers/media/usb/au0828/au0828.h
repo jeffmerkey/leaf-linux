@@ -31,14 +31,15 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-fh.h>
 #include <media/media-device.h>
+#include <media/media-dev-allocator.h>
 
 /* DVB */
-#include "demux.h"
-#include "dmxdev.h"
-#include "dvb_demux.h"
-#include "dvb_frontend.h"
-#include "dvb_net.h"
-#include "dvbdev.h"
+#include <media/demux.h>
+#include <media/dmxdev.h>
+#include <media/dvb_demux.h>
+#include <media/dvb_frontend.h>
+#include <media/dvb_net.h>
+#include <media/dvbdev.h>
 
 #include "au0828-reg.h"
 #include "au0828-cards.h"
@@ -52,7 +53,7 @@
 
 #define AU0828_INTERLACED_DEFAULT       1
 
-/* Defination for AU0828 USB transfer */
+/* Definition for AU0828 USB transfer */
 #define AU0828_MAX_ISO_BUFS    12  /* maybe resize this value in the future */
 #define AU0828_ISO_PACKETS_PER_URB      128
 
@@ -190,7 +191,7 @@ struct au0828_dev {
 	struct i2c_adapter		i2c_adap;
 	struct i2c_algorithm		i2c_algo;
 	struct i2c_client		i2c_client;
-	u32 				i2c_rc;
+	u32				i2c_rc;
 
 	/* Digital */
 	struct au0828_dvb		dvb;
@@ -283,9 +284,12 @@ struct au0828_dev {
 	struct media_entity_notify entity_notify;
 	struct media_entity *tuner;
 	struct media_link *active_link;
-	struct media_entity *active_link_owner;
 	struct media_entity *active_source;
 	struct media_entity *active_sink;
+	struct media_entity *active_link_owner;
+	struct media_entity *active_link_user;
+	struct media_pipeline *active_link_user_pipe;
+	bool active_link_shared;
 #endif
 };
 
@@ -293,8 +297,8 @@ struct au0828_dev {
 /* ----------------------------------------------------------- */
 #define au0828_read(dev, reg) au0828_readreg(dev, reg)
 #define au0828_write(dev, reg, value) au0828_writereg(dev, reg, value)
-#define au0828_andor(dev, reg, mask, value) 				\
-	 au0828_writereg(dev, reg, 					\
+#define au0828_andor(dev, reg, mask, value)				\
+	 au0828_writereg(dev, reg,					\
 	(au0828_readreg(dev, reg) & ~(mask)) | ((value) & (mask)))
 
 #define au0828_set(dev, reg, bit) au0828_andor(dev, (reg), (bit), (bit))

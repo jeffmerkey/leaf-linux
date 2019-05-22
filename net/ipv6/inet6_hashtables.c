@@ -102,22 +102,13 @@ static inline int compute_score(struct sock *sk, struct net *net,
 
 	if (net_eq(sock_net(sk), net) && inet_sk(sk)->inet_num == hnum &&
 	    sk->sk_family == PF_INET6) {
+		if (!ipv6_addr_equal(&sk->sk_v6_rcv_saddr, daddr))
+			return -1;
+
+		if (!inet_sk_bound_dev_eq(net, sk->sk_bound_dev_if, dif, sdif))
+			return -1;
 
 		score = 1;
-		if (!ipv6_addr_any(&sk->sk_v6_rcv_saddr)) {
-			if (!ipv6_addr_equal(&sk->sk_v6_rcv_saddr, daddr))
-				return -1;
-			score++;
-		}
-		if (sk->sk_bound_dev_if || exact_dif) {
-			bool dev_match = (sk->sk_bound_dev_if == dif ||
-					  sk->sk_bound_dev_if == sdif);
-
-			if (exact_dif && !dev_match)
-				return -1;
-			if (sk->sk_bound_dev_if && dev_match)
-				score++;
-		}
 		if (sk->sk_incoming_cpu == raw_smp_processor_id())
 			score++;
 	}
@@ -125,6 +116,40 @@ static inline int compute_score(struct sock *sk, struct net *net,
 }
 
 /* called with rcu_read_lock() */
+static struct sock *inet6_lhash2_lookup(struct net *net,
+		struct inet_listen_hashbucket *ilb2,
+		struct sk_buff *skb, int doff,
+		const struct in6_addr *saddr,
+		const __be16 sport, const struct in6_addr *daddr,
+		const unsigned short hnum, const int dif, const int sdif)
+{
+	bool exact_dif = inet6_exact_dif_match(net, skb);
+	struct inet_connection_sock *icsk;
+	struct sock *sk, *result = NULL;
+	int score, hiscore = 0;
+	u32 phash = 0;
+
+	inet_lhash2_for_each_icsk_rcu(icsk, &ilb2->head) {
+		sk = (struct sock *)icsk;
+		score = compute_score(sk, net, hnum, daddr, dif, sdif,
+				      exact_dif);
+		if (score > hiscore) {
+			if (sk->sk_reuseport) {
+				phash = inet6_ehashfn(net, daddr, hnum,
+						      saddr, sport);
+				result = reuseport_select_sock(sk, phash,
+							       skb, doff);
+				if (result)
+					return result;
+			}
+			result = sk;
+			hiscore = score;
+		}
+	}
+
+	return result;
+}
+
 struct sock *inet6_lookup_listener(struct net *net,
 		struct inet_hashinfo *hashinfo,
 		struct sk_buff *skb, int doff,
@@ -132,35 +157,29 @@ struct sock *inet6_lookup_listener(struct net *net,
 		const __be16 sport, const struct in6_addr *daddr,
 		const unsigned short hnum, const int dif, const int sdif)
 {
-	unsigned int hash = inet_lhashfn(net, hnum);
-	struct inet_listen_hashbucket *ilb = &hashinfo->listening_hash[hash];
-	int score, hiscore = 0, matches = 0, reuseport = 0;
-	bool exact_dif = inet6_exact_dif_match(net, skb);
-	struct sock *sk, *result = NULL;
-	u32 phash = 0;
+	struct inet_listen_hashbucket *ilb2;
+	struct sock *result = NULL;
+	unsigned int hash2;
 
-	sk_for_each(sk, &ilb->head) {
-		score = compute_score(sk, net, hnum, daddr, dif, sdif, exact_dif);
-		if (score > hiscore) {
-			reuseport = sk->sk_reuseport;
-			if (reuseport) {
-				phash = inet6_ehashfn(net, daddr, hnum,
-						      saddr, sport);
-				result = reuseport_select_sock(sk, phash,
-							       skb, doff);
-				if (result)
-					return result;
-				matches = 1;
-			}
-			result = sk;
-			hiscore = score;
-		} else if (score == hiscore && reuseport) {
-			matches++;
-			if (reciprocal_scale(phash, matches) == 0)
-				result = sk;
-			phash = next_pseudo_random32(phash);
-		}
-	}
+	hash2 = ipv6_portaddr_hash(net, daddr, hnum);
+	ilb2 = inet_lhash2_bucket(hashinfo, hash2);
+
+	result = inet6_lhash2_lookup(net, ilb2, skb, doff,
+				     saddr, sport, daddr, hnum,
+				     dif, sdif);
+	if (result)
+		goto done;
+
+	/* Lookup lhash2 with in6addr_any */
+	hash2 = ipv6_portaddr_hash(net, &in6addr_any, hnum);
+	ilb2 = inet_lhash2_bucket(hashinfo, hash2);
+
+	result = inet6_lhash2_lookup(net, ilb2, skb, doff,
+				     saddr, sport, &in6addr_any, hnum,
+				     dif, sdif);
+done:
+	if (unlikely(IS_ERR(result)))
+		return NULL;
 	return result;
 }
 EXPORT_SYMBOL_GPL(inet6_lookup_listener);

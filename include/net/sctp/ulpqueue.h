@@ -45,6 +45,7 @@ struct sctp_ulpq {
 	char pd_mode;
 	struct sctp_association *asoc;
 	struct sk_buff_head reasm;
+	struct sk_buff_head reasm_uo;
 	struct sk_buff_head lobby;
 };
 
@@ -58,7 +59,7 @@ void sctp_ulpq_free(struct sctp_ulpq *);
 int sctp_ulpq_tail_data(struct sctp_ulpq *, struct sctp_chunk *, gfp_t);
 
 /* Add a new event for propagation to the ULP. */
-int sctp_ulpq_tail_event(struct sctp_ulpq *, struct sctp_ulpevent *ev);
+int sctp_ulpq_tail_event(struct sctp_ulpq *, struct sk_buff_head *skb_list);
 
 /* Renege previously received chunks.  */
 void sctp_ulpq_renege(struct sctp_ulpq *, struct sctp_chunk *, gfp_t);
@@ -76,11 +77,8 @@ int sctp_clear_pd(struct sock *sk, struct sctp_association *asoc);
 void sctp_ulpq_skip(struct sctp_ulpq *ulpq, __u16 sid, __u16 ssn);
 
 void sctp_ulpq_reasm_flushtsn(struct sctp_ulpq *, __u32);
+
+__u16 sctp_ulpq_renege_list(struct sctp_ulpq *ulpq,
+			    struct sk_buff_head *list, __u16 needed);
+
 #endif /* __sctp_ulpqueue_h__ */
-
-
-
-
-
-
-

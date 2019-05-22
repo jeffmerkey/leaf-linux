@@ -8,8 +8,6 @@
 #include <linux/debugobjects.h>
 #include <linux/stringify.h>
 
-struct tvec_base;
-
 struct timer_list {
 	/*
 	 * All fields that change during normal runtime grouped to the
@@ -207,9 +205,11 @@ unsigned long round_jiffies_up(unsigned long j);
 unsigned long round_jiffies_up_relative(unsigned long j);
 
 #ifdef CONFIG_HOTPLUG_CPU
+int timers_prepare_cpu(unsigned int cpu);
 int timers_dead_cpu(unsigned int cpu);
 #else
-#define timers_dead_cpu NULL
+#define timers_prepare_cpu	NULL
+#define timers_dead_cpu		NULL
 #endif
 
 #endif

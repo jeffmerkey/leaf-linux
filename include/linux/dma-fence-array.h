@@ -21,6 +21,7 @@
 #define __LINUX_DMA_FENCE_ARRAY_H
 
 #include <linux/dma-fence.h>
+#include <linux/irq_work.h>
 
 /**
  * struct dma_fence_array_cb - callback helper for fence array
@@ -39,6 +40,7 @@ struct dma_fence_array_cb {
  * @num_fences: number of fences in the array
  * @num_pending: fences in the array still pending
  * @fences: array of the fences
+ * @work: internal irq_work function
  */
 struct dma_fence_array {
 	struct dma_fence base;
@@ -47,6 +49,8 @@ struct dma_fence_array {
 	unsigned num_fences;
 	atomic_t num_pending;
 	struct dma_fence **fences;
+
+	struct irq_work work;
 };
 
 extern const struct dma_fence_ops dma_fence_array_ops;

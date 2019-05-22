@@ -130,10 +130,25 @@ static inline int inet_request_bound_dev_if(const struct sock *sk,
 	return sk->sk_bound_dev_if;
 }
 
-static inline struct ip_options_rcu *ireq_opt_deref(const struct inet_request_sock *ireq)
+static inline int inet_sk_bound_l3mdev(const struct sock *sk)
 {
-	return rcu_dereference_check(ireq->ireq_opt,
-				     refcount_read(&ireq->req.rsk_refcnt) > 0);
+#ifdef CONFIG_NET_L3_MASTER_DEV
+	struct net *net = sock_net(sk);
+
+	if (!net->ipv4.sysctl_tcp_l3mdev_accept)
+		return l3mdev_master_ifindex_by_index(net,
+						      sk->sk_bound_dev_if);
+#endif
+
+	return 0;
+}
+
+static inline bool inet_bound_dev_eq(bool l3mdev_accept, int bound_dev_if,
+				     int dif, int sdif)
+{
+	if (!bound_dev_if)
+		return !sdif || l3mdev_accept;
+	return bound_dev_if == dif || bound_dev_if == sdif;
 }
 
 struct inet_cork {
@@ -147,6 +162,8 @@ struct inet_cork {
 	__u8			ttl;
 	__s16			tos;
 	char			priority;
+	__u16			gso_size;
+	u64			transmit_time;
 };
 
 struct inet_cork_full {
@@ -291,6 +308,31 @@ static inline void inet_sk_copy_descendant(struct sock *sk_to,
 
 int inet_sk_rebuild_header(struct sock *sk);
 
+/**
+ * inet_sk_state_load - read sk->sk_state for lockless contexts
+ * @sk: socket pointer
+ *
+ * Paired with inet_sk_state_store(). Used in places we don't hold socket lock:
+ * tcp_diag_get_info(), tcp_get_info(), tcp_poll(), get_tcp4_sock() ...
+ */
+static inline int inet_sk_state_load(const struct sock *sk)
+{
+	/* state change might impact lockless readers. */
+	return smp_load_acquire(&sk->sk_state);
+}
+
+/**
+ * inet_sk_state_store - update sk->sk_state
+ * @sk: socket pointer
+ * @newstate: new state
+ *
+ * Paired with inet_sk_state_load(). Should be used in contexts where
+ * state change might impact lockless readers.
+ */
+void inet_sk_state_store(struct sock *sk, int newstate);
+
+void inet_sk_set_state(struct sock *sk, int state);
+
 static inline unsigned int __inet_ehashfn(const __be32 laddr,
 					  const __u16 lport,
 					  const __be32 faddr,
@@ -330,6 +372,14 @@ static inline void inet_dec_convert_csum(struct sock *sk)
 static inline bool inet_get_convert_csum(struct sock *sk)
 {
 	return !!inet_sk(sk)->convert_csum;
+}
+
+
+static inline bool inet_can_nonlocal_bind(struct net *net,
+					  struct inet_sock *inet)
+{
+	return net->ipv4.sysctl_ip_nonlocal_bind ||
+		inet->freebind || inet->transparent;
 }
 
 #endif	/* _INET_SOCK_H */

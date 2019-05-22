@@ -4,6 +4,7 @@
 #include <media/v4l2-event.h>
 #include <media/v4l2-ctrls.h>
 #include <linux/module.h>
+#include <linux/kernel.h>
 
 static int max_memory = 32;
 
@@ -86,13 +87,11 @@ static struct saa7146_format formats[] = {
    due to this, it's impossible to provide additional *packed* formats, which are simply byte swapped
    (like V4L2_PIX_FMT_YUYV) ... 8-( */
 
-static int NUM_FORMATS = sizeof(formats)/sizeof(struct saa7146_format);
-
 struct saa7146_format* saa7146_format_by_fourcc(struct saa7146_dev *dev, int fourcc)
 {
-	int i, j = NUM_FORMATS;
+	int i;
 
-	for (i = 0; i < j; i++) {
+	for (i = 0; i < ARRAY_SIZE(formats); i++) {
 		if (formats[i].pixelformat == fourcc) {
 			return formats+i;
 		}
@@ -452,8 +451,8 @@ static int vidioc_querycap(struct file *file, void *fh, struct v4l2_capability *
 	struct video_device *vdev = video_devdata(file);
 	struct saa7146_dev *dev = ((struct saa7146_fh *)fh)->dev;
 
-	strcpy((char *)cap->driver, "saa7146 v4l2");
-	strlcpy((char *)cap->card, dev->ext->name, sizeof(cap->card));
+	strscpy((char *)cap->driver, "saa7146 v4l2", sizeof(cap->driver));
+	strscpy((char *)cap->card, dev->ext->name, sizeof(cap->card));
 	sprintf((char *)cap->bus_info, "PCI:%s", pci_name(dev->pci));
 	cap->device_caps =
 		V4L2_CAP_VIDEO_CAPTURE |
@@ -524,10 +523,10 @@ static int vidioc_s_fbuf(struct file *file, void *fh, const struct v4l2_framebuf
 
 static int vidioc_enum_fmt_vid_cap(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 {
-	if (f->index >= NUM_FORMATS)
+	if (f->index >= ARRAY_SIZE(formats))
 		return -EINVAL;
-	strlcpy((char *)f->description, formats[f->index].name,
-			sizeof(f->description));
+	strscpy((char *)f->description, formats[f->index].name,
+		sizeof(f->description));
 	f->pixelformat = formats[f->index].pixelformat;
 	return 0;
 }
@@ -797,7 +796,7 @@ static int vidioc_s_fmt_vid_overlay(struct file *file, void *__fh, struct v4l2_f
 		return -EFAULT;
 	}
 
-	/* vv->ov.fh is used to indicate that we have valid overlay informations, too */
+	/* vv->ov.fh is used to indicate that we have valid overlay information, too */
 	vv->ov.fh = fh;
 
 	/* check if our current overlay is active */
@@ -1002,9 +1001,9 @@ const struct v4l2_ioctl_ops saa7146_video_ioctl_ops = {
 	.vidioc_try_fmt_vid_overlay  = vidioc_try_fmt_vid_overlay,
 	.vidioc_s_fmt_vid_overlay    = vidioc_s_fmt_vid_overlay,
 
-	.vidioc_overlay 	     = vidioc_overlay,
-	.vidioc_g_fbuf  	     = vidioc_g_fbuf,
-	.vidioc_s_fbuf  	     = vidioc_s_fbuf,
+	.vidioc_overlay		     = vidioc_overlay,
+	.vidioc_g_fbuf		     = vidioc_g_fbuf,
+	.vidioc_s_fbuf		     = vidioc_s_fbuf,
 	.vidioc_reqbufs              = vidioc_reqbufs,
 	.vidioc_querybuf             = vidioc_querybuf,
 	.vidioc_qbuf                 = vidioc_qbuf,
@@ -1013,7 +1012,7 @@ const struct v4l2_ioctl_ops saa7146_video_ioctl_ops = {
 	.vidioc_s_std                = vidioc_s_std,
 	.vidioc_streamon             = vidioc_streamon,
 	.vidioc_streamoff            = vidioc_streamoff,
-	.vidioc_g_parm 		     = vidioc_g_parm,
+	.vidioc_g_parm		     = vidioc_g_parm,
 	.vidioc_subscribe_event      = v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event    = v4l2_event_unsubscribe,
 };

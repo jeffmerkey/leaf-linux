@@ -2,7 +2,7 @@
 VERSION = 5
 PATCHLEVEL = 3
 SUBLEVEL = 0
-EXTRAVERSION = -rc3
+EXTRAVERSION = -rc4
 NAME = Bobtail Squid
 
 # *DOCUMENTATION*
@@ -846,7 +846,7 @@ NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
 KBUILD_CFLAGS += -Wdeclaration-after-statement
 
 # Warn about unmarked fall-throughs in switch statement.
-KBUILD_CFLAGS += $(call cc-option,-Wimplicit-fallthrough=3,)
+KBUILD_CFLAGS += $(call cc-option,-Wimplicit-fallthrough,)
 
 # Variable Length Arrays (VLAs) should not be used anywhere in the kernel
 KBUILD_CFLAGS += -Wvla
@@ -1002,6 +1002,8 @@ ifdef CONFIG_STACK_VALIDATION
 endif
 
 PHONY += prepare0
+
+export MODORDER := $(if $(KBUILD_EXTMOD),$(KBUILD_EXTMOD)/)modules.order
 
 ifeq ($(KBUILD_EXTMOD),)
 core-y		+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/
@@ -1772,13 +1774,22 @@ build-dir = $(patsubst %/,%,$(dir $(build-target)))
 	$(Q)$(MAKE) $(build)=$(build-dir) $(build-target)
 %.symtypes: prepare FORCE
 	$(Q)$(MAKE) $(build)=$(build-dir) $(build-target)
+ifeq ($(KBUILD_EXTMOD),)
+# For the single build of an in-tree module, use a temporary file to avoid
+# the situation of modules_install installing an invalid modules.order.
+%.ko: MODORDER := .modules.tmp
+endif
+%.ko: prepare FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(build-target:.ko=.mod)
+	$(Q)echo $(build-target) > $(MODORDER)
+	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
 
 # Modules
 PHONY += /
 /: ./
 
 %/: prepare FORCE
-	$(Q)$(MAKE) KBUILD_MODULES=1 $(build)=$(build-dir)
+	$(Q)$(MAKE) KBUILD_MODULES=1 $(build)=$(build-dir) need-modorder=1
 
 # FIXME Should go into a make.lib or something
 # ===========================================================================

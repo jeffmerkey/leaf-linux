@@ -39,6 +39,8 @@ Core utilities
    ../RCU/index
    gcc-plugins
    symbol-namespaces
+   padata
+   ioctl
 
 
 Interfaces for kernel debugging

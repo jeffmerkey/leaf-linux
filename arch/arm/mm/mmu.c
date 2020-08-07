@@ -74,8 +74,6 @@ struct cachepolicy {
 	pteval_t	pte;
 };
 
-unsigned long kimage_voffset __ro_after_init;
-
 static struct cachepolicy cache_policies[] __initdata = {
 	{
 		.policy		= "uncached",
@@ -966,7 +964,7 @@ void __init create_mapping_late(struct mm_struct *mm, struct map_desc *md,
 	pud_t *pud;
 
 	p4d = p4d_alloc(mm, pgd_offset(mm, md->virtual), md->virtual);
-	if (!WARN_ON(!p4d))
+	if (WARN_ON(!p4d))
 		return;
 	pud = pud_alloc(mm, p4d, md->virtual);
 	if (WARN_ON(!pud))
@@ -1654,9 +1652,6 @@ void __init paging_init(const struct machine_desc *mdesc)
 
 	empty_zero_page = virt_to_page(zero_page);
 	__flush_dcache_page(NULL, empty_zero_page);
-
-	/* Compute the virt/idmap offset, mostly for the sake of KVM */
-	kimage_voffset = (unsigned long)&kimage_voffset - virt_to_idmap(&kimage_voffset);
 }
 
 void __init early_mm_init(const struct machine_desc *mdesc)

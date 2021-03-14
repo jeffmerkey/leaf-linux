@@ -746,12 +746,12 @@ acpi_dev_get_first_match_dev(const char *hid, const char *uid, s64 hrv)
 
 static inline void acpi_dev_put(struct acpi_device *adev) {}
 
-static inline bool is_acpi_node(struct fwnode_handle *fwnode)
+static inline bool is_acpi_node(const struct fwnode_handle *fwnode)
 {
 	return false;
 }
 
-static inline bool is_acpi_device_node(struct fwnode_handle *fwnode)
+static inline bool is_acpi_device_node(const struct fwnode_handle *fwnode)
 {
 	return false;
 }
@@ -761,7 +761,7 @@ static inline struct acpi_device *to_acpi_device_node(struct fwnode_handle *fwno
 	return NULL;
 }
 
-static inline bool is_acpi_data_node(struct fwnode_handle *fwnode)
+static inline bool is_acpi_data_node(const struct fwnode_handle *fwnode)
 {
 	return false;
 }
@@ -1079,18 +1079,24 @@ void __acpi_handle_debug(struct _ddebug *descriptor, acpi_handle handle, const c
 #if defined(CONFIG_ACPI) && defined(CONFIG_GPIOLIB)
 bool acpi_gpio_get_irq_resource(struct acpi_resource *ares,
 				struct acpi_resource_gpio **agpio);
-int acpi_dev_gpio_irq_get(struct acpi_device *adev, int index);
+int acpi_dev_gpio_irq_get_by(struct acpi_device *adev, const char *name, int index);
 #else
 static inline bool acpi_gpio_get_irq_resource(struct acpi_resource *ares,
 					      struct acpi_resource_gpio **agpio)
 {
 	return false;
 }
-static inline int acpi_dev_gpio_irq_get(struct acpi_device *adev, int index)
+static inline int acpi_dev_gpio_irq_get_by(struct acpi_device *adev,
+					   const char *name, int index)
 {
 	return -ENXIO;
 }
 #endif
+
+static inline int acpi_dev_gpio_irq_get(struct acpi_device *adev, int index)
+{
+	return acpi_dev_gpio_irq_get_by(adev, NULL, index);
+}
 
 /* Device properties */
 

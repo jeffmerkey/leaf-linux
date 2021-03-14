@@ -18,7 +18,7 @@ struct io_uring_task {
 	/* submission side */
 	struct xarray		xa;
 	struct wait_queue_head	wait;
-	struct file		*last;
+	void			*last;
 	void			*io_wq;
 	struct percpu_counter	inflight;
 	atomic_t		in_idle;
@@ -38,7 +38,7 @@ void __io_uring_free(struct task_struct *tsk);
 
 static inline void io_uring_task_cancel(void)
 {
-	if (current->io_uring && !xa_empty(&current->io_uring->xa))
+	if (current->io_uring)
 		__io_uring_task_cancel();
 }
 static inline void io_uring_files_cancel(struct files_struct *files)

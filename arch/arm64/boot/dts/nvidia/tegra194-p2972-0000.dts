@@ -554,7 +554,7 @@
 		};
 
 		hda@3510000 {
-			nvidia,model = "jetson-xavier-hda";
+			nvidia,model = "NVIDIA Jetson AGX Xavier HDA";
 			status = "okay";
 		};
 
@@ -651,6 +651,8 @@
 				reg = <0x1a>;
 				interrupt-parent = <&gpio>;
 				interrupts = <TEGRA194_MAIN_GPIO(S, 5) GPIO_ACTIVE_HIGH>;
+				clocks = <&bpmp TEGRA194_CLK_AUD_MCLK>;
+				clock-names = "mclk";
 				realtek,jd-src = <2>;
 				sound-name-prefix = "CVB-RT";
 
@@ -658,7 +660,6 @@
 					rt5658_ep: endpoint {
 						remote-endpoint = <&i2s1_dap_ep>;
 						mclk-fs = <256>;
-						clocks = <&bpmp TEGRA194_CLK_AUD_MCLK>;
 					};
 				};
 			};
@@ -830,7 +831,7 @@
 		       <&i2s1_port>, <&i2s2_port>, <&i2s4_port>, <&i2s6_port>,
 		       <&dmic3_port>;
 
-		label = "jetson-xavier-ape";
+		label = "NVIDIA Jetson AGX Xavier APE";
 
 		widgets =
 			"Microphone",	"CVB-RT MIC Jack",

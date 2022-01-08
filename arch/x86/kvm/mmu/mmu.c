@@ -1936,7 +1936,11 @@ static void mmu_audit_disable(void) { }
 
 static bool is_obsolete_sp(struct kvm *kvm, struct kvm_mmu_page *sp)
 {
-	return sp->role.invalid ||
+	if (sp->role.invalid)
+		return true;
+
+	/* TDP MMU pages due not use the MMU generation. */
+	return !sp->tdp_mmu_page &&
 	       unlikely(sp->mmu_valid_gen != kvm->arch.mmu_valid_gen);
 }
 
@@ -3976,6 +3980,34 @@ out_retry:
 	return true;
 }
 
+/*
+ * Returns true if the page fault is stale and needs to be retried, i.e. if the
+ * root was invalidated by a memslot update or a relevant mmu_notifier fired.
+ */
+static bool is_page_fault_stale(struct kvm_vcpu *vcpu,
+				struct kvm_page_fault *fault, int mmu_seq)
+{
+	struct kvm_mmu_page *sp = to_shadow_page(vcpu->arch.mmu->root_hpa);
+
+	/* Special roots, e.g. pae_root, are not backed by shadow pages. */
+	if (sp && is_obsolete_sp(vcpu->kvm, sp))
+		return true;
+
+	/*
+	 * Roots without an associated shadow page are considered invalid if
+	 * there is a pending request to free obsolete roots.  The request is
+	 * only a hint that the current root _may_ be obsolete and needs to be
+	 * reloaded, e.g. if the guest frees a PGD that KVM is tracking as a
+	 * previous root, then __kvm_mmu_prepare_zap_page() signals all vCPUs
+	 * to reload even if no vCPU is actively using the root.
+	 */
+	if (!sp && kvm_test_request(KVM_REQ_MMU_RELOAD, vcpu))
+		return true;
+
+	return fault->slot &&
+	       mmu_notifier_retry_hva(vcpu->kvm, mmu_seq, fault->hva);
+}
+
 static int direct_page_fault(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 {
 	bool is_tdp_mmu_fault = is_tdp_mmu(vcpu->arch.mmu);
@@ -4013,8 +4045,9 @@ static int direct_page_fault(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	else
 		write_lock(&vcpu->kvm->mmu_lock);
 
-	if (fault->slot && mmu_notifier_retry_hva(vcpu->kvm, mmu_seq, fault->hva))
+	if (is_page_fault_stale(vcpu, fault, mmu_seq))
 		goto out_unlock;
+
 	r = make_mmu_pages_available(vcpu);
 	if (r)
 		goto out_unlock;

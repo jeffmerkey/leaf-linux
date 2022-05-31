@@ -820,7 +820,7 @@ S:	Maintained
 F:	drivers/mailbox/mailbox-altera.c
 
 ALTERA MSGDMA IP CORE DRIVER
-M:	Olivier Dautricourt <olivier.dautricourt@orolia.com>
+M:	Olivier Dautricourt <olivierdautricourt@gmail.com>
 R:	Stefan Roese <sr@denx.de>
 L:	dmaengine@vger.kernel.org
 S:	Odd Fixes
@@ -7517,6 +7517,7 @@ S:	Maintained
 F:	Documentation/admin-guide/bootconfig.rst
 F:	fs/proc/bootconfig.c
 F:	include/linux/bootconfig.h
+F:	lib/bootconfig-data.S
 F:	lib/bootconfig.c
 F:	tools/bootconfig/*
 F:	tools/bootconfig/scripts/*
@@ -19201,6 +19202,7 @@ SYNOPSYS DESIGNWARE DMAC DRIVER
 M:	Viresh Kumar <vireshk@kernel.org>
 R:	Andy Shevchenko <andriy.shevchenko@linux.intel.com>
 S:	Maintained
+F:	Documentation/devicetree/bindings/dma/renesas,rzn1-dmamux.yaml
 F:	Documentation/devicetree/bindings/dma/snps,dma-spear1340.yaml
 F:	drivers/dma/dw/
 F:	include/dt-bindings/dma/dw-dmac.h
@@ -20119,8 +20121,8 @@ M:	Ingo Molnar <mingo@redhat.com>
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rostedt/linux-trace.git
 F:	Documentation/trace/ftrace.rst
-F:	arch/*/*/*/ftrace.h
-F:	arch/*/kernel/ftrace.c
+F:	arch/*/*/*/*ftrace*
+F:	arch/*/*/*ftrace*
 F:	fs/tracefs/
 F:	include/*/ftrace.h
 F:	include/linux/trace*.h

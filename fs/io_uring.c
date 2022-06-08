@@ -6010,7 +6010,7 @@ static int io_close(struct io_kiocb *req, unsigned int issue_flags)
 	struct files_struct *files = current->files;
 	struct io_close *close = &req->close;
 	struct fdtable *fdt;
-	struct file *file = NULL;
+	struct file *file;
 	int ret = -EBADF;
 
 	if (req->close.file_slot) {
@@ -6029,7 +6029,6 @@ static int io_close(struct io_kiocb *req, unsigned int issue_flags)
 			lockdep_is_held(&files->file_lock));
 	if (!file || file->f_op == &io_uring_fops) {
 		spin_unlock(&files->file_lock);
-		file = NULL;
 		goto err;
 	}
 
@@ -6039,21 +6038,16 @@ static int io_close(struct io_kiocb *req, unsigned int issue_flags)
 		return -EAGAIN;
 	}
 
-	ret = __close_fd_get_file(close->fd, &file);
+	file = __close_fd_get_file(close->fd);
 	spin_unlock(&files->file_lock);
-	if (ret < 0) {
-		if (ret == -ENOENT)
-			ret = -EBADF;
+	if (!file)
 		goto err;
-	}
 
 	/* No ->flush() or already async, safely close from here */
 	ret = filp_close(file, current->files);
 err:
 	if (ret < 0)
 		req_set_fail(req);
-	if (file)
-		fput(file);
 	__io_req_complete(req, issue_flags, ret, 0);
 	return 0;
 }
@@ -12053,13 +12047,13 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 			return -EINVAL;
 		fd = array_index_nospec(fd, IO_RINGFD_REG_MAX);
 		f.file = tctx->registered_rings[fd];
-		if (unlikely(!f.file))
-			return -EBADF;
+		f.flags = 0;
 	} else {
 		f = fdget(fd);
-		if (unlikely(!f.file))
-			return -EBADF;
 	}
+
+	if (unlikely(!f.file))
+		return -EBADF;
 
 	ret = -EOPNOTSUPP;
 	if (unlikely(f.file->f_op != &io_uring_fops))
@@ -12158,8 +12152,7 @@ iopoll_locked:
 out:
 	percpu_ref_put(&ctx->refs);
 out_fput:
-	if (!(flags & IORING_ENTER_REGISTERED_RING))
-		fdput(f);
+	fdput(f);
 	return ret;
 }
 

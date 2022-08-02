@@ -7485,6 +7485,8 @@ F:	include/video/s1d13xxxfb.h
 EROFS FILE SYSTEM
 M:	Gao Xiang <xiang@kernel.org>
 M:	Chao Yu <chao@kernel.org>
+R:	Yue Hu <huyue2@coolpad.com>
+R:	Jeffle Xu <jefflexu@linux.alibaba.com>
 L:	linux-erofs@lists.ozlabs.org
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs.git
@@ -9036,6 +9038,12 @@ F:	Documentation/admin-guide/perf/hisi-pcie-pmu.rst
 F:	Documentation/admin-guide/perf/hisi-pmu.rst
 F:	drivers/perf/hisilicon
 
+HISILICON HNS3 PMU DRIVER
+M:	Guangbin Huang <huangguangbin2@huawei.com>
+S:	Supported
+F:	Documentation/admin-guide/perf/hns3-pmu.rst
+F:	drivers/perf/hisilicon/hns3_pmu.c
+
 HISILICON QM AND ZIP Controller DRIVER
 M:	Zhou Wang <wangzhou1@hisilicon.com>
 L:	linux-crypto@vger.kernel.org
@@ -9618,6 +9626,7 @@ F:	drivers/input/misc/ideapad_slidebar.c
 
 IDMAPPED MOUNTS
 M:	Christian Brauner <brauner@kernel.org>
+M:	Seth Forshee <sforshee@kernel.org>
 L:	linux-fsdevel@vger.kernel.org
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/brauner/linux.git

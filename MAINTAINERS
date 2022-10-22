@@ -14713,6 +14713,12 @@ F:	drivers/nvme/target/auth.c
 F:	drivers/nvme/target/fabrics-cmd-auth.c
 F:	include/linux/nvme-auth.h
 
+NVM EXPRESS HARDWARE MONITORING SUPPORT
+M:	Guenter Roeck <linux@roeck-us.net>
+L:	linux-nvme@lists.infradead.org
+S:	Supported
+F:	drivers/nvme/host/hwmon.c
+
 NVM EXPRESS FC TRANSPORT DRIVERS
 M:	James Smart <james.smart@broadcom.com>
 L:	linux-nvme@lists.infradead.org
@@ -22124,6 +22130,7 @@ F:	Documentation/watchdog/
 F:	drivers/watchdog/
 F:	include/linux/watchdog.h
 F:	include/uapi/linux/watchdog.h
+F:	include/trace/events/watchdog.h
 
 WHISKEYCOVE PMIC GPIO DRIVER
 M:	Kuppuswamy Sathyanarayanan <sathyanarayanan.kuppuswamy@linux.intel.com>

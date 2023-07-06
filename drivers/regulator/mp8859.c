@@ -73,7 +73,7 @@ static int mp8859_get_voltage_sel(struct regulator_dev *rdev)
 	return val;
 }
 
-static const struct regulator_linear_range mp8859_dcdc_ranges[] = {
+static const struct linear_range mp8859_dcdc_ranges[] = {
 	REGULATOR_LINEAR_RANGE(0, VOL_MIN_IDX, VOL_MAX_IDX, 10000),
 };
 
@@ -129,7 +129,7 @@ static int mp8859_i2c_probe(struct i2c_client *i2c)
 	return 0;
 }
 
-static const struct of_device_id mp8859_dt_id[] = {
+static const struct of_device_id mp8859_dt_id[] __maybe_unused = {
 	{.compatible =  "mps,mp8859"},
 	{},
 };
@@ -144,9 +144,10 @@ MODULE_DEVICE_TABLE(i2c, mp8859_i2c_id);
 static struct i2c_driver mp8859_regulator_driver = {
 	.driver = {
 		.name = "mp8859",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(mp8859_dt_id),
 	},
-	.probe_new = mp8859_i2c_probe,
+	.probe = mp8859_i2c_probe,
 	.id_table = mp8859_i2c_id,
 };
 

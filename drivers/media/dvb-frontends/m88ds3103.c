@@ -451,7 +451,7 @@ static int m88ds3103b_select_mclk(struct m88ds3103_dev *dev)
 
 static int m88ds3103b_set_mclk(struct m88ds3103_dev *dev, u32 mclk_khz)
 {
-	u8 reg11 = 0x0A, reg15, reg16, reg1D, reg1E, reg1F, tmp;
+	u8 reg15, reg16, reg1D, reg1E, reg1F, tmp;
 	u8 sm, f0 = 0, f1 = 0, f2 = 0, f3 = 0;
 	u16 pll_div_fb, N;
 	u32 div;
@@ -480,8 +480,6 @@ static int m88ds3103b_set_mclk(struct m88ds3103_dev *dev, u32 mclk_khz)
 	div /= mclk_khz;
 
 	if (dev->cfg->ts_mode == M88DS3103_TS_SERIAL) {
-		reg11 |= 0x02;
-
 		if (div <= 32) {
 			N = 2;
 
@@ -532,8 +530,6 @@ static int m88ds3103b_set_mclk(struct m88ds3103_dev *dev, u32 mclk_khz)
 		else if ((f3 < 8) && (f3 != 0))
 			f3 = 8;
 	} else {
-		reg11 &= ~0x02;
-
 		if (div <= 32) {
 			N = 2;
 
@@ -906,7 +902,7 @@ static int m88ds3103_set_frontend(struct dvb_frontend *fe)
 			if (ret)
 				goto err;
 		}
-		/* fall through */
+		fallthrough;
 	default:
 		u16tmp = DIV_ROUND_UP(target_mclk, dev->cfg->ts_clk);
 		u8tmp1 = u16tmp / 2 - 1;
@@ -980,6 +976,8 @@ static int m88ds3103_set_frontend(struct dvb_frontend *fe)
 			goto err;
 
 		ret = m88ds3103_update_bits(dev, 0xc9, 0x08, 0x08);
+		if (ret)
+			goto err;
 	}
 
 	dev_dbg(&client->dev, "carrier offset=%d\n",
@@ -1762,9 +1760,9 @@ static struct i2c_adapter *m88ds3103_get_i2c_adapter(struct i2c_client *client)
 	return dev->muxc->adapter[0];
 }
 
-static int m88ds3103_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int m88ds3103_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct m88ds3103_dev *dev;
 	struct m88ds3103_platform_data *pdata = client->dev.platform_data;
 	int ret;
@@ -1791,9 +1789,9 @@ static int m88ds3103_probe(struct i2c_client *client,
 	dev->config.lnb_en_pol = pdata->lnb_en_pol;
 	dev->cfg = &dev->config;
 	/* create regmap */
-	dev->regmap_config.reg_bits = 8,
-	dev->regmap_config.val_bits = 8,
-	dev->regmap_config.lock_arg = dev,
+	dev->regmap_config.reg_bits = 8;
+	dev->regmap_config.val_bits = 8;
+	dev->regmap_config.lock_arg = dev;
 	dev->regmap = devm_regmap_init_i2c(client, &dev->regmap_config);
 	if (IS_ERR(dev->regmap)) {
 		ret = PTR_ERR(dev->regmap);
@@ -1898,12 +1896,12 @@ static int m88ds3103_probe(struct i2c_client *client,
 		if (ret)
 			goto err_kfree;
 		dev->dt_addr = ((utmp & 0x80) == 0) ? 0x42 >> 1 : 0x40 >> 1;
-		dev_err(&client->dev, "dt addr is 0x%02x", dev->dt_addr);
+		dev_dbg(&client->dev, "dt addr is 0x%02x\n", dev->dt_addr);
 
 		dev->dt_client = i2c_new_dummy_device(client->adapter,
 						      dev->dt_addr);
-		if (!dev->dt_client) {
-			ret = -ENODEV;
+		if (IS_ERR(dev->dt_client)) {
+			ret = PTR_ERR(dev->dt_client);
 			goto err_kfree;
 		}
 	}
@@ -1916,7 +1914,7 @@ err:
 	return ret;
 }
 
-static int m88ds3103_remove(struct i2c_client *client)
+static void m88ds3103_remove(struct i2c_client *client)
 {
 	struct m88ds3103_dev *dev = i2c_get_clientdata(client);
 
@@ -1928,7 +1926,6 @@ static int m88ds3103_remove(struct i2c_client *client)
 	i2c_mux_del_adapters(dev->muxc);
 
 	kfree(dev);
-	return 0;
 }
 
 static const struct i2c_device_id m88ds3103_id_table[] = {

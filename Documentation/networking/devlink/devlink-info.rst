@@ -44,9 +44,11 @@ versions is generally discouraged - here, and via any other Linux API.
        reported for two ports of the same device or on two hosts of
        a multi-host device should be identical.
 
-       .. note:: ``devlink-info`` API should be extended with a new field
-	  if devices want to report board/product serial number (often
-	  reported in PCI *Vital Product Data* capability).
+   * - ``board.serial_number``
+     - Board serial number of the device.
+
+       This is usually the serial number of the board, often available in
+       PCI *Vital Product Data*.
 
    * - ``fixed``
      - Group for hardware identifiers, and versions of components
@@ -196,14 +198,15 @@ fw.bundle_id
 
 Unique identifier of the entire firmware bundle.
 
+fw.bootloader
+-------------
+
+Version of the bootloader.
+
 Future work
 ===========
 
 The following extensions could be useful:
-
- - product serial number - NIC boards often get labeled with a board serial
-   number rather than ASIC serial number; it'd be useful to add board serial
-   numbers to the API if they can be retrieved from the device;
 
  - on-disk firmware file names - drivers list the file names of firmware they
    may need to load onto devices via the ``MODULE_FIRMWARE()`` macro. These,

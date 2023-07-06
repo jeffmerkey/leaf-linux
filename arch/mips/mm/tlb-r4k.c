@@ -21,7 +21,6 @@
 #include <asm/bootinfo.h>
 #include <asm/hazards.h>
 #include <asm/mmu_context.h>
-#include <asm/pgtable.h>
 #include <asm/tlb.h>
 #include <asm/tlbmisc.h>
 
@@ -120,7 +119,7 @@ void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 		if (size <= (current_cpu_data.tlbsizeftlbsets ?
 			     current_cpu_data.tlbsize / 8 :
 			     current_cpu_data.tlbsize / 2)) {
-			unsigned long old_entryhi, uninitialized_var(old_mmid);
+			unsigned long old_entryhi, old_mmid;
 			int newpid = cpu_asid(cpu, mm);
 
 			old_entryhi = read_c0_entryhi();
@@ -214,7 +213,7 @@ void local_flush_tlb_page(struct vm_area_struct *vma, unsigned long page)
 	int cpu = smp_processor_id();
 
 	if (cpu_context(cpu, vma->vm_mm) != 0) {
-		unsigned long uninitialized_var(old_mmid);
+		unsigned long old_mmid;
 		unsigned long flags, old_entryhi;
 		int idx;
 
@@ -298,7 +297,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	p4d_t *p4dp;
 	pud_t *pudp;
 	pmd_t *pmdp;
-	pte_t *ptep;
+	pte_t *ptep, *ptemap = NULL;
 	int idx, pid;
 
 	/*
@@ -345,7 +344,12 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	} else
 #endif
 	{
-		ptep = pte_offset_map(pmdp, address);
+		ptemap = ptep = pte_offset_map(pmdp, address);
+		/*
+		 * update_mmu_cache() is called between pte_offset_map_lock()
+		 * and pte_unmap_unlock(), so we can assume that ptep is not
+		 * NULL here: and what should be done below if it were NULL?
+		 */
 
 #if defined(CONFIG_PHYS_ADDR_T_64BIT) && defined(CONFIG_CPU_MIPS32)
 #ifdef CONFIG_XPA
@@ -374,6 +378,9 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	tlbw_use_hazard();
 	htw_start();
 	flush_micro_tlb_vm(vma);
+
+	if (ptemap)
+		pte_unmap(ptemap);
 	local_irq_restore(flags);
 }
 
@@ -383,7 +390,7 @@ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
 #ifdef CONFIG_XPA
 	panic("Broken for XPA kernels");
 #else
-	unsigned int uninitialized_var(old_mmid);
+	unsigned int old_mmid;
 	unsigned long flags;
 	unsigned long wired;
 	unsigned long old_pagemask;
@@ -439,6 +446,7 @@ int has_transparent_hugepage(void)
 	}
 	return mask == PM_HUGE_MASK;
 }
+EXPORT_SYMBOL(has_transparent_hugepage);
 
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE  */
 

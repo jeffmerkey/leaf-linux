@@ -49,7 +49,6 @@
 #include <asm/efi.h>
 #include <asm/e820/api.h>
 #include <asm/time.h>
-#include <asm/set_memory.h>
 #include <asm/tlbflush.h>
 #include <asm/x86_init.h>
 #include <asm/uv/uv.h>
@@ -62,12 +61,12 @@ static unsigned long efi_runtime, efi_nr_tables;
 unsigned long efi_fw_vendor, efi_config_table;
 
 static const efi_config_table_type_t arch_tables[] __initconst = {
-	{EFI_PROPERTIES_TABLE_GUID, "PROP", &prop_phys},
-	{UGA_IO_PROTOCOL_GUID, "UGA", &uga_phys},
+	{EFI_PROPERTIES_TABLE_GUID,	&prop_phys,		"PROP"		},
+	{UGA_IO_PROTOCOL_GUID,		&uga_phys,		"UGA"		},
 #ifdef CONFIG_X86_UV
-	{UV_SYSTEM_TABLE_GUID, "UVsystab", &uv_systab_phys},
+	{UV_SYSTEM_TABLE_GUID,		&uv_systab_phys,	"UVsystab"	},
 #endif
-	{NULL_GUID, NULL, NULL},
+	{},
 };
 
 static const unsigned long * const efi_tables[] = {
@@ -91,6 +90,15 @@ static const unsigned long * const efi_tables[] = {
 	&efi.tpm_log,
 	&efi.tpm_final_log,
 	&efi_rng_seed,
+#ifdef CONFIG_LOAD_UEFI_KEYS
+	&efi.mokvar_table,
+#endif
+#ifdef CONFIG_EFI_COCO_SECRET
+	&efi.coco_secret,
+#endif
+#ifdef CONFIG_UNACCEPTED_MEMORY
+	&efi.unaccepted,
+#endif
 };
 
 u64 efi_setup;		/* efi setup_data physical address */
@@ -102,29 +110,6 @@ static int __init setup_add_efi_memmap(char *arg)
 	return 0;
 }
 early_param("add_efi_memmap", setup_add_efi_memmap);
-
-void __init efi_find_mirror(void)
-{
-	efi_memory_desc_t *md;
-	u64 mirror_size = 0, total_size = 0;
-
-	if (!efi_enabled(EFI_MEMMAP))
-		return;
-
-	for_each_efi_memory_desc(md) {
-		unsigned long long start = md->phys_addr;
-		unsigned long long size = md->num_pages << EFI_PAGE_SHIFT;
-
-		total_size += size;
-		if (md->attribute & EFI_MEMORY_MORE_RELIABLE) {
-			memblock_mark_mirror(start, size);
-			mirror_size += size;
-		}
-	}
-	if (mirror_size)
-		pr_info("Memory: %lldM/%lldM mirrored memory\n",
-			mirror_size>>20, total_size>>20);
-}
 
 /*
  * Tell the kernel about the EFI memory map.  This might include
@@ -187,7 +172,7 @@ static void __init do_add_efi_memmap(void)
 }
 
 /*
- * Given add_efi_memmap defaults to 0 and there there is no alternative
+ * Given add_efi_memmap defaults to 0 and there is no alternative
  * e820 mechanism for soft-reserved memory, import the full EFI memory
  * map if soft reservations are present and enabled. Otherwise, the
  * mechanism to disable the kernel's consideration of EFI_MEMORY_SP is
@@ -232,9 +217,11 @@ int __init efi_memblock_x86_reserve_range(void)
 	data.desc_size		= e->efi_memdesc_size;
 	data.desc_version	= e->efi_memdesc_version;
 
-	rv = efi_memmap_init_early(&data);
-	if (rv)
-		return rv;
+	if (!efi_enabled(EFI_PARAVIRT)) {
+		rv = efi_memmap_init_early(&data);
+		if (rv)
+			return rv;
+	}
 
 	if (add_efi_memmap || do_efi_soft_reserve())
 		do_add_efi_memmap();
@@ -321,6 +308,50 @@ static void __init efi_clean_memmap(void)
 	}
 }
 
+/*
+ * Firmware can use EfiMemoryMappedIO to request that MMIO regions be
+ * mapped by the OS so they can be accessed by EFI runtime services, but
+ * should have no other significance to the OS (UEFI r2.10, sec 7.2).
+ * However, most bootloaders and EFI stubs convert EfiMemoryMappedIO
+ * regions to E820_TYPE_RESERVED entries, which prevent Linux from
+ * allocating space from them (see remove_e820_regions()).
+ *
+ * Some platforms use EfiMemoryMappedIO entries for PCI MMCONFIG space and
+ * PCI host bridge windows, which means Linux can't allocate BAR space for
+ * hot-added devices.
+ *
+ * Remove large EfiMemoryMappedIO regions from the E820 map to avoid this
+ * problem.
+ *
+ * Retain small EfiMemoryMappedIO regions because on some platforms, these
+ * describe non-window space that's included in host bridge _CRS.  If we
+ * assign that space to PCI devices, they don't work.
+ */
+static void __init efi_remove_e820_mmio(void)
+{
+	efi_memory_desc_t *md;
+	u64 size, start, end;
+	int i = 0;
+
+	for_each_efi_memory_desc(md) {
+		if (md->type == EFI_MEMORY_MAPPED_IO) {
+			size = md->num_pages << EFI_PAGE_SHIFT;
+			start = md->phys_addr;
+			end = start + size - 1;
+			if (size >= 256*1024) {
+				pr_info("Remove mem%02u: MMIO range=[0x%08llx-0x%08llx] (%lluMB) from e820 map\n",
+					i, start, end, size >> 20);
+				e820__range_remove(start, size,
+						   E820_TYPE_RESERVED, 1);
+			} else {
+				pr_info("Not removing mem%02u: MMIO range=[0x%08llx-0x%08llx] (%lluKB) from e820 map\n",
+					i, start, end, size >> 10);
+			}
+		}
+		i++;
+	}
+}
+
 void __init efi_print_memmap(void)
 {
 	efi_memory_desc_t *md;
@@ -352,7 +383,7 @@ static int __init efi_systab_init(unsigned long phys)
 		return -ENOMEM;
 	}
 
-	ret = efi_systab_check_header(hdr, 1);
+	ret = efi_systab_check_header(hdr);
 	if (ret) {
 		early_memunmap(p, size);
 		return ret;
@@ -466,7 +497,7 @@ void __init efi_init(void)
 	 */
 
 	if (!efi_runtime_supported())
-		pr_info("No EFI runtime due to 32/64-bit mismatch with kernel\n");
+		pr_err("No EFI runtime due to 32/64-bit mismatch with kernel\n");
 
 	if (!efi_runtime_supported() || efi_runtime_disabled()) {
 		efi_memmap_unmap();
@@ -492,77 +523,11 @@ void __init efi_init(void)
 	set_bit(EFI_RUNTIME_SERVICES, &efi.flags);
 	efi_clean_memmap();
 
+	efi_remove_e820_mmio();
+
 	if (efi_enabled(EFI_DBG))
 		efi_print_memmap();
 }
-
-#if defined(CONFIG_X86_32) || defined(CONFIG_X86_UV)
-
-void __init efi_set_executable(efi_memory_desc_t *md, bool executable)
-{
-	u64 addr, npages;
-
-	addr = md->virt_addr;
-	npages = md->num_pages;
-
-	memrange_efi_to_native(&addr, &npages);
-
-	if (executable)
-		set_memory_x(addr, npages);
-	else
-		set_memory_nx(addr, npages);
-}
-
-void __init runtime_code_page_mkexec(void)
-{
-	efi_memory_desc_t *md;
-
-	/* Make EFI runtime service code area executable */
-	for_each_efi_memory_desc(md) {
-		if (md->type != EFI_RUNTIME_SERVICES_CODE)
-			continue;
-
-		efi_set_executable(md, true);
-	}
-}
-
-void __init efi_memory_uc(u64 addr, unsigned long size)
-{
-	unsigned long page_shift = 1UL << EFI_PAGE_SHIFT;
-	u64 npages;
-
-	npages = round_up(size, page_shift) / page_shift;
-	memrange_efi_to_native(&addr, &npages);
-	set_memory_uc(addr, npages);
-}
-
-void __init old_map_region(efi_memory_desc_t *md)
-{
-	u64 start_pfn, end_pfn, end;
-	unsigned long size;
-	void *va;
-
-	start_pfn = PFN_DOWN(md->phys_addr);
-	size	  = md->num_pages << PAGE_SHIFT;
-	end	  = md->phys_addr + size;
-	end_pfn   = PFN_UP(end);
-
-	if (pfn_range_is_mapped(start_pfn, end_pfn)) {
-		va = __va(md->phys_addr);
-
-		if (!(md->attribute & EFI_MEMORY_WB))
-			efi_memory_uc((u64)(unsigned long)va, size);
-	} else
-		va = efi_ioremap(md->phys_addr, size,
-				 md->type, md->attribute);
-
-	md->virt_addr = (u64) (unsigned long) va;
-	if (!va)
-		pr_err("ioremap of 0x%llX failed!\n",
-		       (unsigned long long)md->phys_addr);
-}
-
-#endif
 
 /* Merge contiguous regions of the same type and attribute */
 static void __init efi_merge_regions(void)
@@ -648,7 +613,7 @@ static inline void *efi_map_next_entry_reverse(void *entry)
  */
 static void *efi_map_next_entry(void *entry)
 {
-	if (!efi_have_uv1_memmap() && efi_enabled(EFI_64BIT)) {
+	if (efi_enabled(EFI_64BIT)) {
 		/*
 		 * Starting in UEFI v2.5 the EFI_PROPERTIES_TABLE
 		 * config table feature requires us to map all entries
@@ -777,11 +742,9 @@ static void __init kexec_enter_virtual_mode(void)
 
 	/*
 	 * We don't do virtual mode, since we don't do runtime services, on
-	 * non-native EFI. With the UV1 memmap, we don't do runtime services in
-	 * kexec kernel because in the initial boot something else might
-	 * have been mapped at these virtual addresses.
+	 * non-native EFI.
 	 */
-	if (efi_is_mixed() || efi_have_uv1_memmap()) {
+	if (efi_is_mixed()) {
 		efi_memmap_unmap();
 		clear_bit(EFI_RUNTIME_SERVICES, &efi.flags);
 		return;
@@ -831,12 +794,6 @@ static void __init kexec_enter_virtual_mode(void)
  * Essentially, we look through the EFI memmap and map every region that
  * has the runtime attribute bit set in its memory descriptor into the
  * efi_pgd page table.
- *
- * The old method which used to update that memory descriptor with the
- * virtual address obtained from ioremap() is still supported when the
- * kernel is booted on SG1 UV1 hardware. Same old method enabled the
- * runtime services to be called without having to thunk back into
- * physical mode for every invocation.
  *
  * The new method does a pagetable switch in a preemption-safe manner
  * so that we're in a different address space when calling a runtime

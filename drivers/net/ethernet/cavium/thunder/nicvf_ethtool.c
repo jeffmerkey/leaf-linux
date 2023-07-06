@@ -5,6 +5,7 @@
 
 /* ETHTOOL Support for VNIC_VF Device*/
 
+#include <linux/ethtool.h>
 #include <linux/pci.h>
 #include <linux/net_tstamp.h>
 
@@ -190,8 +191,8 @@ static void nicvf_get_drvinfo(struct net_device *netdev,
 {
 	struct nicvf *nic = netdev_priv(netdev);
 
-	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strlcpy(info->bus_info, pci_name(nic->pdev), sizeof(info->bus_info));
+	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strscpy(info->bus_info, pci_name(nic->pdev), sizeof(info->bus_info));
 }
 
 static u32 nicvf_get_msglevel(struct net_device *netdev)
@@ -455,7 +456,9 @@ static void nicvf_get_regs(struct net_device *dev,
 }
 
 static int nicvf_get_coalesce(struct net_device *netdev,
-			      struct ethtool_coalesce *cmd)
+			      struct ethtool_coalesce *cmd,
+			      struct kernel_ethtool_coalesce *kernel_coal,
+			      struct netlink_ext_ack *extack)
 {
 	struct nicvf *nic = netdev_priv(netdev);
 
@@ -464,7 +467,9 @@ static int nicvf_get_coalesce(struct net_device *netdev,
 }
 
 static void nicvf_get_ringparam(struct net_device *netdev,
-				struct ethtool_ringparam *ring)
+				struct ethtool_ringparam *ring,
+				struct kernel_ethtool_ringparam *kernel_ring,
+				struct netlink_ext_ack *extack)
 {
 	struct nicvf *nic = netdev_priv(netdev);
 	struct queue_set *qs = nic->qs;
@@ -476,7 +481,9 @@ static void nicvf_get_ringparam(struct net_device *netdev,
 }
 
 static int nicvf_set_ringparam(struct net_device *netdev,
-			       struct ethtool_ringparam *ring)
+			       struct ethtool_ringparam *ring,
+			       struct kernel_ethtool_ringparam *kernel_ring,
+			       struct netlink_ext_ack *extack)
 {
 	struct nicvf *nic = netdev_priv(netdev);
 	struct queue_set *qs = nic->qs;
@@ -522,7 +529,7 @@ static int nicvf_get_rss_hash_opts(struct nicvf *nic,
 	case SCTP_V4_FLOW:
 	case SCTP_V6_FLOW:
 		info->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		/* Fall through */
+		fallthrough;
 	case IPV4_FLOW:
 	case IPV6_FLOW:
 		info->data |= RXH_IP_SRC | RXH_IP_DST;
@@ -728,12 +735,17 @@ static int nicvf_set_channels(struct net_device *dev,
 	if (channel->tx_count > nic->max_queues)
 		return -EINVAL;
 
-	if (nic->xdp_prog &&
-	    ((channel->tx_count + channel->rx_count) > nic->max_queues)) {
-		netdev_err(nic->netdev,
-			   "XDP mode, RXQs + TXQs > Max %d\n",
-			   nic->max_queues);
-		return -EINVAL;
+	if (channel->tx_count + channel->rx_count > nic->max_queues) {
+		if (nic->xdp_prog) {
+			netdev_err(nic->netdev,
+				   "XDP mode, RXQs + TXQs > Max %d\n",
+				   nic->max_queues);
+			return -EINVAL;
+		}
+
+		xdp_clear_features_flag(nic->netdev);
+	} else if (!pass1_silicon(nic->pdev)) {
+		xdp_set_features_flag(dev, NETDEV_XDP_ACT_BASIC);
 	}
 
 	if (if_up)

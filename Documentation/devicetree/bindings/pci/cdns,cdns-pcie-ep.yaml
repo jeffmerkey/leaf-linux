@@ -10,8 +10,7 @@ maintainers:
   - Tom Joseph <tjoseph@cadence.com>
 
 allOf:
-  - $ref: "cdns-pcie.yaml#"
-  - $ref: "pci-ep.yaml#"
+  - $ref: cdns-pcie-ep.yaml#
 
 properties:
   compatible:
@@ -28,6 +27,8 @@ properties:
 required:
   - reg
   - reg-names
+
+unevaluatedProperties: false
 
 examples:
   - |

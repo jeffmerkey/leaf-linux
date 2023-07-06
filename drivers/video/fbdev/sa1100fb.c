@@ -18,7 +18,7 @@
  * Clean patches should be sent to the ARM Linux Patch System.  Please see the
  * following web page for more information:
  *
- *	http://www.arm.linux.org.uk/developer/patches/info.shtml
+ *	https://www.arm.linux.org.uk/developer/patches/info.shtml
  *
  * Thank you.
  *
@@ -57,14 +57,14 @@
  *	- Driver appears to be working for Brutus 320x200x8bpp mode.  Other
  *	  resolutions are working, but only the 8bpp mode is supported.
  *	  Changes need to be made to the palette encode and decode routines
- *	  to support 4 and 16 bpp modes.  
+ *	  to support 4 and 16 bpp modes.
  *	  Driver is not designed to be a module.  The FrameBuffer is statically
- *	  allocated since dynamic allocation of a 300k buffer cannot be 
- *	  guaranteed. 
+ *	  allocated since dynamic allocation of a 300k buffer cannot be
+ *	  guaranteed.
  *
  * 1999/06/17:
  *	- FrameBuffer memory is now allocated at run-time when the
- *	  driver is initialized.    
+ *	  driver is initialized.
  *
  * 2000/04/10: Nicolas Pitre <nico@fluxnic.net>
  *	- Big cleanup for dynamic selection of machine type at run time.
@@ -74,8 +74,8 @@
  *
  * 2000/08/07: Tak-Shing Chan <tchan.rd@idthk.com>
  *	       Jeff Sutherland <jsutherland@accelent.com>
- *	- Resolved an issue caused by a change made to the Assabet's PLD 
- *	  earlier this year which broke the framebuffer driver for newer 
+ *	- Resolved an issue caused by a change made to the Assabet's PLD
+ *	  earlier this year which broke the framebuffer driver for newer
  *	  Phase 4 Assabets.  Some other parameters were changed to optimize
  *	  for the Sharp display.
  *
@@ -102,7 +102,7 @@
  * 2000/11/23: Eric Peng <ericpeng@coventive.com>
  *	- Freebird add
  *
- * 2001/02/07: Jamey Hicks <jamey.hicks@compaq.com> 
+ * 2001/02/07: Jamey Hicks <jamey.hicks@compaq.com>
  *	       Cliff Brake <cbrake@accelent.com>
  *	- Added PM callback
  *
@@ -173,7 +173,7 @@
 #include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/cpufreq.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/mutex.h>
@@ -184,7 +184,6 @@
 
 #include <mach/hardware.h>
 #include <asm/mach-types.h>
-#include <mach/shannon.h>
 
 /*
  * Complain if VAR is out of range.
@@ -501,7 +500,7 @@ sa1100fb_set_cmap(struct fb_cmap *cmap, int kspc, int con,
  *  	the shortest recovery time
  *  Suspend
  *  	This refers to a level of power management in which substantial power
- *  	reduction is achieved by the display.  The display can have a longer 
+ *  	reduction is achieved by the display.  The display can have a longer
  *  	recovery time from this state than from the Stand-by state
  *  Off
  *  	This indicates that the display is consuming the lowest level of power
@@ -523,9 +522,9 @@ sa1100fb_set_cmap(struct fb_cmap *cmap, int kspc, int con,
  */
 /*
  * sa1100fb_blank():
- *	Blank the display by setting all palette values to zero.  Note, the 
+ *	Blank the display by setting all palette values to zero.  Note, the
  * 	12 and 16 bpp modes don't really use the palette, so this will not
- *      blank the display in all modes.  
+ *      blank the display in all modes.
  */
 static int sa1100fb_blank(int blank, struct fb_info *info)
 {
@@ -604,8 +603,8 @@ static inline unsigned int get_pcd(struct sa1100fb_info *fbi,
 
 /*
  * sa1100fb_activate_var():
- *	Configures LCD Controller based on entries in var parameter.  Settings are      
- *	only written to the controller if changes were made.  
+ *	Configures LCD Controller based on entries in var parameter.  Settings are
+ *	only written to the controller if changes were made.
  */
 static int sa1100fb_activate_var(struct fb_var_screeninfo *var, struct sa1100fb_info *fbi)
 {
@@ -748,7 +747,7 @@ static void sa1100fb_setup_gpio(struct sa1100fb_info *fbi)
 	 *
 	 * SA1110 spec update nr. 25 says we can and should
 	 * clear LDD15 to 12 for 4 or 8bpp modes with active
-	 * panels.  
+	 * panels.
 	 */
 	if ((fbi->reg_lccr0 & LCCR0_CMS) == LCCR0_Color &&
 	    (fbi->reg_lccr0 & (LCCR0_Dual|LCCR0_Act)) != 0) {
@@ -799,8 +798,8 @@ static void sa1100fb_enable_controller(struct sa1100fb_info *fbi)
 	writel_relaxed(fbi->dbar2, fbi->base + DBAR2);
 	writel_relaxed(fbi->reg_lccr0 | LCCR0_LEN, fbi->base + LCCR0);
 
-	if (machine_is_shannon())
-		gpio_set_value(SHANNON_GPIO_DISP_EN, 1);
+	if (fbi->shannon_lcden)
+		gpiod_set_value(fbi->shannon_lcden, 1);
 
 	dev_dbg(fbi->dev, "DBAR1: 0x%08x\n", readl_relaxed(fbi->base + DBAR1));
 	dev_dbg(fbi->dev, "DBAR2: 0x%08x\n", readl_relaxed(fbi->base + DBAR2));
@@ -817,8 +816,8 @@ static void sa1100fb_disable_controller(struct sa1100fb_info *fbi)
 
 	dev_dbg(fbi->dev, "Disabling LCD controller\n");
 
-	if (machine_is_shannon())
-		gpio_set_value(SHANNON_GPIO_DISP_EN, 0);
+	if (fbi->shannon_lcden)
+		gpiod_set_value(fbi->shannon_lcden, 0);
 
 	set_current_state(TASK_UNINTERRUPTIBLE);
 	add_wait_queue(&fbi->ctrlr_wait, &wait);
@@ -935,7 +934,7 @@ static void set_ctrlr_state(struct sa1100fb_info *fbi, u_int state)
 		 */
 		if (old_state != C_DISABLE_PM)
 			break;
-		/* fall through */
+		fallthrough;
 
 	case C_ENABLE:
 		/*
@@ -1021,9 +1020,9 @@ static int sa1100fb_resume(struct platform_device *dev)
 
 /*
  * sa1100fb_map_video_memory():
- *      Allocates the DRAM memory for the frame buffer.  This buffer is  
- *	remapped into a non-cached, non-buffered, memory region to  
- *      allow palette and pixel writes to occur without flushing the 
+ *      Allocates the DRAM memory for the frame buffer.  This buffer is
+ *	remapped into a non-cached, non-buffered, memory region to
+ *      allow palette and pixel writes to occur without flushing the
  *      cache.  Once this area is remapped, all virtual memory
  *      access to the video memory should occur at the new region.
  */
@@ -1173,12 +1172,10 @@ static int sa1100fb_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	if (machine_is_shannon()) {
-		ret = devm_gpio_request_one(&pdev->dev, SHANNON_GPIO_DISP_EN,
-			GPIOF_OUT_INIT_LOW, "display enable");
-		if (ret)
-			return ret;
-	}
+	fbi->shannon_lcden = gpiod_get_optional(&pdev->dev, "shannon-lcden",
+						GPIOD_OUT_LOW);
+	if (IS_ERR(fbi->shannon_lcden))
+		return PTR_ERR(fbi->shannon_lcden);
 
 	/* Initialize video memory */
 	ret = sa1100fb_map_video_memory(fbi);
@@ -1224,47 +1221,6 @@ int __init sa1100fb_init(void)
 		return -ENODEV;
 
 	return platform_driver_register(&sa1100fb_driver);
-}
-
-int __init sa1100fb_setup(char *options)
-{
-#if 0
-	char *this_opt;
-
-	if (!options || !*options)
-		return 0;
-
-	while ((this_opt = strsep(&options, ",")) != NULL) {
-
-		if (!strncmp(this_opt, "bpp:", 4))
-			current_par.max_bpp =
-			    simple_strtoul(this_opt + 4, NULL, 0);
-
-		if (!strncmp(this_opt, "lccr0:", 6))
-			lcd_shadow.lccr0 =
-			    simple_strtoul(this_opt + 6, NULL, 0);
-		if (!strncmp(this_opt, "lccr1:", 6)) {
-			lcd_shadow.lccr1 =
-			    simple_strtoul(this_opt + 6, NULL, 0);
-			current_par.max_xres =
-			    (lcd_shadow.lccr1 & 0x3ff) + 16;
-		}
-		if (!strncmp(this_opt, "lccr2:", 6)) {
-			lcd_shadow.lccr2 =
-			    simple_strtoul(this_opt + 6, NULL, 0);
-			current_par.max_yres =
-			    (lcd_shadow.
-			     lccr0 & LCCR0_SDS) ? ((lcd_shadow.
-						    lccr2 & 0x3ff) +
-						   1) *
-			    2 : ((lcd_shadow.lccr2 & 0x3ff) + 1);
-		}
-		if (!strncmp(this_opt, "lccr3:", 6))
-			lcd_shadow.lccr3 =
-			    simple_strtoul(this_opt + 6, NULL, 0);
-	}
-#endif
-	return 0;
 }
 
 module_init(sa1100fb_init);

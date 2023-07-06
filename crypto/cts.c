@@ -85,9 +85,9 @@ static int crypto_cts_setkey(struct crypto_skcipher *parent, const u8 *key,
 	return crypto_skcipher_setkey(child, key, keylen);
 }
 
-static void cts_cbc_crypt_done(struct crypto_async_request *areq, int err)
+static void cts_cbc_crypt_done(void *data, int err)
 {
-	struct skcipher_request *req = areq->data;
+	struct skcipher_request *req = data;
 
 	if (err == -EINPROGRESS)
 		return;
@@ -125,9 +125,9 @@ static int cts_cbc_encrypt(struct skcipher_request *req)
 	return crypto_skcipher_encrypt(subreq);
 }
 
-static void crypto_cts_encrypt_done(struct crypto_async_request *areq, int err)
+static void crypto_cts_encrypt_done(void *data, int err)
 {
-	struct skcipher_request *req = areq->data;
+	struct skcipher_request *req = data;
 
 	if (err)
 		goto out;
@@ -219,9 +219,9 @@ static int cts_cbc_decrypt(struct skcipher_request *req)
 	return crypto_skcipher_decrypt(subreq);
 }
 
-static void crypto_cts_decrypt_done(struct crypto_async_request *areq, int err)
+static void crypto_cts_decrypt_done(void *data, int err)
 {
-	struct skcipher_request *req = areq->data;
+	struct skcipher_request *req = data;
 
 	if (err)
 		goto out;
@@ -325,19 +325,13 @@ static int crypto_cts_create(struct crypto_template *tmpl, struct rtattr **tb)
 {
 	struct crypto_skcipher_spawn *spawn;
 	struct skcipher_instance *inst;
-	struct crypto_attr_type *algt;
 	struct skcipher_alg *alg;
 	u32 mask;
 	int err;
 
-	algt = crypto_get_attr_type(tb);
-	if (IS_ERR(algt))
-		return PTR_ERR(algt);
-
-	if ((algt->type ^ CRYPTO_ALG_TYPE_SKCIPHER) & algt->mask)
-		return -EINVAL;
-
-	mask = crypto_requires_sync(algt->type, algt->mask);
+	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SKCIPHER, &mask);
+	if (err)
+		return err;
 
 	inst = kzalloc(sizeof(*inst) + sizeof(*spawn), GFP_KERNEL);
 	if (!inst)
@@ -364,7 +358,6 @@ static int crypto_cts_create(struct crypto_template *tmpl, struct rtattr **tb)
 	if (err)
 		goto err_free_inst;
 
-	inst->alg.base.cra_flags = alg->base.cra_flags & CRYPTO_ALG_ASYNC;
 	inst->alg.base.cra_priority = alg->base.cra_priority;
 	inst->alg.base.cra_blocksize = alg->base.cra_blocksize;
 	inst->alg.base.cra_alignmask = alg->base.cra_alignmask;

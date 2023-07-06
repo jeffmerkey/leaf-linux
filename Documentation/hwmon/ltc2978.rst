@@ -179,7 +179,7 @@ Supported chips:
 
     Addresses scanned: -
 
-    Datasheet: http://www.analog.com/ltm4680
+    Datasheet: https://www.analog.com/ltm4680
 
   * Analog Devices LTM4686
 
@@ -187,7 +187,7 @@ Supported chips:
 
     Addresses scanned: -
 
-    Datasheet: http://www.analog.com/ltm4686
+    Datasheet: https://www.analog.com/ltm4686
 
   * Analog Devices LTM4700
 
@@ -195,7 +195,7 @@ Supported chips:
 
     Addresses scanned: -
 
-    Datasheet: http://www.analog.com/ltm4700
+    Datasheet: https://www.analog.com/ltm4700
 
 
 
@@ -333,7 +333,7 @@ temp[N]_input		Measured temperature.
 			- On LTC3883, temp1 reports an external temperature,
 			  and temp2 reports the chip temperature.
 
-temp[N]_min		Mimimum temperature.
+temp[N]_min		Minimum temperature.
 
 			LTC2972, LTC2974, LCT2977, LTM2980, LTC2978,
 			LTC2979, and LTM2987 only.

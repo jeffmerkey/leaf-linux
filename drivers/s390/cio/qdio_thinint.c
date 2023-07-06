@@ -15,6 +15,7 @@
 #include <asm/qdio.h>
 #include <asm/airq.h>
 #include <asm/isc.h>
+#include <asm/tpi.h>
 
 #include "cio.h"
 #include "ioasm.h"
@@ -66,22 +67,6 @@ static void put_indicator(u32 *addr)
 	atomic_dec(&ind->count);
 }
 
-void tiqdio_add_device(struct qdio_irq *irq_ptr)
-{
-	mutex_lock(&tiq_list_lock);
-	list_add_rcu(&irq_ptr->entry, &tiq_list);
-	mutex_unlock(&tiq_list_lock);
-}
-
-void tiqdio_remove_device(struct qdio_irq *irq_ptr)
-{
-	mutex_lock(&tiq_list_lock);
-	list_del_rcu(&irq_ptr->entry);
-	mutex_unlock(&tiq_list_lock);
-	synchronize_rcu();
-	INIT_LIST_HEAD(&irq_ptr->entry);
-}
-
 static inline int references_shared_dsci(struct qdio_irq *irq_ptr)
 {
 	return irq_ptr->dsci == &q_indicators[TIQDIO_SHARED_IND].ind;
@@ -106,43 +91,19 @@ static inline u32 clear_shared_ind(void)
 	return xchg(&q_indicators[TIQDIO_SHARED_IND].ind, 0);
 }
 
-static inline void tiqdio_call_inq_handlers(struct qdio_irq *irq)
-{
-	struct qdio_q *q;
-	int i;
-
-	if (!references_shared_dsci(irq))
-		xchg(irq->dsci, 0);
-
-	if (irq->irq_poll) {
-		if (!test_and_set_bit(QDIO_IRQ_DISABLED, &irq->poll_state))
-			irq->irq_poll(irq->cdev, irq->int_parm);
-		else
-			QDIO_PERF_STAT_INC(irq, int_discarded);
-
-		return;
-	}
-
-	for_each_input_queue(irq, q, i) {
-		/*
-		 * Call inbound processing but not directly
-		 * since that could starve other thinint queues.
-		 */
-		tasklet_schedule(&q->tasklet);
-	}
-}
-
 /**
  * tiqdio_thinint_handler - thin interrupt handler for qdio
  * @airq: pointer to adapter interrupt descriptor
- * @floating: flag to recognize floating vs. directed interrupts (unused)
+ * @tpi_info: interrupt information (e.g. floating vs directed -- unused)
  */
-static void tiqdio_thinint_handler(struct airq_struct *airq, bool floating)
+static void tiqdio_thinint_handler(struct airq_struct *airq,
+				   struct tpi_info *tpi_info)
 {
+	u64 irq_time = S390_lowcore.int_clock;
 	u32 si_used = clear_shared_ind();
 	struct qdio_irq *irq;
 
-	last_ai_time = S390_lowcore.int_clock;
+	last_ai_time = irq_time;
 	inc_irq_stat(IRQIO_QAI);
 
 	/* protect tiq_list entries, only changed in activate or shutdown */
@@ -153,10 +114,15 @@ static void tiqdio_thinint_handler(struct airq_struct *airq, bool floating)
 		if (unlikely(references_shared_dsci(irq))) {
 			if (!si_used)
 				continue;
-		} else if (!*irq->dsci)
-			continue;
+		} else {
+			if (!*irq->dsci)
+				continue;
 
-		tiqdio_call_inq_handlers(irq);
+			xchg(irq->dsci, 0);
+		}
+
+		qdio_deliver_irq(irq);
+		irq->last_data_irq_time = irq_time;
 
 		QDIO_PERF_STAT_INC(irq, adapter_int);
 	}
@@ -197,47 +163,26 @@ out:
 	return rc;
 }
 
-/* allocate non-shared indicators and shared indicator */
-int __init tiqdio_allocate_memory(void)
-{
-	q_indicators = kcalloc(TIQDIO_NR_INDICATORS,
-			       sizeof(struct indicator_t),
-			       GFP_KERNEL);
-	if (!q_indicators)
-		return -ENOMEM;
-	return 0;
-}
-
-void tiqdio_free_memory(void)
-{
-	kfree(q_indicators);
-}
-
-int __init tiqdio_register_thinints(void)
+int qdio_establish_thinint(struct qdio_irq *irq_ptr)
 {
 	int rc;
 
-	rc = register_adapter_interrupt(&tiqdio_airq);
-	if (rc) {
-		DBF_EVENT("RTI:%x", rc);
-		return rc;
-	}
-	return 0;
-}
-
-int qdio_establish_thinint(struct qdio_irq *irq_ptr)
-{
 	if (!is_thinint_irq(irq_ptr))
 		return 0;
-	return set_subchannel_ind(irq_ptr, 0);
-}
 
-void qdio_setup_thinint(struct qdio_irq *irq_ptr)
-{
-	if (!is_thinint_irq(irq_ptr))
-		return;
 	irq_ptr->dsci = get_indicator();
 	DBF_HEX(&irq_ptr->dsci, sizeof(void *));
+
+	rc = set_subchannel_ind(irq_ptr, 0);
+	if (rc) {
+		put_indicator(irq_ptr->dsci);
+		return rc;
+	}
+
+	mutex_lock(&tiq_list_lock);
+	list_add_rcu(&irq_ptr->entry, &tiq_list);
+	mutex_unlock(&tiq_list_lock);
+	return 0;
 }
 
 void qdio_shutdown_thinint(struct qdio_irq *irq_ptr)
@@ -245,13 +190,37 @@ void qdio_shutdown_thinint(struct qdio_irq *irq_ptr)
 	if (!is_thinint_irq(irq_ptr))
 		return;
 
+	mutex_lock(&tiq_list_lock);
+	list_del_rcu(&irq_ptr->entry);
+	mutex_unlock(&tiq_list_lock);
+	synchronize_rcu();
+
 	/* reset adapter interrupt indicators */
 	set_subchannel_ind(irq_ptr, 1);
 	put_indicator(irq_ptr->dsci);
 }
 
-void __exit tiqdio_unregister_thinints(void)
+int __init qdio_thinint_init(void)
+{
+	int rc;
+
+	q_indicators = kcalloc(TIQDIO_NR_INDICATORS, sizeof(struct indicator_t),
+			       GFP_KERNEL);
+	if (!q_indicators)
+		return -ENOMEM;
+
+	rc = register_adapter_interrupt(&tiqdio_airq);
+	if (rc) {
+		DBF_EVENT("RTI:%x", rc);
+		kfree(q_indicators);
+		return rc;
+	}
+	return 0;
+}
+
+void __exit qdio_thinint_exit(void)
 {
 	WARN_ON(!list_empty(&tiq_list));
 	unregister_adapter_interrupt(&tiqdio_airq);
+	kfree(q_indicators);
 }

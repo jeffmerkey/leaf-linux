@@ -40,6 +40,12 @@ struct mtd_erase_region_info {
 	unsigned long *lockmap;		/* If keeping bitmap of locks */
 };
 
+struct mtd_req_stats {
+	unsigned int uncorrectable_errors;
+	unsigned int corrected_bitflips;
+	unsigned int max_bitflips;
+};
+
 /**
  * struct mtd_oob_ops - oob operation operands
  * @mode:	operation mode
@@ -70,10 +76,9 @@ struct mtd_oob_ops {
 	uint32_t	ooboffs;
 	uint8_t		*datbuf;
 	uint8_t		*oobbuf;
+	struct mtd_req_stats *stats;
 };
 
-#define MTD_MAX_OOBFREE_ENTRIES_LARGE	32
-#define MTD_MAX_ECCPOS_ENTRIES_LARGE	640
 /**
  * struct mtd_oob_region - oob region definition
  * @offset: region offset
@@ -190,9 +195,6 @@ struct module;	/* only needed for owner field in mtd_info */
  */
 struct mtd_debug_info {
 	struct dentry *dfs_dir;
-
-	const char *partname;
-	const char *partid;
 };
 
 /**
@@ -200,6 +202,8 @@ struct mtd_debug_info {
  *
  * @node: list node used to add an MTD partition to the parent partition list
  * @offset: offset of the partition relatively to the parent offset
+ * @size: partition size. Should be equal to mtd->size unless
+ *	  MTD_SLC_ON_MLC_EMULATION is set
  * @flags: original flags (before the mtdpart logic decided to tweak them based
  *	   on flash constraints, like eraseblock/pagesize alignment)
  *
@@ -209,6 +213,7 @@ struct mtd_debug_info {
 struct mtd_part {
 	struct list_head node;
 	u64 offset;
+	u64 size;
 	u32 flags;
 };
 
@@ -226,6 +231,7 @@ struct mtd_part {
  */
 struct mtd_master {
 	struct mutex partitions_lock;
+	struct mutex chrdev_lock;
 	unsigned int suspended : 1;
 };
 
@@ -330,9 +336,12 @@ struct mtd_info {
 	int (*_read_user_prot_reg) (struct mtd_info *mtd, loff_t from,
 				    size_t len, size_t *retlen, u_char *buf);
 	int (*_write_user_prot_reg) (struct mtd_info *mtd, loff_t to,
-				     size_t len, size_t *retlen, u_char *buf);
+				     size_t len, size_t *retlen,
+				     const u_char *buf);
 	int (*_lock_user_prot_reg) (struct mtd_info *mtd, loff_t from,
 				    size_t len);
+	int (*_erase_user_prot_reg) (struct mtd_info *mtd, loff_t from,
+				     size_t len);
 	int (*_writev) (struct mtd_info *mtd, const struct kvec *vecs,
 			unsigned long count, loff_t to, size_t *retlen);
 	void (*_sync) (struct mtd_info *mtd);
@@ -373,6 +382,8 @@ struct mtd_info {
 	int usecount;
 	struct mtd_debug_info dbg;
 	struct nvmem_device *nvmem;
+	struct nvmem_device *otp_user_nvmem;
+	struct nvmem_device *otp_factory_nvmem;
 
 	/*
 	 * Parent device from the MTD partition point of view.
@@ -385,10 +396,8 @@ struct mtd_info {
 	/* List of partitions attached to this MTD device */
 	struct list_head partitions;
 
-	union {
-		struct mtd_part part;
-		struct mtd_master master;
-	};
+	struct mtd_part part;
+	struct mtd_master master;
 };
 
 static inline struct mtd_info *mtd_get_master(struct mtd_info *mtd)
@@ -512,8 +521,9 @@ int mtd_get_user_prot_info(struct mtd_info *mtd, size_t len, size_t *retlen,
 int mtd_read_user_prot_reg(struct mtd_info *mtd, loff_t from, size_t len,
 			   size_t *retlen, u_char *buf);
 int mtd_write_user_prot_reg(struct mtd_info *mtd, loff_t to, size_t len,
-			    size_t *retlen, u_char *buf);
+			    size_t *retlen, const u_char *buf);
 int mtd_lock_user_prot_reg(struct mtd_info *mtd, loff_t from, size_t len);
+int mtd_erase_user_prot_reg(struct mtd_info *mtd, loff_t from, size_t len);
 
 int mtd_writev(struct mtd_info *mtd, const struct kvec *vecs,
 	       unsigned long count, loff_t to, size_t *retlen);
@@ -622,7 +632,9 @@ static inline uint32_t mtd_mod_by_ws(uint64_t sz, struct mtd_info *mtd)
 
 static inline int mtd_wunit_per_eb(struct mtd_info *mtd)
 {
-	return mtd->erasesize / mtd->writesize;
+	struct mtd_info *master = mtd_get_master(mtd);
+
+	return master->erasesize / mtd->writesize;
 }
 
 static inline int mtd_offset_to_wunit(struct mtd_info *mtd, loff_t offs)
@@ -672,6 +684,7 @@ extern int mtd_device_unregister(struct mtd_info *master);
 extern struct mtd_info *get_mtd_device(struct mtd_info *mtd, int num);
 extern int __get_mtd_device(struct mtd_info *mtd);
 extern void __put_mtd_device(struct mtd_info *mtd);
+extern struct mtd_info *of_get_mtd_device_by_node(struct device_node *np);
 extern struct mtd_info *get_mtd_device_nm(const char *name);
 extern void put_mtd_device(struct mtd_info *mtd);
 
@@ -700,5 +713,12 @@ static inline int mtd_is_bitflip_or_eccerr(int err) {
 }
 
 unsigned mtd_mmap_capabilities(struct mtd_info *mtd);
+
+#ifdef CONFIG_DEBUG_FS
+bool mtd_check_expert_analysis_mode(void);
+#else
+static inline bool mtd_check_expert_analysis_mode(void) { return false; }
+#endif
+
 
 #endif /* __MTD_MTD_H__ */

@@ -10,7 +10,10 @@
 #include <linux/spi/spi.h>
 #include <linux/module.h>
 #include <linux/iio/iio.h>
+#include <linux/property.h>
 #include <linux/regulator/consumer.h>
+
+#include <asm/unaligned.h>
 
 #define LTC2632_CMD_WRITE_INPUT_N               0x0
 #define LTC2632_CMD_UPDATE_DAC_N                0x1
@@ -24,6 +27,7 @@
 /**
  * struct ltc2632_chip_info - chip specific information
  * @channels:		channel spec for the DAC
+ * @num_channels:	DAC channel count of the chip
  * @vref_mv:		internal reference voltage
  */
 struct ltc2632_chip_info {
@@ -35,9 +39,9 @@ struct ltc2632_chip_info {
 /**
  * struct ltc2632_state - driver instance specific data
  * @spi_dev:			pointer to the spi_device struct
- * @powerdown_cache_mask	used to show current channel powerdown state
- * @vref_mv			used reference voltage (internal or external)
- * @vref_reg		regulator for the reference voltage
+ * @powerdown_cache_mask:	used to show current channel powerdown state
+ * @vref_mv:			used reference voltage (internal or external)
+ * @vref_reg:		regulator for the reference voltage
  */
 struct ltc2632_state {
 	struct spi_device *spi_dev;
@@ -53,6 +57,12 @@ enum ltc2632_supported_device_ids {
 	ID_LTC2632H12,
 	ID_LTC2632H10,
 	ID_LTC2632H8,
+	ID_LTC2634L12,
+	ID_LTC2634L10,
+	ID_LTC2634L8,
+	ID_LTC2634H12,
+	ID_LTC2634H10,
+	ID_LTC2634H8,
 	ID_LTC2636L12,
 	ID_LTC2636L10,
 	ID_LTC2636L8,
@@ -75,9 +85,7 @@ static int ltc2632_spi_write(struct spi_device *spi,
 	 * 10-, 8-bit input code followed by 4, 6, or 8 don't care bits.
 	 */
 	data = (cmd << 20) | (addr << 16) | (val << shift);
-	msg[0] = data >> 16;
-	msg[1] = data >> 8;
-	msg[2] = data;
+	put_unaligned_be24(data, &msg[0]);
 
 	return spi_write(spi, msg, sizeof(msg));
 }
@@ -128,8 +136,8 @@ static ssize_t ltc2632_read_dac_powerdown(struct iio_dev *indio_dev,
 {
 	struct ltc2632_state *st = iio_priv(indio_dev);
 
-	return sprintf(buf, "%d\n",
-		       !!(st->powerdown_cache_mask & (1 << chan->channel)));
+	return sysfs_emit(buf, "%d\n",
+			  !!(st->powerdown_cache_mask & (1 << chan->channel)));
 }
 
 static ssize_t ltc2632_write_dac_powerdown(struct iio_dev *indio_dev,
@@ -142,7 +150,7 @@ static ssize_t ltc2632_write_dac_powerdown(struct iio_dev *indio_dev,
 	int ret;
 	struct ltc2632_state *st = iio_priv(indio_dev);
 
-	ret = strtobool(buf, &pwr_down);
+	ret = kstrtobool(buf, &pwr_down);
 	if (ret)
 		return ret;
 
@@ -235,6 +243,36 @@ static const struct ltc2632_chip_info ltc2632_chip_info_tbl[] = {
 		.num_channels	= 2,
 		.vref_mv	= 4096,
 	},
+	[ID_LTC2634L12] = {
+		.channels	= ltc2632x12_channels,
+		.num_channels	= 4,
+		.vref_mv	= 2500,
+	},
+	[ID_LTC2634L10] = {
+		.channels	= ltc2632x10_channels,
+		.num_channels	= 4,
+		.vref_mv	= 2500,
+	},
+	[ID_LTC2634L8] =  {
+		.channels	= ltc2632x8_channels,
+		.num_channels	= 4,
+		.vref_mv	= 2500,
+	},
+	[ID_LTC2634H12] = {
+		.channels	= ltc2632x12_channels,
+		.num_channels	= 4,
+		.vref_mv	= 4096,
+	},
+	[ID_LTC2634H10] = {
+		.channels	= ltc2632x10_channels,
+		.num_channels	= 4,
+		.vref_mv	= 4096,
+	},
+	[ID_LTC2634H8] =  {
+		.channels	= ltc2632x8_channels,
+		.num_channels	= 4,
+		.vref_mv	= 4096,
+	},
 	[ID_LTC2636L12] = {
 		.channels	= ltc2632x12_channels,
 		.num_channels	= 8,
@@ -325,9 +363,7 @@ static int ltc2632_probe(struct spi_device *spi)
 		}
 	}
 
-	indio_dev->dev.parent = &spi->dev;
-	indio_dev->name = dev_of_node(&spi->dev) ? dev_of_node(&spi->dev)->name
-						 : spi_get_device_id(spi)->name;
+	indio_dev->name = fwnode_get_name(dev_fwnode(&spi->dev)) ?: spi_get_device_id(spi)->name;
 	indio_dev->info = &ltc2632_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = chip_info->channels;
@@ -336,7 +372,7 @@ static int ltc2632_probe(struct spi_device *spi)
 	return iio_device_register(indio_dev);
 }
 
-static int ltc2632_remove(struct spi_device *spi)
+static void ltc2632_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ltc2632_state *st = iio_priv(indio_dev);
@@ -345,8 +381,6 @@ static int ltc2632_remove(struct spi_device *spi)
 
 	if (st->vref_reg)
 		regulator_disable(st->vref_reg);
-
-	return 0;
 }
 
 static const struct spi_device_id ltc2632_id[] = {
@@ -356,6 +390,12 @@ static const struct spi_device_id ltc2632_id[] = {
 	{ "ltc2632-h12", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2632H12] },
 	{ "ltc2632-h10", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2632H10] },
 	{ "ltc2632-h8", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2632H8] },
+	{ "ltc2634-l12", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2634L12] },
+	{ "ltc2634-l10", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2634L10] },
+	{ "ltc2634-l8", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2634L8] },
+	{ "ltc2634-h12", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2634H12] },
+	{ "ltc2634-h10", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2634H10] },
+	{ "ltc2634-h8", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2634H8] },
 	{ "ltc2636-l12", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2636L12] },
 	{ "ltc2636-l10", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2636L10] },
 	{ "ltc2636-l8", (kernel_ulong_t)&ltc2632_chip_info_tbl[ID_LTC2636L8] },
@@ -386,6 +426,24 @@ static const struct of_device_id ltc2632_of_match[] = {
 		.compatible = "lltc,ltc2632-h8",
 		.data = &ltc2632_chip_info_tbl[ID_LTC2632H8]
 	}, {
+		.compatible = "lltc,ltc2634-l12",
+		.data = &ltc2632_chip_info_tbl[ID_LTC2634L12]
+	}, {
+		.compatible = "lltc,ltc2634-l10",
+		.data = &ltc2632_chip_info_tbl[ID_LTC2634L10]
+	}, {
+		.compatible = "lltc,ltc2634-l8",
+		.data = &ltc2632_chip_info_tbl[ID_LTC2634L8]
+	}, {
+		.compatible = "lltc,ltc2634-h12",
+		.data = &ltc2632_chip_info_tbl[ID_LTC2634H12]
+	}, {
+		.compatible = "lltc,ltc2634-h10",
+		.data = &ltc2632_chip_info_tbl[ID_LTC2634H10]
+	}, {
+		.compatible = "lltc,ltc2634-h8",
+		.data = &ltc2632_chip_info_tbl[ID_LTC2634H8]
+	}, {
 		.compatible = "lltc,ltc2636-l12",
 		.data = &ltc2632_chip_info_tbl[ID_LTC2636L12]
 	}, {
@@ -411,7 +469,7 @@ MODULE_DEVICE_TABLE(of, ltc2632_of_match);
 static struct spi_driver ltc2632_driver = {
 	.driver		= {
 		.name	= "ltc2632",
-		.of_match_table = of_match_ptr(ltc2632_of_match),
+		.of_match_table = ltc2632_of_match,
 	},
 	.probe		= ltc2632_probe,
 	.remove		= ltc2632_remove,

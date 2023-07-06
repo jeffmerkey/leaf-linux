@@ -1379,6 +1379,8 @@ static void cnds_i3c_master_demux_ibis(struct cdns_i3c_master *master)
 
 		case IBIR_TYPE_MR:
 			WARN_ON(IBIR_XFER_BYTES(ibir) || (ibir & IBIR_ERROR));
+			break;
+
 		default:
 			break;
 		}
@@ -1635,8 +1637,10 @@ static int cdns_i3c_master_probe(struct platform_device *pdev)
 	master->ibi.slots = devm_kcalloc(&pdev->dev, master->ibi.num_slots,
 					 sizeof(*master->ibi.slots),
 					 GFP_KERNEL);
-	if (!master->ibi.slots)
+	if (!master->ibi.slots) {
+		ret = -ENOMEM;
 		goto err_disable_sysclk;
+	}
 
 	writel(IBIR_THR(1), master->regs + CMD_IBI_THR_CTRL);
 	writel(MST_INT_IBIR_THR, master->regs + MST_IER);
@@ -1658,24 +1662,19 @@ err_disable_pclk:
 	return ret;
 }
 
-static int cdns_i3c_master_remove(struct platform_device *pdev)
+static void cdns_i3c_master_remove(struct platform_device *pdev)
 {
 	struct cdns_i3c_master *master = platform_get_drvdata(pdev);
-	int ret;
 
-	ret = i3c_master_unregister(&master->base);
-	if (ret)
-		return ret;
+	i3c_master_unregister(&master->base);
 
 	clk_disable_unprepare(master->sysclk);
 	clk_disable_unprepare(master->pclk);
-
-	return 0;
 }
 
 static struct platform_driver cdns_i3c_master = {
 	.probe = cdns_i3c_master_probe,
-	.remove = cdns_i3c_master_remove,
+	.remove_new = cdns_i3c_master_remove,
 	.driver = {
 		.name = "cdns-i3c-master",
 		.of_match_table = cdns_i3c_master_of_ids,

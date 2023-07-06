@@ -40,7 +40,6 @@
 #include <asm/irq.h>
 #include <asm/mmu_context.h>
 #include <asm/io.h>
-#include <asm/pgtable.h>
 #include <asm/core_irongate.h>
 #include <asm/hwrpb.h>
 #include <asm/tlbflush.h>
@@ -213,7 +212,7 @@ nautilus_init_pci(void)
 
 	/* Use default IO. */
 	pci_add_resource(&bridge->windows, &ioport_resource);
-	/* Irongate PCI memory aperture, calculate requred size before
+	/* Irongate PCI memory aperture, calculate required size before
 	   setting it up. */
 	pci_add_resource(&bridge->windows, &irongate_mem);
 

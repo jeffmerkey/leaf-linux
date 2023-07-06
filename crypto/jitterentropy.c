@@ -2,12 +2,12 @@
  * Non-physical true random number generator based on timing jitter --
  * Jitter RNG standalone code.
  *
- * Copyright Stephan Mueller <smueller@chronox.de>, 2015 - 2019
+ * Copyright Stephan Mueller <smueller@chronox.de>, 2015 - 2023
  *
  * Design
  * ======
  *
- * See http://www.chronox.de/jent.html
+ * See https://www.chronox.de/jent.html
  *
  * License
  * =======
@@ -47,7 +47,7 @@
 
 /*
  * This Jitterentropy RNG is based on the jitterentropy library
- * version 2.1.2 provided at http://www.chronox.de/jent.html
+ * version 3.4.0 provided at https://www.chronox.de/jent.html
  */
 
 #ifdef __OPTIMIZE__
@@ -57,21 +57,22 @@
 typedef	unsigned long long	__u64;
 typedef	long long		__s64;
 typedef	unsigned int		__u32;
+typedef unsigned char		u8;
 #define NULL    ((void *) 0)
 
 /* The entropy pool */
 struct rand_data {
+	/* SHA3-256 is used as conditioner */
+#define DATA_SIZE_BITS 256
 	/* all data values that are vital to maintain the security
 	 * of the RNG are marked as SENSITIVE. A user must not
 	 * access that information while the RNG executes its loops to
 	 * calculate the next random value. */
-	__u64 data;		/* SENSITIVE Actual random number */
-	__u64 old_data;		/* SENSITIVE Previous random number */
-	__u64 prev_time;	/* SENSITIVE Previous time stamp */
-#define DATA_SIZE_BITS ((sizeof(__u64)) * 8)
-	__u64 last_delta;	/* SENSITIVE stuck test */
-	__s64 last_delta2;	/* SENSITIVE stuck test */
-	unsigned int osr;	/* Oversample rate */
+	void *hash_state;		/* SENSITIVE hash state entropy pool */
+	__u64 prev_time;		/* SENSITIVE Previous time stamp */
+	__u64 last_delta;		/* SENSITIVE stuck test */
+	__s64 last_delta2;		/* SENSITIVE stuck test */
+	unsigned int osr;		/* Oversample rate */
 #define JENT_MEMORY_BLOCKS 64
 #define JENT_MEMORY_BLOCKSIZE 32
 #define JENT_MEMORY_ACCESSLOOPS 128
@@ -83,6 +84,24 @@ struct rand_data {
 	unsigned int memblocksize; /* Size of one memory block in bytes */
 	unsigned int memaccessloops; /* Number of memory accesses per random
 				      * bit generation */
+
+	/* Repetition Count Test */
+	unsigned int rct_count;			/* Number of stuck values */
+
+	/* Intermittent health test failure threshold of 2^-30 */
+#define JENT_RCT_CUTOFF		30	/* Taken from SP800-90B sec 4.4.1 */
+#define JENT_APT_CUTOFF		325	/* Taken from SP800-90B sec 4.4.2 */
+	/* Permanent health test failure threshold of 2^-60 */
+#define JENT_RCT_CUTOFF_PERMANENT	60
+#define JENT_APT_CUTOFF_PERMANENT	355
+#define JENT_APT_WINDOW_SIZE	512	/* Data window size */
+	/* LSB of time stamp to process */
+#define JENT_APT_LSB		16
+#define JENT_APT_WORD_MASK	(JENT_APT_LSB - 1)
+	unsigned int apt_observations;	/* Number of collected observations */
+	unsigned int apt_count;		/* APT counter */
+	unsigned int apt_base;		/* APT base reference */
+	unsigned int apt_base_set:1;	/* APT base reference set? */
 };
 
 /* Flags that can be used to initialize the RNG */
@@ -98,27 +117,198 @@ struct rand_data {
 				   * variations (2nd derivation of time is
 				   * zero). */
 #define JENT_ESTUCK		8 /* Too many stuck results during init. */
+#define JENT_EHEALTH		9 /* Health test failed during initialization */
 
-/***************************************************************************
- * Helper functions
- ***************************************************************************/
+/*
+ * The output n bits can receive more than n bits of min entropy, of course,
+ * but the fixed output of the conditioning function can only asymptotically
+ * approach the output size bits of min entropy, not attain that bound. Random
+ * maps will tend to have output collisions, which reduces the creditable
+ * output entropy (that is what SP 800-90B Section 3.1.5.1.2 attempts to bound).
+ *
+ * The value "64" is justified in Appendix A.4 of the current 90C draft,
+ * and aligns with NIST's in "epsilon" definition in this document, which is
+ * that a string can be considered "full entropy" if you can bound the min
+ * entropy in each bit of output to at least 1-epsilon, where epsilon is
+ * required to be <= 2^(-32).
+ */
+#define JENT_ENTROPY_SAFETY_FACTOR	64
 
+#include <linux/fips.h>
 #include "jitterentropy.h"
 
-/**
+/***************************************************************************
+ * Adaptive Proportion Test
+ *
+ * This test complies with SP800-90B section 4.4.2.
+ ***************************************************************************/
+
+/*
+ * Reset the APT counter
+ *
+ * @ec [in] Reference to entropy collector
+ */
+static void jent_apt_reset(struct rand_data *ec, unsigned int delta_masked)
+{
+	/* Reset APT counter */
+	ec->apt_count = 0;
+	ec->apt_base = delta_masked;
+	ec->apt_observations = 0;
+}
+
+/*
+ * Insert a new entropy event into APT
+ *
+ * @ec [in] Reference to entropy collector
+ * @delta_masked [in] Masked time delta to process
+ */
+static void jent_apt_insert(struct rand_data *ec, unsigned int delta_masked)
+{
+	/* Initialize the base reference */
+	if (!ec->apt_base_set) {
+		ec->apt_base = delta_masked;
+		ec->apt_base_set = 1;
+		return;
+	}
+
+	if (delta_masked == ec->apt_base)
+		ec->apt_count++;
+
+	ec->apt_observations++;
+
+	if (ec->apt_observations >= JENT_APT_WINDOW_SIZE)
+		jent_apt_reset(ec, delta_masked);
+}
+
+/* APT health test failure detection */
+static int jent_apt_permanent_failure(struct rand_data *ec)
+{
+	return (ec->apt_count >= JENT_APT_CUTOFF_PERMANENT) ? 1 : 0;
+}
+
+static int jent_apt_failure(struct rand_data *ec)
+{
+	return (ec->apt_count >= JENT_APT_CUTOFF) ? 1 : 0;
+}
+
+/***************************************************************************
+ * Stuck Test and its use as Repetition Count Test
+ *
+ * The Jitter RNG uses an enhanced version of the Repetition Count Test
+ * (RCT) specified in SP800-90B section 4.4.1. Instead of counting identical
+ * back-to-back values, the input to the RCT is the counting of the stuck
+ * values during the generation of one Jitter RNG output block.
+ *
+ * The RCT is applied with an alpha of 2^{-30} compliant to FIPS 140-2 IG 9.8.
+ *
+ * During the counting operation, the Jitter RNG always calculates the RCT
+ * cut-off value of C. If that value exceeds the allowed cut-off value,
+ * the Jitter RNG output block will be calculated completely but discarded at
+ * the end. The caller of the Jitter RNG is informed with an error code.
+ ***************************************************************************/
+
+/*
+ * Repetition Count Test as defined in SP800-90B section 4.4.1
+ *
+ * @ec [in] Reference to entropy collector
+ * @stuck [in] Indicator whether the value is stuck
+ */
+static void jent_rct_insert(struct rand_data *ec, int stuck)
+{
+	if (stuck) {
+		ec->rct_count++;
+	} else {
+		/* Reset RCT */
+		ec->rct_count = 0;
+	}
+}
+
+static inline __u64 jent_delta(__u64 prev, __u64 next)
+{
+#define JENT_UINT64_MAX		(__u64)(~((__u64) 0))
+	return (prev < next) ? (next - prev) :
+			       (JENT_UINT64_MAX - prev + 1 + next);
+}
+
+/*
+ * Stuck test by checking the:
+ * 	1st derivative of the jitter measurement (time delta)
+ * 	2nd derivative of the jitter measurement (delta of time deltas)
+ * 	3rd derivative of the jitter measurement (delta of delta of time deltas)
+ *
+ * All values must always be non-zero.
+ *
+ * @ec [in] Reference to entropy collector
+ * @current_delta [in] Jitter time delta
+ *
+ * @return
+ * 	0 jitter measurement not stuck (good bit)
+ * 	1 jitter measurement stuck (reject bit)
+ */
+static int jent_stuck(struct rand_data *ec, __u64 current_delta)
+{
+	__u64 delta2 = jent_delta(ec->last_delta, current_delta);
+	__u64 delta3 = jent_delta(ec->last_delta2, delta2);
+
+	ec->last_delta = current_delta;
+	ec->last_delta2 = delta2;
+
+	/*
+	 * Insert the result of the comparison of two back-to-back time
+	 * deltas.
+	 */
+	jent_apt_insert(ec, current_delta);
+
+	if (!current_delta || !delta2 || !delta3) {
+		/* RCT with a stuck bit */
+		jent_rct_insert(ec, 1);
+		return 1;
+	}
+
+	/* RCT with a non-stuck bit */
+	jent_rct_insert(ec, 0);
+
+	return 0;
+}
+
+/* RCT health test failure detection */
+static int jent_rct_permanent_failure(struct rand_data *ec)
+{
+	return (ec->rct_count >= JENT_RCT_CUTOFF_PERMANENT) ? 1 : 0;
+}
+
+static int jent_rct_failure(struct rand_data *ec)
+{
+	return (ec->rct_count >= JENT_RCT_CUTOFF) ? 1 : 0;
+}
+
+/* Report of health test failures */
+static int jent_health_failure(struct rand_data *ec)
+{
+	return jent_rct_failure(ec) | jent_apt_failure(ec);
+}
+
+static int jent_permanent_health_failure(struct rand_data *ec)
+{
+	return jent_rct_permanent_failure(ec) | jent_apt_permanent_failure(ec);
+}
+
+/***************************************************************************
+ * Noise sources
+ ***************************************************************************/
+
+/*
  * Update of the loop count used for the next round of
  * an entropy collection.
  *
  * Input:
- * @ec entropy collector struct -- may be NULL
  * @bits is the number of low bits of the timer to consider
  * @min is the number of bits we shift the timer value to the right at
  *	the end to make sure we have a guaranteed minimum value
  *
  * @return Newly calculated loop counter
  */
-static __u64 jent_loop_shuffle(struct rand_data *ec,
-			       unsigned int bits, unsigned int min)
+static __u64 jent_loop_shuffle(unsigned int bits, unsigned int min)
 {
 	__u64 time = 0;
 	__u64 shuffle = 0;
@@ -126,12 +316,7 @@ static __u64 jent_loop_shuffle(struct rand_data *ec,
 	unsigned int mask = (1<<bits) - 1;
 
 	jent_get_nstime(&time);
-	/*
-	 * Mix the current state of the random number into the shuffle
-	 * calculation to balance that shuffle a bit more.
-	 */
-	if (ec)
-		time ^= ec->data;
+
 	/*
 	 * We fold the time value as much as possible to ensure that as many
 	 * bits of the time stamp are included as possible.
@@ -148,84 +333,40 @@ static __u64 jent_loop_shuffle(struct rand_data *ec,
 	return (shuffle + (1<<min));
 }
 
-/***************************************************************************
- * Noise sources
- ***************************************************************************/
-
-/**
+/*
  * CPU Jitter noise source -- this is the noise source based on the CPU
  *			      execution time jitter
  *
  * This function injects the individual bits of the time value into the
- * entropy pool using an LFSR.
+ * entropy pool using a hash.
  *
- * The code is deliberately inefficient with respect to the bit shifting
- * and shall stay that way. This function is the root cause why the code
- * shall be compiled without optimization. This function not only acts as
- * folding operation, but this function's execution is used to measure
- * the CPU execution time jitter. Any change to the loop in this function
- * implies that careful retesting must be done.
- *
- * Input:
- * @ec entropy collector struct
- * @time time stamp to be injected
- * @loop_cnt if a value not equal to 0 is set, use the given value as number of
- *	     loops to perform the folding
+ * ec [in] entropy collector
+ * time [in] time stamp to be injected
+ * stuck [in] Is the time stamp identified as stuck?
  *
  * Output:
- * updated ec->data
- *
- * @return Number of loops the folding operation is performed
+ * updated hash context in the entropy collector or error code
  */
-static __u64 jent_lfsr_time(struct rand_data *ec, __u64 time, __u64 loop_cnt)
+static int jent_condition_data(struct rand_data *ec, __u64 time, int stuck)
 {
-	unsigned int i;
-	__u64 j = 0;
-	__u64 new = 0;
-#define MAX_FOLD_LOOP_BIT 4
-#define MIN_FOLD_LOOP_BIT 0
-	__u64 fold_loop_cnt =
-		jent_loop_shuffle(ec, MAX_FOLD_LOOP_BIT, MIN_FOLD_LOOP_BIT);
+#define SHA3_HASH_LOOP (1<<3)
+	struct {
+		int rct_count;
+		unsigned int apt_observations;
+		unsigned int apt_count;
+		unsigned int apt_base;
+	} addtl = {
+		ec->rct_count,
+		ec->apt_observations,
+		ec->apt_count,
+		ec->apt_base
+	};
 
-	/*
-	 * testing purposes -- allow test app to set the counter, not
-	 * needed during runtime
-	 */
-	if (loop_cnt)
-		fold_loop_cnt = loop_cnt;
-	for (j = 0; j < fold_loop_cnt; j++) {
-		new = ec->data;
-		for (i = 1; (DATA_SIZE_BITS) >= i; i++) {
-			__u64 tmp = time << (DATA_SIZE_BITS - i);
-
-			tmp = tmp >> (DATA_SIZE_BITS - 1);
-
-			/*
-			* Fibonacci LSFR with polynomial of
-			*  x^64 + x^61 + x^56 + x^31 + x^28 + x^23 + 1 which is
-			*  primitive according to
-			*   http://poincare.matf.bg.ac.rs/~ezivkovm/publications/primpol1.pdf
-			* (the shift values are the polynomial values minus one
-			* due to counting bits from 0 to 63). As the current
-			* position is always the LSB, the polynomial only needs
-			* to shift data in from the left without wrap.
-			*/
-			tmp ^= ((new >> 63) & 1);
-			tmp ^= ((new >> 60) & 1);
-			tmp ^= ((new >> 55) & 1);
-			tmp ^= ((new >> 30) & 1);
-			tmp ^= ((new >> 27) & 1);
-			tmp ^= ((new >> 22) & 1);
-			new <<= 1;
-			new ^= tmp;
-		}
-	}
-	ec->data = new;
-
-	return fold_loop_cnt;
+	return jent_hash_time(ec->hash_state, time, (u8 *)&addtl, sizeof(addtl),
+			      SHA3_HASH_LOOP, stuck);
 }
 
-/**
+/*
  * Memory Access noise source -- this is a noise source based on variations in
  *				 memory access times
  *
@@ -243,26 +384,23 @@ static __u64 jent_lfsr_time(struct rand_data *ec, __u64 time, __u64 loop_cnt)
  * to reliably access either L3 or memory, the ec->mem memory must be quite
  * large which is usually not desirable.
  *
- * Input:
- * @ec Reference to the entropy collector with the memory access data -- if
- *     the reference to the memory block to be accessed is NULL, this noise
- *     source is disabled
- * @loop_cnt if a value not equal to 0 is set, use the given value as number of
- *	     loops to perform the folding
- *
- * @return Number of memory access operations
+ * @ec [in] Reference to the entropy collector with the memory access data -- if
+ *	    the reference to the memory block to be accessed is NULL, this noise
+ *	    source is disabled
+ * @loop_cnt [in] if a value not equal to 0 is set, use the given value
+ *		  number of loops to perform the LFSR
  */
-static unsigned int jent_memaccess(struct rand_data *ec, __u64 loop_cnt)
+static void jent_memaccess(struct rand_data *ec, __u64 loop_cnt)
 {
 	unsigned int wrap = 0;
 	__u64 i = 0;
 #define MAX_ACC_LOOP_BIT 7
 #define MIN_ACC_LOOP_BIT 0
 	__u64 acc_loop_cnt =
-		jent_loop_shuffle(ec, MAX_ACC_LOOP_BIT, MIN_ACC_LOOP_BIT);
+		jent_loop_shuffle(MAX_ACC_LOOP_BIT, MIN_ACC_LOOP_BIT);
 
 	if (NULL == ec || NULL == ec->mem)
-		return 0;
+		return;
 	wrap = ec->memblocksize * ec->memblocks;
 
 	/*
@@ -288,44 +426,12 @@ static unsigned int jent_memaccess(struct rand_data *ec, __u64 loop_cnt)
 		ec->memlocation = ec->memlocation + ec->memblocksize - 1;
 		ec->memlocation = ec->memlocation % wrap;
 	}
-	return i;
 }
 
 /***************************************************************************
  * Start of entropy processing logic
  ***************************************************************************/
-
-/**
- * Stuck test by checking the:
- *	1st derivation of the jitter measurement (time delta)
- *	2nd derivation of the jitter measurement (delta of time deltas)
- *	3rd derivation of the jitter measurement (delta of delta of time deltas)
- *
- * All values must always be non-zero.
- *
- * Input:
- * @ec Reference to entropy collector
- * @current_delta Jitter time delta
- *
- * @return
- *	0 jitter measurement not stuck (good bit)
- *	1 jitter measurement stuck (reject bit)
- */
-static int jent_stuck(struct rand_data *ec, __u64 current_delta)
-{
-	__s64 delta2 = ec->last_delta - current_delta;
-	__s64 delta3 = delta2 - ec->last_delta2;
-
-	ec->last_delta = current_delta;
-	ec->last_delta2 = delta2;
-
-	if (!current_delta || !delta2 || !delta3)
-		return 1;
-
-	return 0;
-}
-
-/**
+/*
  * This is the heart of the entropy generation: calculate time deltas and
  * use the CPU jitter in the time deltas. The jitter is injected into the
  * entropy pool.
@@ -334,8 +440,7 @@ static int jent_stuck(struct rand_data *ec, __u64 current_delta)
  *	    of this function! This can be done by calling this function
  *	    and not using its result.
  *
- * Input:
- * @entropy_collector Reference to entropy collector
+ * @ec [in] Reference to entropy collector
  *
  * @return result of stuck test
  */
@@ -343,6 +448,7 @@ static int jent_measure_jitter(struct rand_data *ec)
 {
 	__u64 time = 0;
 	__u64 current_delta = 0;
+	int stuck;
 
 	/* Invoke one noise source before time measurement to add variations */
 	jent_memaccess(ec, 0);
@@ -352,31 +458,36 @@ static int jent_measure_jitter(struct rand_data *ec)
 	 * invocation to measure the timing variations
 	 */
 	jent_get_nstime(&time);
-	current_delta = time - ec->prev_time;
+	current_delta = jent_delta(ec->prev_time, time);
 	ec->prev_time = time;
 
-	/* Now call the next noise sources which also injects the data */
-	jent_lfsr_time(ec, current_delta, 0);
-
 	/* Check whether we have a stuck measurement. */
-	return jent_stuck(ec, current_delta);
+	stuck = jent_stuck(ec, current_delta);
+
+	/* Now call the next noise sources which also injects the data */
+	if (jent_condition_data(ec, current_delta, stuck))
+		stuck = 1;
+
+	return stuck;
 }
 
-/**
+/*
  * Generator of one 64 bit random number
- * Function fills rand_data->data
+ * Function fills rand_data->hash_state
  *
- * Input:
- * @ec Reference to entropy collector
+ * @ec [in] Reference to entropy collector
  */
 static void jent_gen_entropy(struct rand_data *ec)
 {
-	unsigned int k = 0;
+	unsigned int k = 0, safety_factor = 0;
+
+	if (fips_enabled)
+		safety_factor = JENT_ENTROPY_SAFETY_FACTOR;
 
 	/* priming of the ->prev_time value */
 	jent_measure_jitter(ec);
 
-	while (1) {
+	while (!jent_health_failure(ec)) {
 		/* If a stuck measurement is received, repeat measurement */
 		if (jent_measure_jitter(ec))
 			continue;
@@ -385,37 +496,12 @@ static void jent_gen_entropy(struct rand_data *ec)
 		 * We multiply the loop value with ->osr to obtain the
 		 * oversampling rate requested by the caller
 		 */
-		if (++k >= (DATA_SIZE_BITS * ec->osr))
+		if (++k >= ((DATA_SIZE_BITS + safety_factor) * ec->osr))
 			break;
 	}
 }
 
-/**
- * The continuous test required by FIPS 140-2 -- the function automatically
- * primes the test if needed.
- *
- * Return:
- * returns normally if FIPS test passed
- * panics the kernel if FIPS test failed
- */
-static void jent_fips_test(struct rand_data *ec)
-{
-	if (!jent_fips_enabled())
-		return;
-
-	/* prime the FIPS test */
-	if (!ec->old_data) {
-		ec->old_data = ec->data;
-		jent_gen_entropy(ec);
-	}
-
-	if (ec->data == ec->old_data)
-		jent_panic("jitterentropy: Duplicate output detected\n");
-
-	ec->old_data = ec->data;
-}
-
-/**
+/*
  * Entry function: Obtain entropy for the caller.
  *
  * This function invokes the entropy gathering logic as often to generate
@@ -425,17 +511,18 @@ static void jent_fips_test(struct rand_data *ec)
  * This function truncates the last 64 bit entropy value output to the exact
  * size specified by the caller.
  *
- * Input:
- * @ec Reference to entropy collector
- * @data pointer to buffer for storing random data -- buffer must already
- *	 exist
- * @len size of the buffer, specifying also the requested number of random
- *	in bytes
+ * @ec [in] Reference to entropy collector
+ * @data [in] pointer to buffer for storing random data -- buffer must already
+ *	      exist
+ * @len [in] size of the buffer, specifying also the requested number of random
+ *	     in bytes
  *
  * @return 0 when request is fulfilled or an error
  *
  * The following error codes can occur:
- *	-1	entropy_collector is NULL
+ *	-1	entropy_collector is NULL or the generation failed
+ *	-2	Intermittent health failure
+ *	-3	Permanent health failure
  */
 int jent_read_entropy(struct rand_data *ec, unsigned char *data,
 		      unsigned int len)
@@ -445,16 +532,36 @@ int jent_read_entropy(struct rand_data *ec, unsigned char *data,
 	if (!ec)
 		return -1;
 
-	while (0 < len) {
+	while (len > 0) {
 		unsigned int tocopy;
 
 		jent_gen_entropy(ec);
-		jent_fips_test(ec);
+
+		if (jent_permanent_health_failure(ec)) {
+			/*
+			 * At this point, the Jitter RNG instance is considered
+			 * as a failed instance. There is no rerun of the
+			 * startup test any more, because the caller
+			 * is assumed to not further use this instance.
+			 */
+			return -3;
+		} else if (jent_health_failure(ec)) {
+			/*
+			 * Perform startup health tests and return permanent
+			 * error if it fails.
+			 */
+			if (jent_entropy_init(ec->hash_state))
+				return -3;
+
+			return -2;
+		}
+
 		if ((DATA_SIZE_BITS / 8) < len)
 			tocopy = (DATA_SIZE_BITS / 8);
 		else
 			tocopy = len;
-		jent_memcpy(p, &ec->data, tocopy);
+		if (jent_read_random_block(ec->hash_state, p, tocopy))
+			return -1;
 
 		len -= tocopy;
 		p += tocopy;
@@ -468,7 +575,8 @@ int jent_read_entropy(struct rand_data *ec, unsigned char *data,
  ***************************************************************************/
 
 struct rand_data *jent_entropy_collector_alloc(unsigned int osr,
-					       unsigned int flags)
+					       unsigned int flags,
+					       void *hash_state)
 {
 	struct rand_data *entropy_collector;
 
@@ -491,9 +599,11 @@ struct rand_data *jent_entropy_collector_alloc(unsigned int osr,
 	}
 
 	/* verify and set the oversampling rate */
-	if (0 == osr)
+	if (osr == 0)
 		osr = 1; /* minimum sampling rate is 1 */
 	entropy_collector->osr = osr;
+
+	entropy_collector->hash_state = hash_state;
 
 	/* fill the data pad with non-zero values */
 	jent_gen_entropy(entropy_collector);
@@ -508,15 +618,20 @@ void jent_entropy_collector_free(struct rand_data *entropy_collector)
 	jent_zfree(entropy_collector);
 }
 
-int jent_entropy_init(void)
+int jent_entropy_init(void *hash_state)
 {
 	int i;
 	__u64 delta_sum = 0;
 	__u64 old_delta = 0;
+	unsigned int nonstuck = 0;
 	int time_backwards = 0;
 	int count_mod = 0;
 	int count_stuck = 0;
 	struct rand_data ec = { 0 };
+
+	/* Required for RCT */
+	ec.osr = 1;
+	ec.hash_state = hash_state;
 
 	/* We could perform statistical tests here, but the problem is
 	 * that we only have a few loop counts to do testing. These
@@ -539,8 +654,10 @@ int jent_entropy_init(void)
 	/*
 	 * TESTLOOPCOUNT needs some loops to identify edge systems. 100 is
 	 * definitely too little.
+	 *
+	 * SP800-90B requires at least 1024 initial test cycles.
 	 */
-#define TESTLOOPCOUNT 300
+#define TESTLOOPCOUNT 1024
 #define CLEARCACHE 100
 	for (i = 0; (TESTLOOPCOUNT + CLEARCACHE) > i; i++) {
 		__u64 time = 0;
@@ -552,13 +669,13 @@ int jent_entropy_init(void)
 		/* Invoke core entropy collection logic */
 		jent_get_nstime(&time);
 		ec.prev_time = time;
-		jent_lfsr_time(&ec, time, 0);
+		jent_condition_data(&ec, time, 0);
 		jent_get_nstime(&time2);
 
 		/* test whether timer works */
 		if (!time || !time2)
 			return JENT_ENOTIME;
-		delta = time2 - time;
+		delta = jent_delta(time, time2);
 		/*
 		 * test whether timer is fine grained enough to provide
 		 * delta even when called shortly after each other -- this
@@ -576,11 +693,31 @@ int jent_entropy_init(void)
 		 * etc. with the goal to clear it to get the worst case
 		 * measurements.
 		 */
-		if (CLEARCACHE > i)
+		if (i < CLEARCACHE)
 			continue;
 
 		if (stuck)
 			count_stuck++;
+		else {
+			nonstuck++;
+
+			/*
+			 * Ensure that the APT succeeded.
+			 *
+			 * With the check below that count_stuck must be less
+			 * than 10% of the overall generated raw entropy values
+			 * it is guaranteed that the APT is invoked at
+			 * floor((TESTLOOPCOUNT * 0.9) / 64) == 14 times.
+			 */
+			if ((nonstuck % JENT_APT_WINDOW_SIZE) == 0) {
+				jent_apt_reset(&ec,
+					       delta & JENT_APT_WORD_MASK);
+			}
+		}
+
+		/* Validate health test result */
+		if (jent_health_failure(&ec))
+			return JENT_EHEALTH;
 
 		/* test whether we have an increasing timer */
 		if (!(time2 > time))
@@ -611,7 +748,7 @@ int jent_entropy_init(void)
 	 * should not fail. The value of 3 should cover the NTP case being
 	 * performed during our test run.
 	 */
-	if (3 < time_backwards)
+	if (time_backwards > 3)
 		return JENT_ENOMONOTONIC;
 
 	/*

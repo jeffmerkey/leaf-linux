@@ -226,13 +226,10 @@ static irqreturn_t pv88090_irq_handler(int irq, void *data)
 
 	if (reg_val & PV88090_E_VDD_FLT) {
 		for (i = 0; i < PV88090_MAX_REGULATORS; i++) {
-			if (chip->rdev[i] != NULL) {
-			        regulator_lock(chip->rdev[i]);
+			if (chip->rdev[i] != NULL)
 				regulator_notifier_call_chain(chip->rdev[i],
 					REGULATOR_EVENT_UNDER_VOLTAGE,
 					NULL);
-			        regulator_unlock(chip->rdev[i]);
-			}
 		}
 
 		err = regmap_write(chip->regmap, PV88090_REG_EVENT_A,
@@ -245,13 +242,10 @@ static irqreturn_t pv88090_irq_handler(int irq, void *data)
 
 	if (reg_val & PV88090_E_OVER_TEMP) {
 		for (i = 0; i < PV88090_MAX_REGULATORS; i++) {
-			if (chip->rdev[i] != NULL) {
-			        regulator_lock(chip->rdev[i]);
+			if (chip->rdev[i] != NULL)
 				regulator_notifier_call_chain(chip->rdev[i],
 					REGULATOR_EVENT_OVER_TEMP,
 					NULL);
-			        regulator_unlock(chip->rdev[i]);
-			}
 		}
 
 		err = regmap_write(chip->regmap, PV88090_REG_EVENT_A,
@@ -403,9 +397,10 @@ MODULE_DEVICE_TABLE(of, pv88090_dt_ids);
 static struct i2c_driver pv88090_regulator_driver = {
 	.driver = {
 		.name = "pv88090",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(pv88090_dt_ids),
 	},
-	.probe_new = pv88090_i2c_probe,
+	.probe = pv88090_i2c_probe,
 	.id_table = pv88090_i2c_id,
 };
 

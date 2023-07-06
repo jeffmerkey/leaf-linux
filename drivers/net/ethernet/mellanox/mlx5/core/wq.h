@@ -123,7 +123,7 @@ static inline void mlx5_wq_cyc_push(struct mlx5_wq_cyc *wq)
 	wq->cur_sz++;
 }
 
-static inline void mlx5_wq_cyc_push_n(struct mlx5_wq_cyc *wq, u8 n)
+static inline void mlx5_wq_cyc_push_n(struct mlx5_wq_cyc *wq, u16 n)
 {
 	wq->wqe_ctr += n;
 	wq->cur_sz += n;
@@ -170,6 +170,11 @@ static inline int mlx5_wq_cyc_cc_bigger(u16 cc1, u16 cc2)
 	int smaller = 0x8000 & (cc1 - cc2);
 
 	return !equal && !smaller;
+}
+
+static inline u16 mlx5_wq_cyc_get_counter(struct mlx5_wq_cyc *wq)
+{
+	return wq->wqe_ctr;
 }
 
 static inline u32 mlx5_cqwq_get_size(struct mlx5_cqwq *wq)
@@ -238,6 +243,23 @@ static inline struct mlx5_cqe64 *mlx5_cqwq_get_cqe(struct mlx5_cqwq *wq)
 	return cqe;
 }
 
+static inline
+struct mlx5_cqe64 *mlx5_cqwq_get_cqe_enahnced_comp(struct mlx5_cqwq *wq)
+{
+	u8 sw_validity_iteration_count = mlx5_cqwq_get_wrap_cnt(wq) & 0xff;
+	u32 ci = mlx5_cqwq_get_ci(wq);
+	struct mlx5_cqe64 *cqe;
+
+	cqe = mlx5_cqwq_get_wqe(wq, ci);
+	if (cqe->validity_iteration_count != sw_validity_iteration_count)
+		return NULL;
+
+	/* ensure cqe content is read after cqe ownership bit/validity byte */
+	dma_rmb();
+
+	return cqe;
+}
+
 static inline u32 mlx5_wq_ll_get_size(struct mlx5_wq_ll *wq)
 {
 	return (u32)wq->fbc.sz_m1 + 1;
@@ -288,6 +310,16 @@ static inline void mlx5_wq_ll_pop(struct mlx5_wq_ll *wq, __be16 ix,
 static inline void mlx5_wq_ll_update_db_record(struct mlx5_wq_ll *wq)
 {
 	*wq->db = cpu_to_be32(wq->wqe_ctr);
+}
+
+static inline u16 mlx5_wq_ll_get_head(struct mlx5_wq_ll *wq)
+{
+	return wq->head;
+}
+
+static inline u16 mlx5_wq_ll_get_counter(struct mlx5_wq_ll *wq)
+{
+	return wq->wqe_ctr;
 }
 
 #endif /* __MLX5_WQ_H__ */

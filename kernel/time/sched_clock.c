@@ -8,6 +8,7 @@
 #include <linux/jiffies.h>
 #include <linux/ktime.h>
 #include <linux/kernel.h>
+#include <linux/math.h>
 #include <linux/moduleparam.h>
 #include <linux/sched.h>
 #include <linux/sched/clock.h>
@@ -18,31 +19,6 @@
 #include <linux/bitops.h>
 
 #include "timekeeping.h"
-
-/**
- * struct clock_read_data - data required to read from sched_clock()
- *
- * @epoch_ns:		sched_clock() value at last update
- * @epoch_cyc:		Clock cycle value at last update.
- * @sched_clock_mask:   Bitmask for two's complement subtraction of non 64bit
- *			clocks.
- * @read_sched_clock:	Current clock source (or dummy source when suspended).
- * @mult:		Multipler for scaled math conversion.
- * @shift:		Shift value for scaled math conversion.
- *
- * Care must be taken when updating this structure; it is read by
- * some very hot code paths. It occupies <=40 bytes and, when combined
- * with the seqcount used to synchronize access, comfortably fits into
- * a 64 byte cache line.
- */
-struct clock_read_data {
-	u64 epoch_ns;
-	u64 epoch_cyc;
-	u64 sched_clock_mask;
-	u64 (*read_sched_clock)(void);
-	u32 mult;
-	u32 shift;
-};
 
 /**
  * struct clock_data - all data needed for sched_clock() (including
@@ -60,7 +36,7 @@ struct clock_read_data {
  * into a single 64-byte cache line.
  */
 struct clock_data {
-	seqcount_t		seq;
+	seqcount_latch_t	seq;
 	struct clock_read_data	read_data[2];
 	ktime_t			wrap_kt;
 	unsigned long		rate;
@@ -88,27 +64,47 @@ static struct clock_data cd ____cacheline_aligned = {
 	.actual_read_sched_clock = jiffy_sched_clock_read,
 };
 
-static inline u64 notrace cyc_to_ns(u64 cyc, u32 mult, u32 shift)
+static __always_inline u64 cyc_to_ns(u64 cyc, u32 mult, u32 shift)
 {
 	return (cyc * mult) >> shift;
 }
 
-unsigned long long notrace sched_clock(void)
+notrace struct clock_read_data *sched_clock_read_begin(unsigned int *seq)
 {
-	u64 cyc, res;
-	unsigned int seq;
+	*seq = raw_read_seqcount_latch(&cd.seq);
+	return cd.read_data + (*seq & 1);
+}
+
+notrace int sched_clock_read_retry(unsigned int seq)
+{
+	return raw_read_seqcount_latch_retry(&cd.seq, seq);
+}
+
+unsigned long long noinstr sched_clock_noinstr(void)
+{
 	struct clock_read_data *rd;
+	unsigned int seq;
+	u64 cyc, res;
 
 	do {
-		seq = raw_read_seqcount(&cd.seq);
+		seq = raw_read_seqcount_latch(&cd.seq);
 		rd = cd.read_data + (seq & 1);
 
 		cyc = (rd->read_sched_clock() - rd->epoch_cyc) &
 		      rd->sched_clock_mask;
 		res = rd->epoch_ns + cyc_to_ns(cyc, rd->mult, rd->shift);
-	} while (read_seqcount_retry(&cd.seq, seq));
+	} while (raw_read_seqcount_latch_retry(&cd.seq, seq));
 
 	return res;
+}
+
+unsigned long long notrace sched_clock(void)
+{
+	unsigned long long ns;
+	preempt_disable_notrace();
+	ns = sched_clock_noinstr();
+	preempt_enable_notrace();
+	return ns;
 }
 
 /*
@@ -214,15 +210,13 @@ sched_clock_register(u64 (*read)(void), int bits, unsigned long rate)
 
 	r = rate;
 	if (r >= 4000000) {
-		r /= 1000000;
+		r = DIV_ROUND_CLOSEST(r, 1000000);
 		r_unit = 'M';
+	} else if (r >= 4000) {
+		r = DIV_ROUND_CLOSEST(r, 1000);
+		r_unit = 'k';
 	} else {
-		if (r >= 1000) {
-			r /= 1000;
-			r_unit = 'k';
-		} else {
-			r_unit = ' ';
-		}
+		r_unit = ' ';
 	}
 
 	/* Calculate the ns resolution of this counter */
@@ -244,7 +238,7 @@ void __init generic_sched_clock_init(void)
 {
 	/*
 	 * If no sched_clock() function has been provided at that point,
-	 * make it the final one one.
+	 * make it the final one.
 	 */
 	if (cd.actual_read_sched_clock == jiffy_sched_clock_read)
 		sched_clock_register(jiffy_sched_clock_read, BITS_PER_LONG, HZ);
@@ -273,7 +267,7 @@ void __init generic_sched_clock_init(void)
  */
 static u64 notrace suspended_sched_clock_read(void)
 {
-	unsigned int seq = raw_read_seqcount(&cd.seq);
+	unsigned int seq = raw_read_seqcount_latch(&cd.seq);
 
 	return cd.read_data[seq & 1].epoch_cyc;
 }

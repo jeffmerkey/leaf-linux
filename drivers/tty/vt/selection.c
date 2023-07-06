@@ -33,7 +33,7 @@
 #include <linux/sched/signal.h>
 
 /* Don't take this from <ctype.h>: 011-015 on the screen aren't spaces */
-#define isspace(c)	((c) == ' ')
+#define is_space_on_vt(c)	((c) == ' ')
 
 /* FIXME: all this needs locking */
 static struct vc_selection {
@@ -54,7 +54,7 @@ static struct vc_selection {
 /* set reverse video on characters s-e of console with selection. */
 static inline void highlight(const int s, const int e)
 {
-	invert_screen(vc_sel.cons, s, e-s+2, 1);
+	invert_screen(vc_sel.cons, s, e-s+2, true);
 }
 
 /* use complementary color to show the pointer */
@@ -68,7 +68,8 @@ sel_pos(int n, bool unicode)
 {
 	if (unicode)
 		return screen_glyph_unicode(vc_sel.cons, n / 2);
-	return inverse_translate(vc_sel.cons, screen_glyph(vc_sel.cons, n), 0);
+	return inverse_translate(vc_sel.cons, screen_glyph(vc_sel.cons, n),
+			false);
 }
 
 /**
@@ -109,7 +110,7 @@ static inline int inword(const u32 c)
 }
 
 /**
- *	set loadlut		-	load the LUT table
+ *	sel_loadlut()		-	load the LUT table
  *	@p: user table
  *
  *	Load the LUT table from user space. The caller must hold the console
@@ -185,55 +186,62 @@ int set_selection_user(const struct tiocl_selection __user *sel,
 	return set_selection_kernel(&v, tty);
 }
 
-static int __set_selection_kernel(struct tiocl_selection *v, struct tty_struct *tty)
+static int vc_selection_store_chars(struct vc_data *vc, bool unicode)
 {
-	struct vc_data *vc = vc_cons[fg_console].d;
-	int new_sel_start, new_sel_end, spc;
 	char *bp, *obp;
-	int i, ps, pe;
-	u32 c;
-	int ret = 0;
-	bool unicode;
+	unsigned int i;
 
-	poke_blanked_console();
-
-	v->xs = min_t(u16, v->xs - 1, vc->vc_cols - 1);
-	v->ys = min_t(u16, v->ys - 1, vc->vc_rows - 1);
-	v->xe = min_t(u16, v->xe - 1, vc->vc_cols - 1);
-	v->ye = min_t(u16, v->ye - 1, vc->vc_rows - 1);
-	ps = v->ys * vc->vc_size_row + (v->xs << 1);
-	pe = v->ye * vc->vc_size_row + (v->xe << 1);
-
-	if (v->sel_mode == TIOCL_SELCLEAR) {
-		/* useful for screendump without selection highlights */
+	/* Allocate a new buffer before freeing the old one ... */
+	/* chars can take up to 4 bytes with unicode */
+	bp = kmalloc_array((vc_sel.end - vc_sel.start) / 2 + 1, unicode ? 4 : 1,
+			   GFP_KERNEL | __GFP_NOWARN);
+	if (!bp) {
+		printk(KERN_WARNING "selection: kmalloc() failed\n");
 		clear_selection();
-		return 0;
+		return -ENOMEM;
 	}
+	kfree(vc_sel.buffer);
+	vc_sel.buffer = bp;
 
-	if (mouse_reporting() && (v->sel_mode & TIOCL_SELMOUSEREPORT)) {
-		mouse_report(tty, v->sel_mode & TIOCL_SELBUTTONMASK, v->xs,
-			     v->ys);
-		return 0;
+	obp = bp;
+	for (i = vc_sel.start; i <= vc_sel.end; i += 2) {
+		u32 c = sel_pos(i, unicode);
+		if (unicode)
+			bp += store_utf8(c, bp);
+		else
+			*bp++ = c;
+		if (!is_space_on_vt(c))
+			obp = bp;
+		if (!((i + 2) % vc->vc_size_row)) {
+			/* strip trailing blanks from line and add newline,
+			   unless non-space at end of line. */
+			if (obp != bp) {
+				bp = obp;
+				*bp++ = '\r';
+			}
+			obp = bp;
+		}
 	}
+	vc_sel.buf_len = bp - vc_sel.buffer;
 
-	if (ps > pe)	/* make vc_sel.start <= vc_sel.end */
-		swap(ps, pe);
+	return 0;
+}
 
-	if (vc_sel.cons != vc_cons[fg_console].d) {
-		clear_selection();
-		vc_sel.cons = vc_cons[fg_console].d;
-	}
-	unicode = vt_do_kdgkbmode(fg_console) == K_UNICODE;
+static int vc_do_selection(struct vc_data *vc, unsigned short mode, int ps,
+		int pe)
+{
+	int new_sel_start, new_sel_end, spc;
+	bool unicode = vt_do_kdgkbmode(fg_console) == K_UNICODE;
 
-	switch (v->sel_mode) {
+	switch (mode) {
 	case TIOCL_SELCHAR:	/* character-by-character selection */
 		new_sel_start = ps;
 		new_sel_end = pe;
 		break;
 	case TIOCL_SELWORD:	/* word-by-word selection */
-		spc = isspace(sel_pos(ps, unicode));
+		spc = is_space_on_vt(sel_pos(ps, unicode));
 		for (new_sel_start = ps; ; ps -= 2) {
-			if ((spc && !isspace(sel_pos(ps, unicode))) ||
+			if ((spc && !is_space_on_vt(sel_pos(ps, unicode))) ||
 			    (!spc && !inword(sel_pos(ps, unicode))))
 				break;
 			new_sel_start = ps;
@@ -241,9 +249,9 @@ static int __set_selection_kernel(struct tiocl_selection *v, struct tty_struct *
 				break;
 		}
 
-		spc = isspace(sel_pos(pe, unicode));
+		spc = is_space_on_vt(sel_pos(pe, unicode));
 		for (new_sel_end = pe; ; pe += 2) {
-			if ((spc && !isspace(sel_pos(pe, unicode))) ||
+			if ((spc && !is_space_on_vt(sel_pos(pe, unicode))) ||
 			    (!spc && !inword(sel_pos(pe, unicode))))
 				break;
 			new_sel_end = pe;
@@ -269,12 +277,12 @@ static int __set_selection_kernel(struct tiocl_selection *v, struct tty_struct *
 	/* select to end of line if on trailing space */
 	if (new_sel_end > new_sel_start &&
 		!atedge(new_sel_end, vc->vc_size_row) &&
-		isspace(sel_pos(new_sel_end, unicode))) {
+		is_space_on_vt(sel_pos(new_sel_end, unicode))) {
 		for (pe = new_sel_end + 2; ; pe += 2)
-			if (!isspace(sel_pos(pe, unicode)) ||
+			if (!is_space_on_vt(sel_pos(pe, unicode)) ||
 			    atedge(pe, vc->vc_size_row))
 				break;
-		if (isspace(sel_pos(pe, unicode)))
+		if (is_space_on_vt(sel_pos(pe, unicode)))
 			new_sel_end = pe;
 	}
 	if (vc_sel.start == -1)	/* no current selection */
@@ -303,40 +311,44 @@ static int __set_selection_kernel(struct tiocl_selection *v, struct tty_struct *
 	vc_sel.start = new_sel_start;
 	vc_sel.end = new_sel_end;
 
-	/* Allocate a new buffer before freeing the old one ... */
-	/* chars can take up to 4 bytes with unicode */
-	bp = kmalloc_array((vc_sel.end - vc_sel.start) / 2 + 1, unicode ? 4 : 1,
-			   GFP_KERNEL);
-	if (!bp) {
-		printk(KERN_WARNING "selection: kmalloc() failed\n");
+	return vc_selection_store_chars(vc, unicode);
+}
+
+static int vc_selection(struct vc_data *vc, struct tiocl_selection *v,
+		struct tty_struct *tty)
+{
+	int ps, pe;
+
+	poke_blanked_console();
+
+	if (v->sel_mode == TIOCL_SELCLEAR) {
+		/* useful for screendump without selection highlights */
 		clear_selection();
-		return -ENOMEM;
+		return 0;
 	}
-	kfree(vc_sel.buffer);
-	vc_sel.buffer = bp;
 
-	obp = bp;
-	for (i = vc_sel.start; i <= vc_sel.end; i += 2) {
-		c = sel_pos(i, unicode);
-		if (unicode)
-			bp += store_utf8(c, bp);
-		else
-			*bp++ = c;
-		if (!isspace(c))
-			obp = bp;
-		if (! ((i + 2) % vc->vc_size_row)) {
-			/* strip trailing blanks from line and add newline,
-			   unless non-space at end of line. */
-			if (obp != bp) {
-				bp = obp;
-				*bp++ = '\r';
-			}
-			obp = bp;
-		}
+	v->xs = min_t(u16, v->xs - 1, vc->vc_cols - 1);
+	v->ys = min_t(u16, v->ys - 1, vc->vc_rows - 1);
+	v->xe = min_t(u16, v->xe - 1, vc->vc_cols - 1);
+	v->ye = min_t(u16, v->ye - 1, vc->vc_rows - 1);
+
+	if (mouse_reporting() && (v->sel_mode & TIOCL_SELMOUSEREPORT)) {
+		mouse_report(tty, v->sel_mode & TIOCL_SELBUTTONMASK, v->xs,
+			     v->ys);
+		return 0;
 	}
-	vc_sel.buf_len = bp - vc_sel.buffer;
 
-	return ret;
+	ps = v->ys * vc->vc_size_row + (v->xs << 1);
+	pe = v->ye * vc->vc_size_row + (v->xe << 1);
+	if (ps > pe)	/* make vc_sel.start <= vc_sel.end */
+		swap(ps, pe);
+
+	if (vc_sel.cons != vc) {
+		clear_selection();
+		vc_sel.cons = vc;
+	}
+
+	return vc_do_selection(vc, v->sel_mode, ps, pe);
 }
 
 int set_selection_kernel(struct tiocl_selection *v, struct tty_struct *tty)
@@ -345,7 +357,7 @@ int set_selection_kernel(struct tiocl_selection *v, struct tty_struct *tty)
 
 	mutex_lock(&vc_sel.lock);
 	console_lock();
-	ret = __set_selection_kernel(v, tty);
+	ret = vc_selection(vc_cons[fg_console].d, v, tty);
 	console_unlock();
 	mutex_unlock(&vc_sel.lock);
 

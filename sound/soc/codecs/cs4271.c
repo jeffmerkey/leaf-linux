@@ -356,9 +356,9 @@ static int cs4271_hw_params(struct snd_pcm_substream *substream,
 		 */
 
 		if ((substream->stream == SNDRV_PCM_STREAM_PLAYBACK &&
-		     !dai->stream_active[SNDRV_PCM_STREAM_CAPTURE]) ||
+		     !snd_soc_dai_stream_active(dai, SNDRV_PCM_STREAM_CAPTURE)) ||
 		    (substream->stream == SNDRV_PCM_STREAM_CAPTURE &&
-		     !dai->stream_active[SNDRV_PCM_STREAM_PLAYBACK])) {
+		     !snd_soc_dai_stream_active(dai, SNDRV_PCM_STREAM_PLAYBACK))) {
 			ret = regmap_update_bits(cs4271->regmap, CS4271_MODE2,
 						 CS4271_MODE2_PDN,
 						 CS4271_MODE2_PDN);
@@ -481,7 +481,7 @@ static struct snd_soc_dai_driver cs4271_dai = {
 		.formats	= CS4271_PCM_FORMATS,
 	},
 	.ops = &cs4271_dai_ops,
-	.symmetric_rates = 1,
+	.symmetric_rate = 1,
 };
 
 static int cs4271_reset(struct snd_soc_component *component)
@@ -642,7 +642,6 @@ static const struct snd_soc_component_driver soc_component_dev_cs4271 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static int cs4271_common_probe(struct device *dev,
@@ -690,8 +689,8 @@ const struct regmap_config cs4271_regmap_config = {
 
 	.reg_defaults = cs4271_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(cs4271_reg_defaults),
-	.cache_type = REGCACHE_RBTREE,
-
+	.cache_type = REGCACHE_FLAT,
+	.val_bits = 8,
 	.volatile_reg = cs4271_volatile_reg,
 };
 EXPORT_SYMBOL_GPL(cs4271_regmap_config);

@@ -18,21 +18,21 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/pgtable.h>
 
 #include <asm/cacheflush.h>
 #include <asm/efi.h>
 #include <asm/mmu.h>
 #include <asm/pgalloc.h>
-#include <asm/pgtable.h>
 
-#if defined(CONFIG_PTDUMP_DEBUGFS) && defined(CONFIG_ARM64)
+#if defined(CONFIG_PTDUMP_DEBUGFS) || defined(CONFIG_ARM_PTDUMP_DEBUGFS)
 #include <asm/ptdump.h>
 
 static struct ptdump_info efi_ptdump_info = {
 	.mm		= &efi_mm,
 	.markers	= (struct addr_marker[]){
 		{ 0,				"UEFI runtime start" },
-		{ DEFAULT_MAP_WINDOW_64,	"UEFI runtime end" },
+		{ EFI_RUNTIME_MAP_END,		"UEFI runtime end" },
 		{ -1,				NULL }
 	},
 	.base_addr	= 0,
@@ -63,7 +63,7 @@ static bool __init efi_virtmap_init(void)
 
 		if (!(md->attribute & EFI_MEMORY_RUNTIME))
 			continue;
-		if (md->virt_addr == 0)
+		if (md->virt_addr == U64_MAX)
 			return false;
 
 		ret = efi_create_mapping(&efi_mm, md);

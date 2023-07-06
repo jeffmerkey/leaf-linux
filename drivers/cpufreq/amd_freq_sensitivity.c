@@ -91,7 +91,8 @@ static unsigned int amd_powersave_bias_target(struct cpufreq_policy *policy,
 			unsigned int index;
 
 			index = cpufreq_table_find_index_h(policy,
-							   policy->cur - 1);
+							   policy->cur - 1,
+							   relation & CPUFREQ_RELATION_E);
 			freq_next = policy->freq_table[index].frequency;
 		}
 
@@ -124,6 +125,8 @@ static int __init amd_freq_sensitivity_init(void)
 	if (!pcidev) {
 		if (!boot_cpu_has(X86_FEATURE_PROC_FEEDBACK))
 			return -ENODEV;
+	} else {
+		pci_dev_put(pcidev);
 	}
 
 	if (rdmsrl_safe(MSR_AMD64_FREQ_SENSITIVITY_ACTUAL, &val))
@@ -144,7 +147,7 @@ static void __exit amd_freq_sensitivity_exit(void)
 }
 module_exit(amd_freq_sensitivity_exit);
 
-static const struct x86_cpu_id amd_freq_sensitivity_ids[] = {
+static const struct x86_cpu_id __maybe_unused amd_freq_sensitivity_ids[] = {
 	X86_MATCH_FEATURE(X86_FEATURE_PROC_FEEDBACK, NULL),
 	{}
 };

@@ -620,7 +620,12 @@ static int g762_of_clock_enable(struct i2c_client *client)
 	data = i2c_get_clientdata(client);
 	data->clk = clk;
 
-	devm_add_action(&client->dev, g762_of_clock_disable, data);
+	ret = devm_add_action(&client->dev, g762_of_clock_disable, data);
+	if (ret) {
+		dev_err(&client->dev, "failed to add disable clock action\n");
+		goto clk_unprep;
+	}
+
 	return 0;
 
  clk_unprep:
@@ -1033,7 +1038,7 @@ static inline int g762_fan_init(struct device *dev)
 					 data->fan_cmd1);
 }
 
-static int g762_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int g762_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -1079,7 +1084,7 @@ static struct i2c_driver g762_driver = {
 		.name = DRVNAME,
 		.of_match_table = of_match_ptr(g762_dt_match),
 	},
-	.probe	  = g762_probe,
+	.probe = g762_probe,
 	.id_table = g762_id,
 };
 

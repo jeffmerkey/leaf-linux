@@ -31,7 +31,7 @@
 #include <mm/mmu_decl.h>
 
 #if defined(CONFIG_CPM2) || defined(CONFIG_8xx_GPIO)
-#include <linux/of_gpio.h>
+#include <linux/gpio/legacy-of-mm-gpiochip.h>
 #endif
 
 static int __init cpm_init(void)
@@ -68,6 +68,8 @@ static void udbg_putc_cpm(char c)
 void __init udbg_init_cpm(void)
 {
 #ifdef CONFIG_PPC_8xx
+	mmu_mapin_immr();
+
 	cpm_udbg_txdesc = (u32 __iomem __force *)
 			  (CONFIG_PPC_EARLY_DEBUG_CPM_ADDR - PHYS_IMMR_BASE +
 			   VIRT_IMMR_BASE);

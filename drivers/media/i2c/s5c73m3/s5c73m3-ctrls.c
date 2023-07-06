@@ -10,7 +10,6 @@
 #include <linux/sizes.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
-#include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/media.h>
@@ -24,7 +23,6 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
-#include <media/i2c/s5c73m3.h>
 
 #include "s5c73m3.h"
 
@@ -46,7 +44,7 @@ static int s5c73m3_get_af_status(struct s5c73m3 *state, struct v4l2_ctrl *ctrl)
 		break;
 	default:
 		v4l2_info(&state->sensor_sd, "Unknown AF status %#x\n", reg);
-		/* Fall through */
+		fallthrough;
 	case REG_CAF_STATUS_UNFOCUSED:
 	case REG_AF_STATUS_UNFOCUSED:
 	case REG_AF_STATUS_INVALID:

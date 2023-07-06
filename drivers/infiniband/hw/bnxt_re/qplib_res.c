@@ -45,6 +45,9 @@
 #include <linux/dma-mapping.h>
 #include <linux/if_vlan.h>
 #include <linux/vmalloc.h>
+#include <rdma/ib_verbs.h>
+#include <rdma/ib_umem.h>
+
 #include "roce_hsi.h"
 #include "qplib_res.h"
 #include "qplib_sp.h"
@@ -53,6 +56,7 @@
 static void bnxt_qplib_free_stats_ctx(struct pci_dev *pdev,
 				      struct bnxt_qplib_stats *stats);
 static int bnxt_qplib_alloc_stats_ctx(struct pci_dev *pdev,
+				      struct bnxt_qplib_chip_ctx *cctx,
 				      struct bnxt_qplib_stats *stats);
 
 /* PBL */
@@ -87,12 +91,11 @@ static void __free_pbl(struct bnxt_qplib_res *res, struct bnxt_qplib_pbl *pbl,
 static void bnxt_qplib_fill_user_dma_pages(struct bnxt_qplib_pbl *pbl,
 					   struct bnxt_qplib_sg_info *sginfo)
 {
-	struct scatterlist *sghead = sginfo->sghead;
-	struct sg_dma_page_iter sg_iter;
+	struct ib_block_iter biter;
 	int i = 0;
 
-	for_each_sg_dma_page(sghead, &sg_iter, sginfo->nmap, 0) {
-		pbl->pg_map_arr[i] = sg_page_iter_dma_address(&sg_iter);
+	rdma_umem_for_each_dma_block(sginfo->umem, &biter, sginfo->pgsize) {
+		pbl->pg_map_arr[i] = rdma_block_iter_dma_address(&biter);
 		pbl->pg_arr[i] = NULL;
 		pbl->pg_count++;
 		i++;
@@ -104,15 +107,16 @@ static int __alloc_pbl(struct bnxt_qplib_res *res,
 		       struct bnxt_qplib_sg_info *sginfo)
 {
 	struct pci_dev *pdev = res->pdev;
-	struct scatterlist *sghead;
 	bool is_umem = false;
 	u32 pages;
 	int i;
 
 	if (sginfo->nopte)
 		return 0;
-	pages = sginfo->npages;
-	sghead = sginfo->sghead;
+	if (sginfo->umem)
+		pages = ib_umem_num_dma_blocks(sginfo->umem, sginfo->pgsize);
+	else
+		pages = sginfo->npages;
 	/* page ptr arrays */
 	pbl->pg_arr = vmalloc(pages * sizeof(void *));
 	if (!pbl->pg_arr)
@@ -127,7 +131,7 @@ static int __alloc_pbl(struct bnxt_qplib_res *res,
 	pbl->pg_count = 0;
 	pbl->pg_size = sginfo->pgsize;
 
-	if (!sghead) {
+	if (!sginfo->umem) {
 		for (i = 0; i < pages; i++) {
 			pbl->pg_arr[i] = dma_alloc_coherent(&pdev->dev,
 							    pbl->pg_size,
@@ -183,14 +187,12 @@ int bnxt_qplib_alloc_init_hwq(struct bnxt_qplib_hwq *hwq,
 	struct bnxt_qplib_sg_info sginfo = {};
 	u32 depth, stride, npbl, npde;
 	dma_addr_t *src_phys_ptr, **dst_virt_ptr;
-	struct scatterlist *sghead = NULL;
 	struct bnxt_qplib_res *res;
 	struct pci_dev *pdev;
 	int i, rc, lvl;
 
 	res = hwq_attr->res;
 	pdev = res->pdev;
-	sghead = hwq_attr->sginfo->sghead;
 	pg_size = hwq_attr->sginfo->pgsize;
 	hwq->level = PBL_LVL_MAX;
 
@@ -204,7 +206,7 @@ int bnxt_qplib_alloc_init_hwq(struct bnxt_qplib_hwq *hwq,
 			aux_pages++;
 	}
 
-	if (!sghead) {
+	if (!hwq_attr->sginfo->umem) {
 		hwq->is_user = false;
 		npages = (depth * stride) / pg_size + aux_pages;
 		if ((depth * stride) % pg_size)
@@ -213,25 +215,21 @@ int bnxt_qplib_alloc_init_hwq(struct bnxt_qplib_hwq *hwq,
 			return -EINVAL;
 		hwq_attr->sginfo->npages = npages;
 	} else {
+		npages = ib_umem_num_dma_blocks(hwq_attr->sginfo->umem,
+						hwq_attr->sginfo->pgsize);
 		hwq->is_user = true;
-		npages = hwq_attr->sginfo->npages;
-		npages = (npages * PAGE_SIZE) /
-			  BIT_ULL(hwq_attr->sginfo->pgshft);
-		if ((hwq_attr->sginfo->npages * PAGE_SIZE) %
-		     BIT_ULL(hwq_attr->sginfo->pgshft))
-			if (!npages)
-				npages++;
 	}
 
-	if (npages == MAX_PBL_LVL_0_PGS) {
+	if (npages == MAX_PBL_LVL_0_PGS && !hwq_attr->sginfo->nopte) {
 		/* This request is Level 0, map PTE */
 		rc = __alloc_pbl(res, &hwq->pbl[PBL_LVL_0], hwq_attr->sginfo);
 		if (rc)
 			goto fail;
 		hwq->level = PBL_LVL_0;
+		goto done;
 	}
 
-	if (npages > MAX_PBL_LVL_0_PGS) {
+	if (npages >= MAX_PBL_LVL_0_PGS) {
 		if (npages > MAX_PBL_LVL_1_PGS) {
 			u32 flag = (hwq_attr->type == HWQ_TYPE_L2_CMPL) ?
 				    0 : PTU_PTE_VALID;
@@ -347,6 +345,7 @@ done:
 	hwq->depth = hwq_attr->depth;
 	hwq->max_elements = depth;
 	hwq->element_size = stride;
+	hwq->qe_ppg = pg_size / stride;
 	/* For direct access to the elements */
 	lvl = hwq->level;
 	if (hwq_attr->sginfo->nopte && hwq->level)
@@ -554,7 +553,7 @@ int bnxt_qplib_alloc_ctx(struct bnxt_qplib_res *res,
 		goto fail;
 stats_alloc:
 	/* Stats */
-	rc = bnxt_qplib_alloc_stats_ctx(res->pdev, &ctx->stats);
+	rc = bnxt_qplib_alloc_stats_ctx(res->pdev, res->cctx, &ctx->stats);
 	if (rc)
 		goto fail;
 
@@ -563,23 +562,6 @@ stats_alloc:
 fail:
 	bnxt_qplib_free_ctx(res, ctx);
 	return rc;
-}
-
-/* GUID */
-void bnxt_qplib_get_guid(u8 *dev_addr, u8 *guid)
-{
-	u8 mac[ETH_ALEN];
-
-	/* MAC-48 to EUI-64 mapping */
-	memcpy(mac, dev_addr, ETH_ALEN);
-	guid[0] = mac[0] ^ 2;
-	guid[1] = mac[1];
-	guid[2] = mac[2];
-	guid[3] = 0xff;
-	guid[4] = 0xfe;
-	guid[5] = mac[3];
-	guid[6] = mac[4];
-	guid[7] = mac[5];
 }
 
 static void bnxt_qplib_free_sgid_tbl(struct bnxt_qplib_res *res,
@@ -659,31 +641,6 @@ static void bnxt_qplib_init_sgid_tbl(struct bnxt_qplib_sgid_tbl *sgid_tbl,
 	memset(sgid_tbl->hw_id, -1, sizeof(u16) * sgid_tbl->max);
 }
 
-static void bnxt_qplib_free_pkey_tbl(struct bnxt_qplib_res *res,
-				     struct bnxt_qplib_pkey_tbl *pkey_tbl)
-{
-	if (!pkey_tbl->tbl)
-		dev_dbg(&res->pdev->dev, "PKEY tbl not present\n");
-	else
-		kfree(pkey_tbl->tbl);
-
-	pkey_tbl->tbl = NULL;
-	pkey_tbl->max = 0;
-	pkey_tbl->active = 0;
-}
-
-static int bnxt_qplib_alloc_pkey_tbl(struct bnxt_qplib_res *res,
-				     struct bnxt_qplib_pkey_tbl *pkey_tbl,
-				     u16 max)
-{
-	pkey_tbl->tbl = kcalloc(max, sizeof(u16), GFP_KERNEL);
-	if (!pkey_tbl->tbl)
-		return -ENOMEM;
-
-	pkey_tbl->max = max;
-	return 0;
-};
-
 /* PDs */
 int bnxt_qplib_alloc_pd(struct bnxt_qplib_pd_tbl *pdt, struct bnxt_qplib_pd *pd)
 {
@@ -739,44 +696,76 @@ static int bnxt_qplib_alloc_pd_tbl(struct bnxt_qplib_res *res,
 }
 
 /* DPIs */
-int bnxt_qplib_alloc_dpi(struct bnxt_qplib_dpi_tbl *dpit,
-			 struct bnxt_qplib_dpi     *dpi,
-			 void                      *app)
+int bnxt_qplib_alloc_dpi(struct bnxt_qplib_res *res,
+			 struct bnxt_qplib_dpi *dpi,
+			 void *app, u8 type)
 {
+	struct bnxt_qplib_dpi_tbl *dpit = &res->dpi_tbl;
+	struct bnxt_qplib_reg_desc *reg;
 	u32 bit_num;
+	u64 umaddr;
+
+	reg = &dpit->wcreg;
+	mutex_lock(&res->dpi_tbl_lock);
 
 	bit_num = find_first_bit(dpit->tbl, dpit->max);
-	if (bit_num == dpit->max)
+	if (bit_num == dpit->max) {
+		mutex_unlock(&res->dpi_tbl_lock);
 		return -ENOMEM;
+	}
 
 	/* Found unused DPI */
 	clear_bit(bit_num, dpit->tbl);
 	dpit->app_tbl[bit_num] = app;
 
-	dpi->dpi = bit_num;
-	dpi->dbr = dpit->dbr_bar_reg_iomem + (bit_num * PAGE_SIZE);
-	dpi->umdbr = dpit->unmapped_dbr + (bit_num * PAGE_SIZE);
+	dpi->bit = bit_num;
+	dpi->dpi = bit_num + (reg->offset - dpit->ucreg.offset) / PAGE_SIZE;
 
+	umaddr = reg->bar_base + reg->offset + bit_num * PAGE_SIZE;
+	dpi->umdbr = umaddr;
+
+	switch (type) {
+	case BNXT_QPLIB_DPI_TYPE_KERNEL:
+		/* privileged dbr was already mapped just initialize it. */
+		dpi->umdbr = dpit->ucreg.bar_base +
+			     dpit->ucreg.offset + bit_num * PAGE_SIZE;
+		dpi->dbr = dpit->priv_db;
+		dpi->dpi = dpi->bit;
+		break;
+	case BNXT_QPLIB_DPI_TYPE_WC:
+		dpi->dbr = ioremap_wc(umaddr, PAGE_SIZE);
+		break;
+	default:
+		dpi->dbr = ioremap(umaddr, PAGE_SIZE);
+		break;
+	}
+
+	dpi->type = type;
+	mutex_unlock(&res->dpi_tbl_lock);
 	return 0;
+
 }
 
 int bnxt_qplib_dealloc_dpi(struct bnxt_qplib_res *res,
-			   struct bnxt_qplib_dpi_tbl *dpit,
-			   struct bnxt_qplib_dpi     *dpi)
+			   struct bnxt_qplib_dpi *dpi)
 {
-	if (dpi->dpi >= dpit->max) {
-		dev_warn(&res->pdev->dev, "Invalid DPI? dpi = %d\n", dpi->dpi);
-		return -EINVAL;
-	}
-	if (test_and_set_bit(dpi->dpi, dpit->tbl)) {
-		dev_warn(&res->pdev->dev, "Freeing an unused DPI? dpi = %d\n",
-			 dpi->dpi);
+	struct bnxt_qplib_dpi_tbl *dpit = &res->dpi_tbl;
+
+	mutex_lock(&res->dpi_tbl_lock);
+	if (dpi->dpi && dpi->type != BNXT_QPLIB_DPI_TYPE_KERNEL)
+		pci_iounmap(res->pdev, dpi->dbr);
+
+	if (test_and_set_bit(dpi->bit, dpit->tbl)) {
+		dev_warn(&res->pdev->dev,
+			 "Freeing an unused DPI? dpi = %d, bit = %d\n",
+				dpi->dpi, dpi->bit);
+		mutex_unlock(&res->dpi_tbl_lock);
 		return -EINVAL;
 	}
 	if (dpit->app_tbl)
-		dpit->app_tbl[dpi->dpi] = NULL;
+		dpit->app_tbl[dpi->bit] = NULL;
 	memset(dpi, 0, sizeof(*dpi));
-
+	mutex_unlock(&res->dpi_tbl_lock);
 	return 0;
 }
 
@@ -785,52 +774,38 @@ static void bnxt_qplib_free_dpi_tbl(struct bnxt_qplib_res     *res,
 {
 	kfree(dpit->tbl);
 	kfree(dpit->app_tbl);
-	if (dpit->dbr_bar_reg_iomem)
-		pci_iounmap(res->pdev, dpit->dbr_bar_reg_iomem);
-	memset(dpit, 0, sizeof(*dpit));
+	dpit->tbl = NULL;
+	dpit->app_tbl = NULL;
+	dpit->max = 0;
 }
 
-static int bnxt_qplib_alloc_dpi_tbl(struct bnxt_qplib_res     *res,
-				    struct bnxt_qplib_dpi_tbl *dpit,
-				    u32                       dbr_offset)
+static int bnxt_qplib_alloc_dpi_tbl(struct bnxt_qplib_res *res,
+				    struct bnxt_qplib_dev_attr *dev_attr)
 {
-	u32 dbr_bar_reg = RCFW_DBR_PCI_BAR_REGION;
-	resource_size_t bar_reg_base;
-	u32 dbr_len, bytes;
+	struct bnxt_qplib_dpi_tbl *dpit;
+	struct bnxt_qplib_reg_desc *reg;
+	unsigned long bar_len;
+	u32 dbr_offset;
+	u32 bytes;
 
-	if (dpit->dbr_bar_reg_iomem) {
-		dev_err(&res->pdev->dev, "DBR BAR region %d already mapped\n",
-			dbr_bar_reg);
-		return -EALREADY;
+	dpit = &res->dpi_tbl;
+	reg = &dpit->wcreg;
+
+	if (!bnxt_qplib_is_chip_gen_p5(res->cctx)) {
+		/* Offest should come from L2 driver */
+		dbr_offset = dev_attr->l2_db_size;
+		dpit->ucreg.offset = dbr_offset;
+		dpit->wcreg.offset = dbr_offset;
 	}
 
-	bar_reg_base = pci_resource_start(res->pdev, dbr_bar_reg);
-	if (!bar_reg_base) {
-		dev_err(&res->pdev->dev, "BAR region %d resc start failed\n",
-			dbr_bar_reg);
-		return -ENOMEM;
-	}
+	bar_len = pci_resource_len(res->pdev, reg->bar_id);
+	dpit->max = (bar_len - reg->offset) / PAGE_SIZE;
+	if (dev_attr->max_dpi)
+		dpit->max = min_t(u32, dpit->max, dev_attr->max_dpi);
 
-	dbr_len = pci_resource_len(res->pdev, dbr_bar_reg) - dbr_offset;
-	if (!dbr_len || ((dbr_len & (PAGE_SIZE - 1)) != 0)) {
-		dev_err(&res->pdev->dev, "Invalid DBR length %d\n", dbr_len);
-		return -ENOMEM;
-	}
-
-	dpit->dbr_bar_reg_iomem = ioremap(bar_reg_base + dbr_offset,
-						  dbr_len);
-	if (!dpit->dbr_bar_reg_iomem) {
-		dev_err(&res->pdev->dev,
-			"FP: DBR BAR region %d mapping failed\n", dbr_bar_reg);
-		return -ENOMEM;
-	}
-
-	dpit->unmapped_dbr = bar_reg_base + dbr_offset;
-	dpit->max = dbr_len / PAGE_SIZE;
-
-	dpit->app_tbl = kcalloc(dpit->max, sizeof(void *), GFP_KERNEL);
+	dpit->app_tbl = kcalloc(dpit->max,  sizeof(void *), GFP_KERNEL);
 	if (!dpit->app_tbl)
-		goto unmap_io;
+		return -ENOMEM;
 
 	bytes = dpit->max >> 3;
 	if (!bytes)
@@ -840,34 +815,14 @@ static int bnxt_qplib_alloc_dpi_tbl(struct bnxt_qplib_res     *res,
 	if (!dpit->tbl) {
 		kfree(dpit->app_tbl);
 		dpit->app_tbl = NULL;
-		goto unmap_io;
+		return -ENOMEM;
 	}
 
 	memset((u8 *)dpit->tbl, 0xFF, bytes);
+	dpit->priv_db = dpit->ucreg.bar_reg + dpit->ucreg.offset;
 
 	return 0;
 
-unmap_io:
-	pci_iounmap(res->pdev, dpit->dbr_bar_reg_iomem);
-	return -ENOMEM;
-}
-
-/* PKEYs */
-static void bnxt_qplib_cleanup_pkey_tbl(struct bnxt_qplib_pkey_tbl *pkey_tbl)
-{
-	memset(pkey_tbl->tbl, 0, sizeof(u16) * pkey_tbl->max);
-	pkey_tbl->active = 0;
-}
-
-static void bnxt_qplib_init_pkey_tbl(struct bnxt_qplib_res *res,
-				     struct bnxt_qplib_pkey_tbl *pkey_tbl)
-{
-	u16 pkey = 0xFFFF;
-
-	memset(pkey_tbl->tbl, 0, sizeof(u16) * pkey_tbl->max);
-
-	/* pkey default = 0xFFFF */
-	bnxt_qplib_add_pkey(res, pkey_tbl, &pkey, false);
 }
 
 /* Stats */
@@ -883,15 +838,12 @@ static void bnxt_qplib_free_stats_ctx(struct pci_dev *pdev,
 }
 
 static int bnxt_qplib_alloc_stats_ctx(struct pci_dev *pdev,
+				      struct bnxt_qplib_chip_ctx *cctx,
 				      struct bnxt_qplib_stats *stats)
 {
 	memset(stats, 0, sizeof(*stats));
 	stats->fw_id = -1;
-	/* 128 byte aligned context memory is required only for 57500.
-	 * However making this unconditional, it does not harm previous
-	 * generation.
-	 */
-	stats->size = ALIGN(sizeof(struct ctx_hw_stats), 128);
+	stats->size = cctx->hw_stats_size;
 	stats->dma = dma_alloc_coherent(&pdev->dev, stats->size,
 					&stats->dma_map, GFP_KERNEL);
 	if (!stats->dma) {
@@ -903,21 +855,18 @@ static int bnxt_qplib_alloc_stats_ctx(struct pci_dev *pdev,
 
 void bnxt_qplib_cleanup_res(struct bnxt_qplib_res *res)
 {
-	bnxt_qplib_cleanup_pkey_tbl(&res->pkey_tbl);
 	bnxt_qplib_cleanup_sgid_tbl(res, &res->sgid_tbl);
 }
 
 int bnxt_qplib_init_res(struct bnxt_qplib_res *res)
 {
 	bnxt_qplib_init_sgid_tbl(&res->sgid_tbl, res->netdev);
-	bnxt_qplib_init_pkey_tbl(res, &res->pkey_tbl);
 
 	return 0;
 }
 
 void bnxt_qplib_free_res(struct bnxt_qplib_res *res)
 {
-	bnxt_qplib_free_pkey_tbl(res, &res->pkey_tbl);
 	bnxt_qplib_free_sgid_tbl(res, &res->sgid_tbl);
 	bnxt_qplib_free_pd_tbl(&res->pd_tbl);
 	bnxt_qplib_free_dpi_tbl(res, &res->dpi_tbl);
@@ -936,15 +885,11 @@ int bnxt_qplib_alloc_res(struct bnxt_qplib_res *res, struct pci_dev *pdev,
 	if (rc)
 		goto fail;
 
-	rc = bnxt_qplib_alloc_pkey_tbl(res, &res->pkey_tbl, dev_attr->max_pkey);
-	if (rc)
-		goto fail;
-
 	rc = bnxt_qplib_alloc_pd_tbl(res, &res->pd_tbl, dev_attr->max_pd);
 	if (rc)
 		goto fail;
 
-	rc = bnxt_qplib_alloc_dpi_tbl(res, &res->dpi_tbl, dev_attr->l2_db_size);
+	rc = bnxt_qplib_alloc_dpi_tbl(res, dev_attr);
 	if (rc)
 		goto fail;
 
@@ -952,4 +897,61 @@ int bnxt_qplib_alloc_res(struct bnxt_qplib_res *res, struct pci_dev *pdev,
 fail:
 	bnxt_qplib_free_res(res);
 	return rc;
+}
+
+void bnxt_qplib_unmap_db_bar(struct bnxt_qplib_res *res)
+{
+	struct bnxt_qplib_reg_desc *reg;
+
+	reg = &res->dpi_tbl.ucreg;
+	if (reg->bar_reg)
+		pci_iounmap(res->pdev, reg->bar_reg);
+	reg->bar_reg = NULL;
+	reg->bar_base = 0;
+	reg->len = 0;
+	reg->bar_id = 0;
+}
+
+int bnxt_qplib_map_db_bar(struct bnxt_qplib_res *res)
+{
+	struct bnxt_qplib_reg_desc *ucreg;
+	struct bnxt_qplib_reg_desc *wcreg;
+
+	wcreg = &res->dpi_tbl.wcreg;
+	wcreg->bar_id = RCFW_DBR_PCI_BAR_REGION;
+	wcreg->bar_base = pci_resource_start(res->pdev, wcreg->bar_id);
+
+	ucreg = &res->dpi_tbl.ucreg;
+	ucreg->bar_id = RCFW_DBR_PCI_BAR_REGION;
+	ucreg->bar_base = pci_resource_start(res->pdev, ucreg->bar_id);
+	ucreg->len = ucreg->offset + PAGE_SIZE;
+	if (!ucreg->len || ((ucreg->len & (PAGE_SIZE - 1)) != 0)) {
+		dev_err(&res->pdev->dev, "QPLIB: invalid dbr length %d",
+			(int)ucreg->len);
+		return -EINVAL;
+	}
+	ucreg->bar_reg = ioremap(ucreg->bar_base, ucreg->len);
+	if (!ucreg->bar_reg) {
+		dev_err(&res->pdev->dev, "privileged dpi map failed!");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+int bnxt_qplib_determine_atomics(struct pci_dev *dev)
+{
+	int comp;
+	u16 ctl2;
+
+	comp = pci_enable_atomic_ops_to_root(dev,
+					     PCI_EXP_DEVCAP2_ATOMIC_COMP32);
+	if (comp)
+		return -EOPNOTSUPP;
+	comp = pci_enable_atomic_ops_to_root(dev,
+					     PCI_EXP_DEVCAP2_ATOMIC_COMP64);
+	if (comp)
+		return -EOPNOTSUPP;
+	pcie_capability_read_word(dev, PCI_EXP_DEVCTL2, &ctl2);
+	return !(ctl2 & PCI_EXP_DEVCTL2_ATOMIC_REQ);
 }

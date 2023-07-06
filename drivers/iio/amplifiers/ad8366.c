@@ -45,10 +45,10 @@ struct ad8366_state {
 	enum ad8366_type	type;
 	struct ad8366_info	*info;
 	/*
-	 * DMA (thus cache coherency maintenance) requires the
+	 * DMA (thus cache coherency maintenance) may require the
 	 * transfer buffers to live in their own cache lines.
 	 */
-	unsigned char		data[2] ____cacheline_aligned;
+	unsigned char		data[2] __aligned(IIO_DMA_MINALIGN);
 };
 
 static struct ad8366_info ad8366_infos[] = {
@@ -262,8 +262,11 @@ static int ad8366_probe(struct spi_device *spi)
 	case ID_ADA4961:
 	case ID_ADL5240:
 	case ID_HMC1119:
-		st->reset_gpio = devm_gpiod_get(&spi->dev, "reset",
-			GPIOD_OUT_HIGH);
+		st->reset_gpio = devm_gpiod_get_optional(&spi->dev, "reset", GPIOD_OUT_HIGH);
+		if (IS_ERR(st->reset_gpio)) {
+			ret = PTR_ERR(st->reset_gpio);
+			goto error_disable_reg;
+		}
 		indio_dev->channels = ada4961_channels;
 		indio_dev->num_channels = ARRAY_SIZE(ada4961_channels);
 		break;
@@ -274,12 +277,11 @@ static int ad8366_probe(struct spi_device *spi)
 	}
 
 	st->info = &ad8366_infos[st->type];
-	indio_dev->dev.parent = &spi->dev;
 	indio_dev->name = spi_get_device_id(spi)->name;
 	indio_dev->info = &ad8366_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 
-	ret = ad8366_write(indio_dev, 0 , 0);
+	ret = ad8366_write(indio_dev, 0, 0);
 	if (ret < 0)
 		goto error_disable_reg;
 
@@ -296,7 +298,7 @@ error_disable_reg:
 	return ret;
 }
 
-static int ad8366_remove(struct spi_device *spi)
+static void ad8366_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ad8366_state *st = iio_priv(indio_dev);
@@ -306,8 +308,6 @@ static int ad8366_remove(struct spi_device *spi)
 
 	if (!IS_ERR(reg))
 		regulator_disable(reg);
-
-	return 0;
 }
 
 static const struct spi_device_id ad8366_id[] = {

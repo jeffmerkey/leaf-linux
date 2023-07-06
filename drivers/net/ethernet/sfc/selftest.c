@@ -21,6 +21,7 @@
 #include "efx_common.h"
 #include "efx_channels.h"
 #include "nic.h"
+#include "mcdi_port_common.h"
 #include "selftest.h"
 #include "workarounds.h"
 
@@ -41,12 +42,16 @@
  * Falcon only performs RSS on TCP/UDP packets.
  */
 struct efx_loopback_payload {
+	char pad[2]; /* Ensures ip is 4-byte aligned */
 	struct ethhdr header;
 	struct iphdr ip;
 	struct udphdr udp;
 	__be16 iteration;
 	char msg[64];
-} __packed;
+} __packed __aligned(4);
+#define EFX_LOOPBACK_PAYLOAD_LEN	(sizeof(struct efx_loopback_payload) - \
+					 offsetof(struct efx_loopback_payload, \
+						  header))
 
 /* Loopback test source MAC address */
 static const u8 payload_source[ETH_ALEN] __aligned(2) = {
@@ -67,7 +72,7 @@ static const char *const efx_interrupt_mode_names[] = {
 	STRING_TABLE_LOOKUP(efx->interrupt_mode, efx_interrupt_mode)
 
 /**
- * efx_loopback_state - persistent state during a loopback selftest
+ * struct efx_loopback_state - persistent state during a loopback selftest
  * @flush:		Drop all packets in efx_loopback_rx_packet
  * @packet_count:	Number of packets being used in this test
  * @skbs:		An array of skbs transmitted
@@ -99,10 +104,8 @@ static int efx_test_phy_alive(struct efx_nic *efx, struct efx_self_tests *tests)
 {
 	int rc = 0;
 
-	if (efx->phy_op->test_alive) {
-		rc = efx->phy_op->test_alive(efx);
-		tests->phy_alive = rc ? -1 : 1;
-	}
+	rc = efx_mcdi_phy_test_alive(efx);
+	tests->phy_alive = rc ? -1 : 1;
 
 	return rc;
 }
@@ -257,11 +260,8 @@ static int efx_test_phy(struct efx_nic *efx, struct efx_self_tests *tests,
 {
 	int rc;
 
-	if (!efx->phy_op->run_tests)
-		return 0;
-
 	mutex_lock(&efx->mac_lock);
-	rc = efx->phy_op->run_tests(efx, tests->phy_ext, flags);
+	rc = efx_mcdi_phy_run_tests(efx, tests->phy_ext, flags);
 	mutex_unlock(&efx->mac_lock);
 	if (rc == -EPERM)
 		rc = 0;
@@ -286,7 +286,7 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 			    const char *buf_ptr, int pkt_len)
 {
 	struct efx_loopback_state *state = efx->loopback_selftest;
-	struct efx_loopback_payload *received;
+	struct efx_loopback_payload received;
 	struct efx_loopback_payload *payload;
 
 	BUG_ON(!buf_ptr);
@@ -297,13 +297,14 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 
 	payload = &state->payload;
 
-	received = (struct efx_loopback_payload *) buf_ptr;
-	received->ip.saddr = payload->ip.saddr;
+	memcpy(&received.header, buf_ptr,
+	       min_t(int, pkt_len, EFX_LOOPBACK_PAYLOAD_LEN));
+	received.ip.saddr = payload->ip.saddr;
 	if (state->offload_csum)
-		received->ip.check = payload->ip.check;
+		received.ip.check = payload->ip.check;
 
 	/* Check that header exists */
-	if (pkt_len < sizeof(received->header)) {
+	if (pkt_len < sizeof(received.header)) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw runt RX packet (length %d) in %s loopback "
 			  "test\n", pkt_len, LOOPBACK_MODE(efx));
@@ -311,7 +312,7 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 	}
 
 	/* Check that the ethernet header exists */
-	if (memcmp(&received->header, &payload->header, ETH_HLEN) != 0) {
+	if (memcmp(&received.header, &payload->header, ETH_HLEN) != 0) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw non-loopback RX packet in %s loopback test\n",
 			  LOOPBACK_MODE(efx));
@@ -319,16 +320,16 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 	}
 
 	/* Check packet length */
-	if (pkt_len != sizeof(*payload)) {
+	if (pkt_len != EFX_LOOPBACK_PAYLOAD_LEN) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw incorrect RX packet length %d (wanted %d) in "
-			  "%s loopback test\n", pkt_len, (int)sizeof(*payload),
-			  LOOPBACK_MODE(efx));
+			  "%s loopback test\n", pkt_len,
+			  (int)EFX_LOOPBACK_PAYLOAD_LEN, LOOPBACK_MODE(efx));
 		goto err;
 	}
 
 	/* Check that IP header matches */
-	if (memcmp(&received->ip, &payload->ip, sizeof(payload->ip)) != 0) {
+	if (memcmp(&received.ip, &payload->ip, sizeof(payload->ip)) != 0) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw corrupted IP header in %s loopback test\n",
 			  LOOPBACK_MODE(efx));
@@ -336,7 +337,7 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 	}
 
 	/* Check that msg and padding matches */
-	if (memcmp(&received->msg, &payload->msg, sizeof(received->msg)) != 0) {
+	if (memcmp(&received.msg, &payload->msg, sizeof(received.msg)) != 0) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw corrupted RX packet in %s loopback test\n",
 			  LOOPBACK_MODE(efx));
@@ -344,10 +345,10 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 	}
 
 	/* Check that iteration matches */
-	if (received->iteration != payload->iteration) {
+	if (received.iteration != payload->iteration) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw RX packet from iteration %d (wanted %d) in "
-			  "%s loopback test\n", ntohs(received->iteration),
+			  "%s loopback test\n", ntohs(received.iteration),
 			  ntohs(payload->iteration), LOOPBACK_MODE(efx));
 		goto err;
 	}
@@ -367,7 +368,8 @@ void efx_loopback_rx_packet(struct efx_nic *efx,
 			       buf_ptr, pkt_len, 0);
 		netif_err(efx, drv, efx->net_dev, "expected packet:\n");
 		print_hex_dump(KERN_ERR, "", DUMP_PREFIX_OFFSET, 0x10, 1,
-			       &state->payload, sizeof(state->payload), 0);
+			       &state->payload.header, EFX_LOOPBACK_PAYLOAD_LEN,
+			       0);
 	}
 #endif
 	atomic_inc(&state->rx_bad);
@@ -389,14 +391,15 @@ static void efx_iterate_state(struct efx_nic *efx)
 	payload->ip.daddr = htonl(INADDR_LOOPBACK);
 	payload->ip.ihl = 5;
 	payload->ip.check = (__force __sum16) htons(0xdead);
-	payload->ip.tot_len = htons(sizeof(*payload) - sizeof(struct ethhdr));
+	payload->ip.tot_len = htons(sizeof(*payload) -
+				    offsetof(struct efx_loopback_payload, ip));
 	payload->ip.version = IPVERSION;
 	payload->ip.protocol = IPPROTO_UDP;
 
 	/* Initialise udp header */
 	payload->udp.source = 0;
-	payload->udp.len = htons(sizeof(*payload) - sizeof(struct ethhdr) -
-				 sizeof(struct iphdr));
+	payload->udp.len = htons(sizeof(*payload) -
+				 offsetof(struct efx_loopback_payload, udp));
 	payload->udp.check = 0;	/* checksum ignored */
 
 	/* Fill out payload */
@@ -422,7 +425,7 @@ static int efx_begin_loopback(struct efx_tx_queue *tx_queue)
 	for (i = 0; i < state->packet_count; i++) {
 		/* Allocate an skb, holding an extra reference for
 		 * transmit completion counting */
-		skb = alloc_skb(sizeof(state->payload), GFP_KERNEL);
+		skb = alloc_skb(EFX_LOOPBACK_PAYLOAD_LEN, GFP_KERNEL);
 		if (!skb)
 			return -ENOMEM;
 		state->skbs[i] = skb;
@@ -433,6 +436,8 @@ static int efx_begin_loopback(struct efx_tx_queue *tx_queue)
 		payload = skb_put(skb, sizeof(state->payload));
 		memcpy(payload, &state->payload, sizeof(state->payload));
 		payload->ip.saddr = htonl(INADDR_LOOPBACK | (i << 2));
+		/* Strip off the leading padding */
+		skb_pull(skb, offsetof(struct efx_loopback_payload, header));
 
 		/* Ensure everything we've written is visible to the
 		 * interrupt handler. */
@@ -445,7 +450,7 @@ static int efx_begin_loopback(struct efx_tx_queue *tx_queue)
 		if (rc != NETDEV_TX_OK) {
 			netif_err(efx, drv, efx->net_dev,
 				  "TX queue %d could not transmit packet %d of "
-				  "%d in %s loopback test\n", tx_queue->queue,
+				  "%d in %s loopback test\n", tx_queue->label,
 				  i + 1, state->packet_count,
 				  LOOPBACK_MODE(efx));
 
@@ -497,7 +502,7 @@ static int efx_end_loopback(struct efx_tx_queue *tx_queue,
 		netif_err(efx, drv, efx->net_dev,
 			  "TX queue %d saw only %d out of an expected %d "
 			  "TX completion events in %s loopback test\n",
-			  tx_queue->queue, tx_done, state->packet_count,
+			  tx_queue->label, tx_done, state->packet_count,
 			  LOOPBACK_MODE(efx));
 		rc = -ETIMEDOUT;
 		/* Allow to fall through so we see the RX errors as well */
@@ -508,15 +513,15 @@ static int efx_end_loopback(struct efx_tx_queue *tx_queue,
 		netif_dbg(efx, drv, efx->net_dev,
 			  "TX queue %d saw only %d out of an expected %d "
 			  "received packets in %s loopback test\n",
-			  tx_queue->queue, rx_good, state->packet_count,
+			  tx_queue->label, rx_good, state->packet_count,
 			  LOOPBACK_MODE(efx));
 		rc = -ETIMEDOUT;
 		/* Fall through */
 	}
 
 	/* Update loopback test structure */
-	lb_tests->tx_sent[tx_queue->queue] += state->packet_count;
-	lb_tests->tx_done[tx_queue->queue] += tx_done;
+	lb_tests->tx_sent[tx_queue->label] += state->packet_count;
+	lb_tests->tx_done[tx_queue->label] += tx_done;
 	lb_tests->rx_good += rx_good;
 	lb_tests->rx_bad += rx_bad;
 
@@ -542,8 +547,8 @@ efx_test_loopback(struct efx_tx_queue *tx_queue,
 		state->flush = false;
 
 		netif_dbg(efx, drv, efx->net_dev,
-			  "TX queue %d testing %s loopback with %d packets\n",
-			  tx_queue->queue, LOOPBACK_MODE(efx),
+			  "TX queue %d (hw %d) testing %s loopback with %d packets\n",
+			  tx_queue->label, tx_queue->queue, LOOPBACK_MODE(efx),
 			  state->packet_count);
 
 		efx_iterate_state(efx);
@@ -570,7 +575,7 @@ efx_test_loopback(struct efx_tx_queue *tx_queue,
 
 	netif_dbg(efx, drv, efx->net_dev,
 		  "TX queue %d passed %s loopback test with a burst length "
-		  "of %d packets\n", tx_queue->queue, LOOPBACK_MODE(efx),
+		  "of %d packets\n", tx_queue->label, LOOPBACK_MODE(efx),
 		  state->packet_count);
 
 	return 0;
@@ -660,8 +665,8 @@ static int efx_test_loopbacks(struct efx_nic *efx, struct efx_self_tests *tests,
 
 		/* Test all enabled types of TX queue */
 		efx_for_each_channel_tx_queue(tx_queue, channel) {
-			state->offload_csum = (tx_queue->queue &
-					       EFX_TXQ_TYPE_OFFLOAD);
+			state->offload_csum = (tx_queue->type &
+					       EFX_TXQ_TYPE_OUTER_CSUM);
 			rc = efx_test_loopback(tx_queue,
 					       &tests->loopback[mode]);
 			if (rc)

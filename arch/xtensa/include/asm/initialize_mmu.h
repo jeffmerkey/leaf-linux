@@ -6,7 +6,7 @@
  *      For the new V3 MMU we remap the TLB from virtual == physical
  *      to the standard Linux mapping used in earlier MMU's.
  *
- *      The the MMU we also support a new configuration register that
+ *      For the MMU we also support a new configuration register that
  *      specifies how the S32C1I instruction operates with the cache
  *      controller.
  *
@@ -24,7 +24,7 @@
 #define _XTENSA_INITIALIZE_MMU_H
 
 #include <linux/init.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/vectors.h>
 
 #if XCHAL_HAVE_PTP_MMU
@@ -43,7 +43,7 @@
 #if XCHAL_HAVE_S32C1I && (XCHAL_HW_MIN_VERSION >= XTENSA_HWVERSION_RC_2009_0)
 /*
  * We Have Atomic Operation Control (ATOMCTL) Register; Initialize it.
- * For details see Documentation/xtensa/atomctl.rst
+ * For details see Documentation/arch/xtensa/atomctl.rst
  */
 #if XCHAL_DCACHE_IS_COHERENT
 	movi	a3, 0x25	/* For SMP/MX -- internal for writeback,
@@ -73,7 +73,7 @@
 	_j	2f
 
 	.align	4
-1:	movi	a2, 0x10000000
+1:
 
 #if CONFIG_KERNEL_LOAD_ADDRESS < 0x40000000ul
 #define TEMP_MAPPING_VADDR 0x40000000

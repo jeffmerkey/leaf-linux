@@ -54,8 +54,10 @@ nouveau_debugfs_strap_peek(struct seq_file *m, void *data)
 	int ret;
 
 	ret = pm_runtime_get_sync(drm->dev->dev);
-	if (ret < 0 && ret != -EACCES)
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_autosuspend(drm->dev->dev);
 		return ret;
+	}
 
 	seq_printf(m, "0x%08x\n",
 		   nvif_rd32(&drm->client.device.object, 0x101000));
@@ -71,13 +73,14 @@ nouveau_debugfs_pstate_get(struct seq_file *m, void *data)
 {
 	struct drm_device *drm = m->private;
 	struct nouveau_debugfs *debugfs = nouveau_debugfs(drm);
-	struct nvif_object *ctrl = &debugfs->ctrl;
+	struct nvif_object *ctrl;
 	struct nvif_control_pstate_info_v0 info = {};
 	int ret, i;
 
 	if (!debugfs)
 		return -ENODEV;
 
+	ctrl = &debugfs->ctrl;
 	ret = nvif_mthd(ctrl, NVIF_CONTROL_PSTATE_INFO, &info, sizeof(info));
 	if (ret)
 		return ret;
@@ -117,19 +120,19 @@ nouveau_debugfs_pstate_get(struct seq_file *m, void *data)
 
 		if (state >= 0) {
 			if (info.ustate_ac == state)
-				seq_printf(m, " AC");
+				seq_puts(m, " AC");
 			if (info.ustate_dc == state)
-				seq_printf(m, " DC");
+				seq_puts(m, " DC");
 			if (info.pstate == state)
-				seq_printf(m, " *");
+				seq_puts(m, " *");
 		} else {
 			if (info.ustate_ac < -1)
-				seq_printf(m, " AC");
+				seq_puts(m, " AC");
 			if (info.ustate_dc < -1)
-				seq_printf(m, " DC");
+				seq_puts(m, " DC");
 		}
 
-		seq_printf(m, "\n");
+		seq_putc(m, '\n');
 	}
 
 	return 0;
@@ -142,7 +145,6 @@ nouveau_debugfs_pstate_set(struct file *file, const char __user *ubuf,
 	struct seq_file *m = file->private_data;
 	struct drm_device *drm = m->private;
 	struct nouveau_debugfs *debugfs = nouveau_debugfs(drm);
-	struct nvif_object *ctrl = &debugfs->ctrl;
 	struct nvif_control_pstate_user_v0 args = { .pwrsrc = -EINVAL };
 	char buf[32] = {}, *tmp, *cur = buf;
 	long value, ret;
@@ -181,9 +183,13 @@ nouveau_debugfs_pstate_set(struct file *file, const char __user *ubuf,
 	}
 
 	ret = pm_runtime_get_sync(drm->dev);
-	if (ret < 0 && ret != -EACCES)
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_autosuspend(drm->dev);
 		return ret;
-	ret = nvif_mthd(ctrl, NVIF_CONTROL_PSTATE_USER, &args, sizeof(args));
+	}
+
+	ret = nvif_mthd(&debugfs->ctrl, NVIF_CONTROL_PSTATE_USER,
+			&args, sizeof(args));
 	pm_runtime_put_autosuspend(drm->dev);
 	if (ret < 0)
 		return ret;
@@ -202,6 +208,7 @@ static const struct file_operations nouveau_pstate_fops = {
 	.open = nouveau_debugfs_pstate_open,
 	.read = seq_read,
 	.write = nouveau_debugfs_pstate_set,
+	.release = single_release,
 };
 
 static struct drm_info_list nouveau_debugfs_list[] = {
@@ -217,7 +224,7 @@ static const struct nouveau_debugfs_files {
 	{"pstate", &nouveau_pstate_fops},
 };
 
-int
+void
 nouveau_drm_debugfs_init(struct drm_minor *minor)
 {
 	struct nouveau_drm *drm = nouveau_drm(minor->dev);
@@ -240,37 +247,29 @@ nouveau_drm_debugfs_init(struct drm_minor *minor)
 	 */
 	dentry = debugfs_lookup("vbios.rom", minor->debugfs_root);
 	if (!dentry)
-		return 0;
+		return;
 
 	d_inode(dentry)->i_size = drm->vbios.length;
 	dput(dentry);
-
-	return 0;
 }
 
 int
 nouveau_debugfs_init(struct nouveau_drm *drm)
 {
-	int ret;
-
 	drm->debugfs = kzalloc(sizeof(*drm->debugfs), GFP_KERNEL);
 	if (!drm->debugfs)
 		return -ENOMEM;
 
-	ret = nvif_object_init(&drm->client.device.object, 0,
-			       NVIF_CLASS_CONTROL, NULL, 0,
-			       &drm->debugfs->ctrl);
-	if (ret)
-		return ret;
-
-	return 0;
+	return nvif_object_ctor(&drm->client.device.object, "debugfsCtrl", 0,
+				NVIF_CLASS_CONTROL, NULL, 0,
+				&drm->debugfs->ctrl);
 }
 
 void
 nouveau_debugfs_fini(struct nouveau_drm *drm)
 {
 	if (drm->debugfs && drm->debugfs->ctrl.priv)
-		nvif_object_fini(&drm->debugfs->ctrl);
+		nvif_object_dtor(&drm->debugfs->ctrl);
 
 	kfree(drm->debugfs);
 	drm->debugfs = NULL;

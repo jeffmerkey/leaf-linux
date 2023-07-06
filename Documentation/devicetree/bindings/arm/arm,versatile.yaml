@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/arm/arm,versatile.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: ARM Versatile Boards Device Tree Bindings
+title: ARM Versatile Boards
 
 maintainers:
   - Linus Walleij <linus.walleij@linaro.org>
@@ -67,5 +67,7 @@ patternProperties:
 required:
   - compatible
   - core-module@10000000
+
+additionalProperties: true
 
 ...

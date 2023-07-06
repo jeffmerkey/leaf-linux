@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/arm/bcm/brcm,ns2.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Broadcom North Star 2 (NS2) device tree bindings
+title: Broadcom North Star 2 (NS2)
 
 maintainers:
   - Ray Jui <rjui@broadcom.com>
@@ -16,8 +16,10 @@ properties:
   compatible:
     items:
       - enum:
-        - brcm,ns2-svk
-        - brcm,ns2-xmc
+          - brcm,ns2-svk
+          - brcm,ns2-xmc
       - const: brcm,ns2
+
+additionalProperties: true
 
 ...

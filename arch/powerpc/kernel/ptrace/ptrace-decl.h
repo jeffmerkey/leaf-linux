@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include <linux/regset.h>
+
 /*
  * Set of msr bits that gdb can change on behalf of a process.
  */
@@ -55,6 +57,10 @@ enum powerpc_regset {
 	REGSET_TAR,		/* TAR register */
 	REGSET_EBB,		/* EBB registers */
 	REGSET_PMR,		/* Performance Monitor Registers */
+	REGSET_DEXCR,		/* DEXCR registers */
+#ifdef CONFIG_CHECKPOINT_RESTORE
+	REGSET_HASHKEYR,	/* HASHKEYR register */
+#endif
 #endif
 #ifdef CONFIG_PPC_MEM_KEYS
 	REGSET_PKEY,		/* AMR register */
@@ -63,8 +69,7 @@ enum powerpc_regset {
 
 /* ptrace-(no)vsx */
 
-int fpr_get(struct task_struct *target, const struct user_regset *regset,
-	    unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn fpr_get;
 int fpr_set(struct task_struct *target, const struct user_regset *regset,
 	    unsigned int pos, unsigned int count,
 	    const void *kbuf, const void __user *ubuf);
@@ -72,8 +77,7 @@ int fpr_set(struct task_struct *target, const struct user_regset *regset,
 /* ptrace-vsx */
 
 int vsr_active(struct task_struct *target, const struct user_regset *regset);
-int vsr_get(struct task_struct *target, const struct user_regset *regset,
-	    unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn vsr_get;
 int vsr_set(struct task_struct *target, const struct user_regset *regset,
 	    unsigned int pos, unsigned int count,
 	    const void *kbuf, const void __user *ubuf);
@@ -81,8 +85,7 @@ int vsr_set(struct task_struct *target, const struct user_regset *regset,
 /* ptrace-altivec */
 
 int vr_active(struct task_struct *target, const struct user_regset *regset);
-int vr_get(struct task_struct *target, const struct user_regset *regset,
-	   unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn vr_get;
 int vr_set(struct task_struct *target, const struct user_regset *regset,
 	   unsigned int pos, unsigned int count,
 	   const void *kbuf, const void __user *ubuf);
@@ -90,8 +93,7 @@ int vr_set(struct task_struct *target, const struct user_regset *regset,
 /* ptrace-spe */
 
 int evr_active(struct task_struct *target, const struct user_regset *regset);
-int evr_get(struct task_struct *target, const struct user_regset *regset,
-	    unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn evr_get;
 int evr_set(struct task_struct *target, const struct user_regset *regset,
 	    unsigned int pos, unsigned int count,
 	    const void *kbuf, const void __user *ubuf);
@@ -100,9 +102,8 @@ int evr_set(struct task_struct *target, const struct user_regset *regset,
 
 int gpr32_get_common(struct task_struct *target,
 		     const struct user_regset *regset,
-		     unsigned int pos, unsigned int count,
-			    void *kbuf, void __user *ubuf,
-			    unsigned long *regs);
+		     struct membuf to,
+		     unsigned long *regs);
 int gpr32_set_common(struct task_struct *target,
 		     const struct user_regset *regset,
 		     unsigned int pos, unsigned int count,
@@ -118,62 +119,60 @@ static inline void flush_tmregs_to_thread(struct task_struct *tsk) { }
 #endif
 
 int tm_cgpr_active(struct task_struct *target, const struct user_regset *regset);
-int tm_cgpr_get(struct task_struct *target, const struct user_regset *regset,
-		unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_cgpr_get;
 int tm_cgpr_set(struct task_struct *target, const struct user_regset *regset,
 		unsigned int pos, unsigned int count,
 		const void *kbuf, const void __user *ubuf);
 int tm_cfpr_active(struct task_struct *target, const struct user_regset *regset);
-int tm_cfpr_get(struct task_struct *target, const struct user_regset *regset,
-		unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_cfpr_get;
 int tm_cfpr_set(struct task_struct *target, const struct user_regset *regset,
 		unsigned int pos, unsigned int count,
 		const void *kbuf, const void __user *ubuf);
 int tm_cvmx_active(struct task_struct *target, const struct user_regset *regset);
-int tm_cvmx_get(struct task_struct *target, const struct user_regset *regset,
-		unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_cvmx_get;
 int tm_cvmx_set(struct task_struct *target, const struct user_regset *regset,
 		unsigned int pos, unsigned int count,
 		const void *kbuf, const void __user *ubuf);
 int tm_cvsx_active(struct task_struct *target, const struct user_regset *regset);
-int tm_cvsx_get(struct task_struct *target, const struct user_regset *regset,
-		unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_cvsx_get;
 int tm_cvsx_set(struct task_struct *target, const struct user_regset *regset,
 		unsigned int pos, unsigned int count,
 		const void *kbuf, const void __user *ubuf);
 int tm_spr_active(struct task_struct *target, const struct user_regset *regset);
-int tm_spr_get(struct task_struct *target, const struct user_regset *regset,
-	       unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_spr_get;
 int tm_spr_set(struct task_struct *target, const struct user_regset *regset,
 	       unsigned int pos, unsigned int count,
 	       const void *kbuf, const void __user *ubuf);
 int tm_tar_active(struct task_struct *target, const struct user_regset *regset);
-int tm_tar_get(struct task_struct *target, const struct user_regset *regset,
-	       unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_tar_get;
 int tm_tar_set(struct task_struct *target, const struct user_regset *regset,
 	       unsigned int pos, unsigned int count,
 	       const void *kbuf, const void __user *ubuf);
 int tm_ppr_active(struct task_struct *target, const struct user_regset *regset);
-int tm_ppr_get(struct task_struct *target, const struct user_regset *regset,
-	       unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_ppr_get;
 int tm_ppr_set(struct task_struct *target, const struct user_regset *regset,
 	       unsigned int pos, unsigned int count,
 	       const void *kbuf, const void __user *ubuf);
 int tm_dscr_active(struct task_struct *target, const struct user_regset *regset);
-int tm_dscr_get(struct task_struct *target, const struct user_regset *regset,
-		unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_dscr_get;
 int tm_dscr_set(struct task_struct *target, const struct user_regset *regset,
 		unsigned int pos, unsigned int count,
 		const void *kbuf, const void __user *ubuf);
-int tm_cgpr32_get(struct task_struct *target, const struct user_regset *regset,
-		  unsigned int pos, unsigned int count, void *kbuf, void __user *ubuf);
+user_regset_get2_fn tm_cgpr32_get;
 int tm_cgpr32_set(struct task_struct *target, const struct user_regset *regset,
 		  unsigned int pos, unsigned int count,
 		  const void *kbuf, const void __user *ubuf);
 
 /* ptrace-view */
 
+int ptrace_get_reg(struct task_struct *task, int regno, unsigned long *data);
+int ptrace_put_reg(struct task_struct *task, int regno, unsigned long data);
+
 extern const struct user_regset_view user_ppc_native_view;
+
+/* ptrace-fpu */
+int ptrace_get_fpr(struct task_struct *child, int index, unsigned long *data);
+int ptrace_put_fpr(struct task_struct *child, int index, unsigned long data);
 
 /* ptrace-(no)adv */
 void ppc_gethwdinfo(struct ppc_debug_info *dbginfo);

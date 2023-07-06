@@ -174,7 +174,7 @@ static int slim_rproc_stop(struct rproc *rproc)
 	return 0;
 }
 
-static void *slim_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len)
+static void *slim_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len, bool *is_iomem)
 {
 	struct st_slim_rproc *slim_rproc = rproc->priv;
 	void *va = NULL;
@@ -203,7 +203,7 @@ static const struct rproc_ops slim_rproc_ops = {
 	.da_to_va       = slim_rproc_da_to_va,
 	.get_boot_addr	= rproc_elf_get_boot_addr,
 	.load		= rproc_elf_load_segments,
-	.sanity_check	= rproc_elf32_sanity_check,
+	.sanity_check	= rproc_elf_sanity_check,
 };
 
 /**
@@ -216,7 +216,7 @@ static const struct rproc_ops slim_rproc_ops = {
  * obtains and enables any clocks required by the SLIM core and also
  * ioremaps the various IO.
  *
- * Returns st_slim_rproc pointer or PTR_ERR() on error.
+ * Return: st_slim_rproc pointer or PTR_ERR() on error.
  */
 
 struct st_slim_rproc *st_slim_rproc_alloc(struct platform_device *pdev,

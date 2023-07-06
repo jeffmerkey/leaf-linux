@@ -69,9 +69,9 @@ static int mei_txe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto end;
 	}
 
-	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(36));
+	err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(36));
 	if (err) {
-		err = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
 		if (err) {
 			dev_err(&pdev->dev, "No suitable DMA available.\n");
 			goto end;
@@ -128,7 +128,7 @@ static int mei_txe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * MEI requires to resume from runtime suspend mode
 	 * in order to perform link reset flow upon system suspend.
 	 */
-	dev_pm_set_driver_flags(&pdev->dev, DPM_FLAG_NEVER_SKIP);
+	dev_pm_set_driver_flags(&pdev->dev, DPM_FLAG_NO_DIRECT_COMPLETE);
 
 	/*
 	 * TXE maps runtime suspend/resume to own power gating states,
@@ -156,7 +156,7 @@ end:
 }
 
 /**
- * mei_txe_remove - Device Shutdown Routine
+ * mei_txe_shutdown- Device Shutdown Routine
  *
  * @pdev: PCI device structure
  *

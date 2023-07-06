@@ -75,7 +75,7 @@ static unsigned int uniphier_serial_in(struct uart_port *p, int offset)
 		break;
 	case UART_LCR:
 		valshift = 8;
-		/* fall through */
+		fallthrough;
 	case UART_MCR:
 		offset = UNIPHIER_UART_LCR_MCR;
 		break;
@@ -101,7 +101,7 @@ static void uniphier_serial_out(struct uart_port *p, int offset, int value)
 	case UART_SCR:
 		/* No SCR for this hardware.  Use CHAR as a scratch register */
 		valshift = 8;
-		/* fall through */
+		fallthrough;
 	case UART_FCR:
 		offset = UNIPHIER_UART_CHAR_FCR;
 		break;
@@ -109,7 +109,7 @@ static void uniphier_serial_out(struct uart_port *p, int offset, int value)
 		valshift = 8;
 		/* Divisor latch access bit does not exist. */
 		value &= ~UART_LCR_DLAB;
-		/* fall through */
+		fallthrough;
 	case UART_MCR:
 		offset = UNIPHIER_UART_LCR_MCR;
 		break;
@@ -145,12 +145,12 @@ static void uniphier_serial_out(struct uart_port *p, int offset, int value)
  * The divisor latch register exists at different address.
  * Override dl_read/write callbacks.
  */
-static int uniphier_serial_dl_read(struct uart_8250_port *up)
+static u32 uniphier_serial_dl_read(struct uart_8250_port *up)
 {
 	return readl(up->port.membase + UNIPHIER_UART_DLR);
 }
 
-static void uniphier_serial_dl_write(struct uart_8250_port *up, int value)
+static void uniphier_serial_dl_write(struct uart_8250_port *up, u32 value)
 {
 	writel(value, up->port.membase + UNIPHIER_UART_DLR);
 }

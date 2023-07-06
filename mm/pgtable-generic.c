@@ -2,15 +2,18 @@
 /*
  *  mm/pgtable-generic.c
  *
- *  Generic pgtable methods declared in asm-generic/pgtable.h
+ *  Generic pgtable methods declared in linux/pgtable.h
  *
  *  Copyright (C) 2010  Linus Torvalds
  */
 
 #include <linux/pagemap.h>
 #include <linux/hugetlb.h>
+#include <linux/pgtable.h>
+#include <linux/swap.h>
+#include <linux/swapops.h>
+#include <linux/mm_inline.h>
 #include <asm/tlb.h>
-#include <asm-generic/pgtable.h>
 
 /*
  * If a p?d_bad entry is found while walking page tables, report
@@ -53,7 +56,7 @@ void pmd_clear_bad(pmd_t *pmd)
 
 #ifndef __HAVE_ARCH_PTEP_SET_ACCESS_FLAGS
 /*
- * Only sets the access flags (dirty, accessed), as well as write 
+ * Only sets the access flags (dirty, accessed), as well as write
  * permission. Furthermore, we know it always gets set to a "more
  * permissive" setting, which allows most architectures to optimize
  * this. We return whether the PTE actually changed, which in turn
@@ -65,10 +68,10 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 			  unsigned long address, pte_t *ptep,
 			  pte_t entry, int dirty)
 {
-	int changed = !pte_same(*ptep, entry);
+	int changed = !pte_same(ptep_get(ptep), entry);
 	if (changed) {
 		set_pte_at(vma->vm_mm, address, ptep, entry);
-		flush_tlb_fix_spurious_fault(vma, address);
+		flush_tlb_fix_spurious_fault(vma, address, ptep);
 	}
 	return changed;
 }
@@ -135,8 +138,8 @@ pmd_t pmdp_huge_clear_flush(struct vm_area_struct *vma, unsigned long address,
 {
 	pmd_t pmd;
 	VM_BUG_ON(address & ~HPAGE_PMD_MASK);
-	VM_BUG_ON((pmd_present(*pmdp) && !pmd_trans_huge(*pmdp) &&
-			   !pmd_devmap(*pmdp)) || !pmd_present(*pmdp));
+	VM_BUG_ON(pmd_present(*pmdp) && !pmd_trans_huge(*pmdp) &&
+			   !pmd_devmap(*pmdp));
 	pmd = pmdp_huge_get_and_clear(vma->vm_mm, address, pmdp);
 	flush_pmd_tlb_range(vma, address, address + HPAGE_PMD_SIZE);
 	return pmd;
@@ -194,9 +197,17 @@ pgtable_t pgtable_trans_huge_withdraw(struct mm_struct *mm, pmd_t *pmdp)
 pmd_t pmdp_invalidate(struct vm_area_struct *vma, unsigned long address,
 		     pmd_t *pmdp)
 {
-	pmd_t old = pmdp_establish(vma, address, pmdp, pmd_mknotpresent(*pmdp));
+	pmd_t old = pmdp_establish(vma, address, pmdp, pmd_mkinvalid(*pmdp));
 	flush_pmd_tlb_range(vma, address, address + HPAGE_PMD_SIZE);
 	return old;
+}
+#endif
+
+#ifndef __HAVE_ARCH_PMDP_INVALIDATE_AD
+pmd_t pmdp_invalidate_ad(struct vm_area_struct *vma, unsigned long address,
+			 pmd_t *pmdp)
+{
+	return pmdp_invalidate(vma, address, pmdp);
 }
 #endif
 
@@ -220,3 +231,57 @@ pmd_t pmdp_collapse_flush(struct vm_area_struct *vma, unsigned long address,
 }
 #endif
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
+
+pte_t *__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp)
+{
+	pmd_t pmdval;
+
+	/* rcu_read_lock() to be added later */
+	pmdval = pmdp_get_lockless(pmd);
+	if (pmdvalp)
+		*pmdvalp = pmdval;
+	if (unlikely(pmd_none(pmdval) || is_pmd_migration_entry(pmdval)))
+		goto nomap;
+	if (unlikely(pmd_trans_huge(pmdval) || pmd_devmap(pmdval)))
+		goto nomap;
+	if (unlikely(pmd_bad(pmdval))) {
+		pmd_clear_bad(pmd);
+		goto nomap;
+	}
+	return __pte_map(&pmdval, addr);
+nomap:
+	/* rcu_read_unlock() to be added later */
+	return NULL;
+}
+
+pte_t *pte_offset_map_nolock(struct mm_struct *mm, pmd_t *pmd,
+			     unsigned long addr, spinlock_t **ptlp)
+{
+	pmd_t pmdval;
+	pte_t *pte;
+
+	pte = __pte_offset_map(pmd, addr, &pmdval);
+	if (likely(pte))
+		*ptlp = pte_lockptr(mm, &pmdval);
+	return pte;
+}
+
+pte_t *__pte_offset_map_lock(struct mm_struct *mm, pmd_t *pmd,
+			     unsigned long addr, spinlock_t **ptlp)
+{
+	spinlock_t *ptl;
+	pmd_t pmdval;
+	pte_t *pte;
+again:
+	pte = __pte_offset_map(pmd, addr, &pmdval);
+	if (unlikely(!pte))
+		return pte;
+	ptl = pte_lockptr(mm, &pmdval);
+	spin_lock(ptl);
+	if (likely(pmd_same(pmdval, pmdp_get_lockless(pmd)))) {
+		*ptlp = ptl;
+		return pte;
+	}
+	pte_unmap_unlock(pte, ptl);
+	goto again;
+}

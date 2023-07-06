@@ -78,7 +78,7 @@ struct axp_mc_drvdata {
 	char msg[128];
 };
 
-/* derived from "DRAM Address Multiplexing" in the ARAMDA XP Functional Spec */
+/* derived from "DRAM Address Multiplexing" in the ARMADA XP Functional Spec */
 static uint32_t axp_mc_calc_address(struct axp_mc_drvdata *drvdata,
 				    uint8_t cs, uint8_t bank, uint16_t row,
 				    uint16_t col)
@@ -160,12 +160,12 @@ static void axp_mc_check(struct mem_ctl_info *mci)
 		if (cnt_sbe)
 			cnt_sbe--;
 		else
-			dev_warn(mci->pdev, "inconsistent SBE count detected");
+			dev_warn(mci->pdev, "inconsistent SBE count detected\n");
 	} else {
 		if (cnt_dbe)
 			cnt_dbe--;
 		else
-			dev_warn(mci->pdev, "inconsistent DBE count detected");
+			dev_warn(mci->pdev, "inconsistent DBE count detected\n");
 	}
 
 	/* report earlier errors */
@@ -178,7 +178,7 @@ static void axp_mc_check(struct mem_ctl_info *mci)
 				     "details unavailable (multiple errors)");
 	if (cnt_dbe)
 		edac_mc_handle_error(HW_EVENT_ERR_UNCORRECTED, mci,
-				     cnt_sbe, /* error count */
+				     cnt_dbe, /* error count */
 				     0, 0, 0, /* pfn, offset, syndrome */
 				     -1, -1, -1, /* top, mid, low layer */
 				     mci->ctl_name,
@@ -286,17 +286,10 @@ static int axp_mc_probe(struct platform_device *pdev)
 	struct edac_mc_layer layers[1];
 	const struct of_device_id *id;
 	struct mem_ctl_info *mci;
-	struct resource *r;
 	void __iomem *base;
 	uint32_t config;
 
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!r) {
-		dev_err(&pdev->dev, "Unable to get mem resource\n");
-		return -ENODEV;
-	}
-
-	base = devm_ioremap_resource(&pdev->dev, r);
+	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base)) {
 		dev_err(&pdev->dev, "Unable to map regs\n");
 		return PTR_ERR(base);
@@ -304,7 +297,7 @@ static int axp_mc_probe(struct platform_device *pdev)
 
 	config = readl(base + SDRAM_CONFIG_REG);
 	if (!(config & SDRAM_CONFIG_ECC_MASK)) {
-		dev_warn(&pdev->dev, "SDRAM ECC is not enabled");
+		dev_warn(&pdev->dev, "SDRAM ECC is not enabled\n");
 		return -EINVAL;
 	}
 
@@ -516,15 +509,8 @@ static int aurora_l2_probe(struct platform_device *pdev)
 	const struct of_device_id *id;
 	uint32_t l2x0_aux_ctrl;
 	void __iomem *base;
-	struct resource *r;
 
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!r) {
-		dev_err(&pdev->dev, "Unable to get mem resource\n");
-		return -ENODEV;
-	}
-
-	base = devm_ioremap_resource(&pdev->dev, r);
+	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base)) {
 		dev_err(&pdev->dev, "Unable to map regs\n");
 		return PTR_ERR(base);
@@ -532,9 +518,9 @@ static int aurora_l2_probe(struct platform_device *pdev)
 
 	l2x0_aux_ctrl = readl(base + L2X0_AUX_CTRL);
 	if (!(l2x0_aux_ctrl & AURORA_ACR_PARITY_EN))
-		dev_warn(&pdev->dev, "tag parity is not enabled");
+		dev_warn(&pdev->dev, "tag parity is not enabled\n");
 	if (!(l2x0_aux_ctrl & AURORA_ACR_ECC_EN))
-		dev_warn(&pdev->dev, "data ECC is not enabled");
+		dev_warn(&pdev->dev, "data ECC is not enabled\n");
 
 	dci = edac_device_alloc_ctl_info(sizeof(*drvdata),
 					 "cpu", 1, "L", 1, 2, NULL, 0, 0);
@@ -613,12 +599,15 @@ static int __init armada_xp_edac_init(void)
 {
 	int res;
 
+	if (ghes_get_devices())
+		return -EBUSY;
+
 	/* only polling is supported */
 	edac_op_state = EDAC_OPSTATE_POLL;
 
 	res = platform_register_drivers(drivers, ARRAY_SIZE(drivers));
 	if (res)
-		pr_warn("Aramda XP EDAC drivers fail to register\n");
+		pr_warn("Armada XP EDAC drivers fail to register\n");
 
 	return 0;
 }

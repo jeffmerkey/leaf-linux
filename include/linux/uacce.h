@@ -8,6 +8,7 @@
 #define UACCE_NAME		"uacce"
 #define UACCE_MAX_REGION	2
 #define UACCE_MAX_NAME_SIZE	64
+#define UACCE_MAX_ERR_THRESHOLD	65535
 
 struct uacce_queue;
 struct uacce_device;
@@ -30,6 +31,9 @@ struct uacce_qfile_region {
  * @is_q_updated: check whether the task is finished
  * @mmap: mmap addresses of queue to user space
  * @ioctl: ioctl for user space users of the queue
+ * @get_isolate_state: get the device state after set the isolate strategy
+ * @isolate_err_threshold_write: stored the isolate error threshold to the device
+ * @isolate_err_threshold_read: read the isolate error threshold value from the device
  */
 struct uacce_ops {
 	int (*get_available_instances)(struct uacce_device *uacce);
@@ -43,6 +47,9 @@ struct uacce_ops {
 		    struct uacce_qfile_region *qfr);
 	long (*ioctl)(struct uacce_queue *q, unsigned int cmd,
 		      unsigned long arg);
+	enum uacce_dev_state (*get_isolate_state)(struct uacce_device *uacce);
+	int (*isolate_err_threshold_write)(struct uacce_device *uacce, u32 num);
+	u32 (*isolate_err_threshold_read)(struct uacce_device *uacce);
 };
 
 /**
@@ -57,6 +64,11 @@ struct uacce_interface {
 	const struct uacce_ops *ops;
 };
 
+enum uacce_dev_state {
+	UACCE_DEV_NORMAL,
+	UACCE_DEV_ISOLATE,
+};
+
 enum uacce_q_state {
 	UACCE_Q_ZOMBIE = 0,
 	UACCE_Q_INIT,
@@ -68,19 +80,25 @@ enum uacce_q_state {
  * @uacce: pointer to uacce
  * @priv: private pointer
  * @wait: wait queue head
- * @list: index into uacce_mm
- * @uacce_mm: the corresponding mm
+ * @list: index into uacce queues list
  * @qfrs: pointer of qfr regions
+ * @mutex: protects queue state
  * @state: queue state machine
+ * @pasid: pasid associated to the mm
+ * @handle: iommu_sva handle returned by iommu_sva_bind_device()
+ * @mapping: user space mapping of the queue
  */
 struct uacce_queue {
 	struct uacce_device *uacce;
 	void *priv;
 	wait_queue_head_t wait;
 	struct list_head list;
-	struct uacce_mm *uacce_mm;
 	struct uacce_qfile_region *qfrs[UACCE_MAX_REGION];
+	struct mutex mutex;
 	enum uacce_q_state state;
+	u32 pasid;
+	struct iommu_sva *handle;
+	struct address_space *mapping;
 };
 
 /**
@@ -95,10 +113,9 @@ struct uacce_queue {
  * @dev_id: id of the uacce device
  * @cdev: cdev of the uacce
  * @dev: dev of the uacce
+ * @mutex: protects uacce operation
  * @priv: private pointer of the uacce
- * @mm_list: list head of uacce_mm->list
- * @mm_lock: lock for mm_list
- * @inode: core vfs
+ * @queues: list of queues
  */
 struct uacce_device {
 	const char *algs;
@@ -111,28 +128,9 @@ struct uacce_device {
 	u32 dev_id;
 	struct cdev *cdev;
 	struct device dev;
+	struct mutex mutex;
 	void *priv;
-	struct list_head mm_list;
-	struct mutex mm_lock;
-	struct inode *inode;
-};
-
-/**
- * struct uacce_mm - keep track of queues bound to a process
- * @list: index into uacce_device
- * @queues: list of queues
- * @mm: the mm struct
- * @lock: protects the list of queues
- * @pasid: pasid of the uacce_mm
- * @handle: iommu_sva handle return from iommu_sva_bind_device
- */
-struct uacce_mm {
-	struct list_head list;
 	struct list_head queues;
-	struct mm_struct *mm;
-	struct mutex lock;
-	int pasid;
-	struct iommu_sva *handle;
 };
 
 #if IS_ENABLED(CONFIG_UACCE)

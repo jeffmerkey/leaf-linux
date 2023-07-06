@@ -15,6 +15,7 @@
 #include <crypto/internal/hash.h>
 #include <crypto/scatterwalk.h>
 #include <linux/err.h>
+#include <linux/fips.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -50,6 +51,9 @@ static int hmac_setkey(struct crypto_shash *parent,
 	struct crypto_shash *hash = ctx->hash;
 	SHASH_DESC_ON_STACK(shash, hash);
 	unsigned int i;
+
+	if (fips_enabled && (keylen < 112 / 8))
+		return -EINVAL;
 
 	shash->tfm = hash;
 
@@ -156,9 +160,24 @@ static int hmac_init_tfm(struct crypto_shash *parent)
 	return 0;
 }
 
+static int hmac_clone_tfm(struct crypto_shash *dst, struct crypto_shash *src)
+{
+	struct hmac_ctx *sctx = hmac_ctx(src);
+	struct hmac_ctx *dctx = hmac_ctx(dst);
+	struct crypto_shash *hash;
+
+	hash = crypto_clone_shash(sctx->hash);
+	if (IS_ERR(hash))
+		return PTR_ERR(hash);
+
+	dctx->hash = hash;
+	return 0;
+}
+
 static void hmac_exit_tfm(struct crypto_shash *parent)
 {
 	struct hmac_ctx *ctx = hmac_ctx(parent);
+
 	crypto_free_shash(ctx->hash);
 }
 
@@ -168,11 +187,12 @@ static int hmac_create(struct crypto_template *tmpl, struct rtattr **tb)
 	struct crypto_shash_spawn *spawn;
 	struct crypto_alg *alg;
 	struct shash_alg *salg;
+	u32 mask;
 	int err;
 	int ds;
 	int ss;
 
-	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH);
+	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH, &mask);
 	if (err)
 		return err;
 
@@ -182,7 +202,7 @@ static int hmac_create(struct crypto_template *tmpl, struct rtattr **tb)
 	spawn = shash_instance_ctx(inst);
 
 	err = crypto_grab_shash(spawn, shash_crypto_instance(inst),
-				crypto_attr_alg_name(tb[1]), 0, 0);
+				crypto_attr_alg_name(tb[1]), 0, mask);
 	if (err)
 		goto err_free_inst;
 	salg = crypto_spawn_shash_alg(spawn);
@@ -222,6 +242,7 @@ static int hmac_create(struct crypto_template *tmpl, struct rtattr **tb)
 	inst->alg.import = hmac_import;
 	inst->alg.setkey = hmac_setkey;
 	inst->alg.init_tfm = hmac_init_tfm;
+	inst->alg.clone_tfm = hmac_clone_tfm;
 	inst->alg.exit_tfm = hmac_exit_tfm;
 
 	inst->free = shash_free_singlespawn_instance;

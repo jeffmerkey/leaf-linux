@@ -219,7 +219,7 @@ static int atmel_ac97c_playback_prepare(struct snd_pcm_substream *substream)
 	switch (runtime->format) {
 	case SNDRV_PCM_FORMAT_S16_LE:
 		break;
-	case SNDRV_PCM_FORMAT_S16_BE: /* fall through */
+	case SNDRV_PCM_FORMAT_S16_BE:
 		word &= ~(AC97C_CMR_CEM_LITTLE);
 		break;
 	default:
@@ -301,7 +301,7 @@ static int atmel_ac97c_capture_prepare(struct snd_pcm_substream *substream)
 	switch (runtime->format) {
 	case SNDRV_PCM_FORMAT_S16_LE:
 		break;
-	case SNDRV_PCM_FORMAT_S16_BE: /* fall through */
+	case SNDRV_PCM_FORMAT_S16_BE:
 		word &= ~(AC97C_CMR_CEM_LITTLE);
 		break;
 	default:
@@ -356,14 +356,14 @@ atmel_ac97c_playback_trigger(struct snd_pcm_substream *substream, int cmd)
 	camr = ac97c_readl(chip, CAMR);
 
 	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE: /* fall through */
-	case SNDRV_PCM_TRIGGER_RESUME: /* fall through */
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_START:
 		ptcr = ATMEL_PDC_TXTEN;
 		camr |= AC97C_CMR_CENA | AC97C_CSR_ENDTX;
 		break;
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH: /* fall through */
-	case SNDRV_PCM_TRIGGER_SUSPEND: /* fall through */
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ptcr |= ATMEL_PDC_TXTDIS;
 		if (chip->opened <= 1)
@@ -388,14 +388,14 @@ atmel_ac97c_capture_trigger(struct snd_pcm_substream *substream, int cmd)
 	ptcr = readl(chip->regs + ATMEL_PDC_PTSR);
 
 	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE: /* fall through */
-	case SNDRV_PCM_TRIGGER_RESUME: /* fall through */
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_START:
 		ptcr = ATMEL_PDC_RXTEN;
 		camr |= AC97C_CMR_CENA | AC97C_CSR_ENDRX;
 		break;
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH: /* fall through */
-	case SNDRV_PCM_TRIGGER_SUSPEND: /* fall through */
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ptcr |= ATMEL_PDC_RXTDIS;
 		if (chip->opened <= 1)
@@ -475,12 +475,12 @@ static irqreturn_t atmel_ac97c_interrupt(int irq, void *dev)
 		struct snd_pcm_runtime *runtime;
 		int offset, next_period, block_size;
 		dev_dbg(&chip->pdev->dev, "channel A event%s%s%s%s%s%s\n",
-				casr & AC97C_CSR_OVRUN   ? " OVRUN"   : "",
-				casr & AC97C_CSR_RXRDY   ? " RXRDY"   : "",
-				casr & AC97C_CSR_UNRUN   ? " UNRUN"   : "",
-				casr & AC97C_CSR_TXEMPTY ? " TXEMPTY" : "",
-				casr & AC97C_CSR_TXRDY   ? " TXRDY"   : "",
-				!casr                    ? " NONE"    : "");
+			(casr & AC97C_CSR_OVRUN)   ? " OVRUN"   : "",
+			(casr & AC97C_CSR_RXRDY)   ? " RXRDY"   : "",
+			(casr & AC97C_CSR_UNRUN)   ? " UNRUN"   : "",
+			(casr & AC97C_CSR_TXEMPTY) ? " TXEMPTY" : "",
+			(casr & AC97C_CSR_TXRDY)   ? " TXRDY"   : "",
+			!casr                      ? " NONE"    : "");
 		if ((casr & camr) & AC97C_CSR_ENDTX) {
 			runtime = chip->playback_substream->runtime;
 			block_size = frames_to_bytes(runtime, runtime->period_size);
@@ -521,11 +521,11 @@ static irqreturn_t atmel_ac97c_interrupt(int irq, void *dev)
 
 	if (sr & AC97C_SR_COEVT) {
 		dev_info(&chip->pdev->dev, "codec channel event%s%s%s%s%s\n",
-				cosr & AC97C_CSR_OVRUN   ? " OVRUN"   : "",
-				cosr & AC97C_CSR_RXRDY   ? " RXRDY"   : "",
-				cosr & AC97C_CSR_TXEMPTY ? " TXEMPTY" : "",
-				cosr & AC97C_CSR_TXRDY   ? " TXRDY"   : "",
-				!cosr                    ? " NONE"    : "");
+			 (cosr & AC97C_CSR_OVRUN)   ? " OVRUN"   : "",
+			 (cosr & AC97C_CSR_RXRDY)   ? " RXRDY"   : "",
+			 (cosr & AC97C_CSR_TXEMPTY) ? " TXEMPTY" : "",
+			 (cosr & AC97C_CSR_TXRDY)   ? " TXRDY"   : "",
+			 !cosr                      ? " NONE"    : "");
 		retval = IRQ_HANDLED;
 	}
 
@@ -843,7 +843,7 @@ static SIMPLE_DEV_PM_OPS(atmel_ac97c_pm, atmel_ac97c_suspend, atmel_ac97c_resume
 #define ATMEL_AC97C_PM_OPS	NULL
 #endif
 
-static int atmel_ac97c_remove(struct platform_device *pdev)
+static void atmel_ac97c_remove(struct platform_device *pdev)
 {
 	struct snd_card *card = platform_get_drvdata(pdev);
 	struct atmel_ac97c *chip = get_chip(card);
@@ -858,13 +858,11 @@ static int atmel_ac97c_remove(struct platform_device *pdev)
 	free_irq(chip->irq, chip);
 
 	snd_card_free(card);
-
-	return 0;
 }
 
 static struct platform_driver atmel_ac97c_driver = {
 	.probe		= atmel_ac97c_probe,
-	.remove		= atmel_ac97c_remove,
+	.remove_new	= atmel_ac97c_remove,
 	.driver		= {
 		.name	= "atmel_ac97c",
 		.pm	= ATMEL_AC97C_PM_OPS,

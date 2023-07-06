@@ -8,6 +8,7 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/kobject.h>
+#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/platform_data/cros_ec_commands.h>
 #include <linux/platform_data/cros_ec_proto.h>
@@ -33,7 +34,7 @@ static ssize_t interval_msec_show(struct device *dev,
 {
 	unsigned long msec = lb_interval_jiffies * 1000 / HZ;
 
-	return scnprintf(buf, PAGE_SIZE, "%lu\n", msec);
+	return sysfs_emit(buf, "%lu\n", msec);
 }
 
 static ssize_t interval_msec_store(struct device *dev,
@@ -116,8 +117,10 @@ static int get_lightbar_version(struct cros_ec_dev *ec,
 
 	param = (struct ec_params_lightbar *)msg->data;
 	param->cmd = LIGHTBAR_CMD_VERSION;
+	msg->outsize = sizeof(param->cmd);
+	msg->result = sizeof(resp->version);
 	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
-	if (ret < 0) {
+	if (ret < 0 && ret != -EINVAL) {
 		ret = 0;
 		goto exit;
 	}
@@ -166,7 +169,7 @@ static ssize_t version_show(struct device *dev,
 	if (!get_lightbar_version(ec, &version, &flags))
 		return -EIO;
 
-	return scnprintf(buf, PAGE_SIZE, "%d %d\n", version, flags);
+	return sysfs_emit(buf, "%d %d\n", version, flags);
 }
 
 static ssize_t brightness_store(struct device *dev,
@@ -298,20 +301,16 @@ static ssize_t sequence_show(struct device *dev,
 		goto exit;
 
 	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
-	if (ret == -EPROTO) {
-		ret = scnprintf(buf, PAGE_SIZE,
-				"ERROR: EC returned %d\n", msg->result);
-		goto exit;
-	} else if (ret < 0) {
+	if (ret < 0) {
+		ret = sysfs_emit(buf, "XFER / EC ERROR %d / %d\n", ret, msg->result);
 		goto exit;
 	}
 
 	resp = (struct ec_response_lightbar *)msg->data;
 	if (resp->get_seq.num >= ARRAY_SIZE(seqname))
-		ret = scnprintf(buf, PAGE_SIZE, "%d\n", resp->get_seq.num);
+		ret = sysfs_emit(buf, "%d\n", resp->get_seq.num);
 	else
-		ret = scnprintf(buf, PAGE_SIZE, "%s\n",
-				seqname[resp->get_seq.num]);
+		ret = sysfs_emit(buf, "%s\n", seqname[resp->get_seq.num]);
 
 exit:
 	kfree(msg);
@@ -482,7 +481,7 @@ static ssize_t userspace_control_show(struct device *dev,
 				      struct device_attribute *attr,
 				      char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "%d\n", userspace_control);
+	return sysfs_emit(buf, "%d\n", userspace_control);
 }
 
 static ssize_t userspace_control_store(struct device *dev,
@@ -493,7 +492,7 @@ static ssize_t userspace_control_store(struct device *dev,
 	bool enable;
 	int ret;
 
-	ret = strtobool(buf, &enable);
+	ret = kstrtobool(buf, &enable);
 	if (ret < 0)
 		return ret;
 
@@ -523,7 +522,7 @@ static struct attribute *__lb_cmds_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group cros_ec_lightbar_attr_group = {
+static const struct attribute_group cros_ec_lightbar_attr_group = {
 	.name = "lightbar",
 	.attrs = __lb_cmds_attrs,
 };
@@ -601,6 +600,7 @@ static struct platform_driver cros_ec_lightbar_driver = {
 	.driver = {
 		.name = DRV_NAME,
 		.pm = &cros_ec_lightbar_pm_ops,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = cros_ec_lightbar_probe,
 	.remove = cros_ec_lightbar_remove,

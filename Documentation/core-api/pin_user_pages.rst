@@ -33,7 +33,7 @@ all combinations of get*(), pin*(), FOLL_LONGTERM, and more. Also, the
 pin_user_pages*() APIs are clearly distinct from the get_user_pages*() APIs, so
 that's a natural dividing line, and a good point to make separate wrapper calls.
 In other words, use pin_user_pages*() for DMA-pinned pages, and
-get_user_pages*() for other cases. There are four cases described later on in
+get_user_pages*() for other cases. There are five cases described later on in
 this document, to further clarify that concept.
 
 FOLL_PIN and FOLL_GET are mutually exclusive for a given gup call. However,
@@ -55,18 +55,17 @@ flags the caller provides. The caller is required to pass in a non-null struct
 pages* array, and the function then pins pages by incrementing each by a special
 value: GUP_PIN_COUNTING_BIAS.
 
-For huge pages (and in fact, any compound page of more than 2 pages), the
-GUP_PIN_COUNTING_BIAS scheme is not used. Instead, an exact form of pin counting
-is achieved, by using the 3rd struct page in the compound page. A new struct
-page field, hpage_pinned_refcount, has been added in order to support this.
+For large folios, the GUP_PIN_COUNTING_BIAS scheme is not used. Instead,
+the extra space available in the struct folio is used to store the
+pincount directly.
 
-This approach for compound pages avoids the counting upper limit problems that
-are discussed below. Those limitations would have been aggravated severely by
-huge pages, because each tail page adds a refcount to the head page. And in
-fact, testing revealed that, without a separate hpage_pinned_refcount field,
-page overflows were seen in some huge page stress tests.
+This approach for large folios avoids the counting upper limit problems
+that are discussed below. Those limitations would have been aggravated
+severely by huge pages, because each tail page adds a refcount to the
+head page. And in fact, testing revealed that, without a separate pincount
+field, refcount overflows were seen in some huge page stress tests.
 
-This also means that huge pages and compound pages (of order > 1) do not suffer
+This also means that huge pages and large folios do not suffer
 from the false positives problem that is mentioned below.::
 
  Function
@@ -113,6 +112,12 @@ pages:
 This also leads to limitations: there are only 31-10==21 bits available for a
 counter that increments 10 bits at a time.
 
+* Because of that limitation, special handling is applied to the zero pages
+  when using FOLL_PIN.  We only pretend to pin a zero page - we don't alter its
+  refcount or pincount at all (it is permanent, so there's no need).  The
+  unpinning functions also don't do anything to a zero page.  This is
+  transparent to the caller.
+
 * Callers must specifically request "dma-pinned tracking of pages". In other
   words, just calling get_user_pages() will not suffice; a new set of functions,
   pin_user_page() and related, must be used.
@@ -148,23 +153,46 @@ NOTE: Some pages, such as DAX pages, cannot be pinned with longterm pins. That's
 because DAX pages do not have a separate page cache, and so "pinning" implies
 locking down file system blocks, which is not (yet) supported in that way.
 
-CASE 3: Hardware with page faulting support
--------------------------------------------
-Here, a well-written driver doesn't normally need to pin pages at all. However,
-if the driver does choose to do so, it can register MMU notifiers for the range,
-and will be called back upon invalidation. Either way (avoiding page pinning, or
-using MMU notifiers to unpin upon request), there is proper synchronization with
-both filesystem and mm (page_mkclean(), munmap(), etc).
+CASE 3: MMU notifier registration, with or without page faulting hardware
+-------------------------------------------------------------------------
+Device drivers can pin pages via get_user_pages*(), and register for mmu
+notifier callbacks for the memory range. Then, upon receiving a notifier
+"invalidate range" callback , stop the device from using the range, and unpin
+the pages. There may be other possible schemes, such as for example explicitly
+synchronizing against pending IO, that accomplish approximately the same thing.
 
-Therefore, neither flag needs to be set.
+Or, if the hardware supports replayable page faults, then the device driver can
+avoid pinning entirely (this is ideal), as follows: register for mmu notifier
+callbacks as above, but instead of stopping the device and unpinning in the
+callback, simply remove the range from the device's page tables.
 
-In this case, ideally, neither get_user_pages() nor pin_user_pages() should be
-called. Instead, the software should be written so that it does not pin pages.
-This allows mm and filesystems to operate more efficiently and reliably.
+Either way, as long as the driver unpins the pages upon mmu notifier callback,
+then there is proper synchronization with both filesystem and mm
+(page_mkclean(), munmap(), etc). Therefore, neither flag needs to be set.
 
 CASE 4: Pinning for struct page manipulation only
 -------------------------------------------------
-Here, normal GUP calls are sufficient, so neither flag needs to be set.
+If only struct page data (as opposed to the actual memory contents that a page
+is tracking) is affected, then normal GUP calls are sufficient, and neither flag
+needs to be set.
+
+CASE 5: Pinning in order to write to the data within the page
+-------------------------------------------------------------
+Even though neither DMA nor Direct IO is involved, just a simple case of "pin,
+write to a page's data, unpin" can cause a problem. Case 5 may be considered a
+superset of Case 1, plus Case 2, plus anything that invokes that pattern. In
+other words, if the code is neither Case 1 nor Case 2, it may still require
+FOLL_PIN, for patterns like this:
+
+Correct (uses FOLL_PIN calls):
+    pin_user_pages()
+    write to the data within the pages
+    unpin_user_pages()
+
+INCORRECT (uses FOLL_GET calls):
+    get_user_pages()
+    write to the data within the pages
+    put_page()
 
 page_maybe_dma_pinned(): the whole point of pinning
 ===================================================
@@ -198,12 +226,12 @@ Unit testing
 ============
 This file::
 
- tools/testing/selftests/vm/gup_benchmark.c
+ tools/testing/selftests/mm/gup_test.c
 
 has the following new calls to exercise the new pin*() wrapper functions:
 
-* PIN_FAST_BENCHMARK (./gup_benchmark -a)
-* PIN_BENCHMARK (./gup_benchmark -b)
+* PIN_FAST_BENCHMARK (./gup_test -a)
+* PIN_BASIC_TEST (./gup_test -b)
 
 You can monitor how many total dma-pinned pages have been acquired and released
 since the system was booted, via two new /proc/vmstat entries: ::
@@ -241,9 +269,9 @@ place.)
 Other diagnostics
 =================
 
-dump_page() has been enhanced slightly, to handle these new counting fields, and
-to better report on compound pages in general. Specifically, for compound pages
-with order > 1, the exact (hpage_pinned_refcount) pincount is reported.
+dump_page() has been enhanced slightly to handle these new counting
+fields, and to better report on large folios in general.  Specifically,
+for large folios, the exact pincount is reported.
 
 References
 ==========

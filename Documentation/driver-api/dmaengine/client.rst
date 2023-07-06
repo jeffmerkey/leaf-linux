@@ -5,7 +5,7 @@ DMA Engine API Guide
 Vinod Koul <vinod dot koul at intel.com>
 
 .. note:: For DMA Engine usage in async_tx please see:
-          ``Documentation/crypto/async-tx-api.txt``
+          ``Documentation/crypto/async-tx-api.rst``
 
 
 Below is a guide to device driver writers on how to use the Slave-DMA API of the
@@ -86,7 +86,9 @@ The details of these operations are:
   - interleaved_dma: This is common to Slave as well as M2M clients. For slave
     address of devices' fifo could be already known to the driver.
     Various types of operations could be expressed by setting
-    appropriate values to the 'dma_interleaved_template' members.
+    appropriate values to the 'dma_interleaved_template' members. Cyclic
+    interleaved DMA transfers are also possible if supported by the channel by
+    setting the DMA_PREP_REPEAT transfer flag.
 
   A non-NULL return of this transfer API represents a "descriptor" for
   the given transaction.
@@ -118,7 +120,9 @@ The details of these operations are:
 
   .. code-block:: c
 
-     nr_sg = dma_map_sg(chan->device->dev, sgl, sg_len);
+     struct device *dma_dev = dmaengine_get_dma_device(chan);
+
+     nr_sg = dma_map_sg(dma_dev, sgl, sg_len);
 	if (nr_sg == 0)
 		/* error */
 
@@ -171,7 +175,7 @@ The details of these operations are:
     driver can ask for the pointer, maximum size and the currently used size of
     the metadata and can directly update or read it.
 
-    Becasue the DMA driver manages the memory area containing the metadata,
+    Because the DMA driver manages the memory area containing the metadata,
     clients must make sure that they do not try to access or get the pointer
     after their transfer completion callback has run for the descriptor.
     If no completion callback has been defined for the transfer, then the

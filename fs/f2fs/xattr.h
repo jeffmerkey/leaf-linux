@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * fs/f2fs/xattr.h
  *
@@ -83,6 +83,7 @@ struct f2fs_xattr_entry {
 				sizeof(struct f2fs_xattr_header) -	\
 				sizeof(struct f2fs_xattr_entry))
 
+#define MIN_INLINE_XATTR_SIZE (sizeof(struct f2fs_xattr_header) / sizeof(__le32))
 #define MAX_INLINE_XATTR_SIZE						\
 			(DEF_ADDRS_PER_INODE -				\
 			F2FS_TOTAL_EXTRA_ATTR_SIZE / sizeof(__le32) -	\
@@ -136,6 +137,7 @@ extern void f2fs_destroy_xattr_caches(struct f2fs_sb_info *);
 #else
 
 #define f2fs_xattr_handlers	NULL
+#define f2fs_listxattr		NULL
 static inline int f2fs_setxattr(struct inode *inode, int index,
 		const char *name, const void *value, size_t size,
 		struct page *page, int flags)
@@ -145,11 +147,6 @@ static inline int f2fs_setxattr(struct inode *inode, int index,
 static inline int f2fs_getxattr(struct inode *inode, int index,
 			const char *name, void *buffer,
 			size_t buffer_size, struct page *dpage)
-{
-	return -EOPNOTSUPP;
-}
-static inline ssize_t f2fs_listxattr(struct dentry *dentry, char *buffer,
-		size_t buffer_size)
 {
 	return -EOPNOTSUPP;
 }

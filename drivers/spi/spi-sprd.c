@@ -553,22 +553,15 @@ static int sprd_spi_dma_tx_config(struct sprd_spi *ss, struct spi_transfer *t)
 static int sprd_spi_dma_request(struct sprd_spi *ss)
 {
 	ss->dma.dma_chan[SPRD_SPI_RX] = dma_request_chan(ss->dev, "rx_chn");
-	if (IS_ERR_OR_NULL(ss->dma.dma_chan[SPRD_SPI_RX])) {
-		if (PTR_ERR(ss->dma.dma_chan[SPRD_SPI_RX]) == -EPROBE_DEFER)
-			return PTR_ERR(ss->dma.dma_chan[SPRD_SPI_RX]);
-
-		dev_err(ss->dev, "request RX DMA channel failed!\n");
-		return PTR_ERR(ss->dma.dma_chan[SPRD_SPI_RX]);
-	}
+	if (IS_ERR_OR_NULL(ss->dma.dma_chan[SPRD_SPI_RX]))
+		return dev_err_probe(ss->dev, PTR_ERR(ss->dma.dma_chan[SPRD_SPI_RX]),
+				     "request RX DMA channel failed!\n");
 
 	ss->dma.dma_chan[SPRD_SPI_TX]  = dma_request_chan(ss->dev, "tx_chn");
 	if (IS_ERR_OR_NULL(ss->dma.dma_chan[SPRD_SPI_TX])) {
-		if (PTR_ERR(ss->dma.dma_chan[SPRD_SPI_TX]) == -EPROBE_DEFER)
-			return PTR_ERR(ss->dma.dma_chan[SPRD_SPI_TX]);
-
-		dev_err(ss->dev, "request TX DMA channel failed!\n");
 		dma_release_channel(ss->dma.dma_chan[SPRD_SPI_RX]);
-		return PTR_ERR(ss->dma.dma_chan[SPRD_SPI_TX]);
+		return dev_err_probe(ss->dev, PTR_ERR(ss->dma.dma_chan[SPRD_SPI_TX]),
+				     "request TX DMA channel failed!\n");
 	}
 
 	return 0;
@@ -936,8 +929,7 @@ static int sprd_spi_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	ss = spi_controller_get_devdata(sctlr);
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ss->base = devm_ioremap_resource(&pdev->dev, res);
+	ss->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(ss->base)) {
 		ret = PTR_ERR(ss->base);
 		goto free_controller;
@@ -1009,27 +1001,25 @@ free_controller:
 	return ret;
 }
 
-static int sprd_spi_remove(struct platform_device *pdev)
+static void sprd_spi_remove(struct platform_device *pdev)
 {
 	struct spi_controller *sctlr = platform_get_drvdata(pdev);
 	struct sprd_spi *ss = spi_controller_get_devdata(sctlr);
 	int ret;
 
 	ret = pm_runtime_get_sync(ss->dev);
-	if (ret < 0) {
+	if (ret < 0)
 		dev_err(ss->dev, "failed to resume SPI controller\n");
-		return ret;
-	}
 
 	spi_controller_suspend(sctlr);
 
-	if (ss->dma.enable)
-		sprd_spi_dma_release(ss);
-	clk_disable_unprepare(ss->clk);
+	if (ret >= 0) {
+		if (ss->dma.enable)
+			sprd_spi_dma_release(ss);
+		clk_disable_unprepare(ss->clk);
+	}
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 static int __maybe_unused sprd_spi_runtime_suspend(struct device *dev)
@@ -1074,6 +1064,7 @@ static const struct of_device_id sprd_spi_of_match[] = {
 	{ .compatible = "sprd,sc9860-spi", },
 	{ /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(of, sprd_spi_of_match);
 
 static struct platform_driver sprd_spi_driver = {
 	.driver = {
@@ -1082,7 +1073,7 @@ static struct platform_driver sprd_spi_driver = {
 		.pm = &sprd_spi_pm_ops,
 	},
 	.probe = sprd_spi_probe,
-	.remove  = sprd_spi_remove,
+	.remove_new = sprd_spi_remove,
 };
 
 module_platform_driver(sprd_spi_driver);

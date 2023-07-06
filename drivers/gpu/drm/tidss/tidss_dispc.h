@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2018 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2018 Texas Instruments Incorporated - https://www.ti.com/
  * Author: Tomi Valkeinen <tomi.valkeinen@ti.com>
  */
 
@@ -83,8 +83,6 @@ struct dispc_features {
 	const char *vid_name[TIDSS_MAX_PLANES]; /* Should match dt reg names */
 	bool vid_lite[TIDSS_MAX_PLANES];
 	u32 vid_order[TIDSS_MAX_PLANES];
-
-	struct dispc_errata errata;
 };
 
 extern const struct dispc_features dispc_k2g_feats;
@@ -125,10 +123,10 @@ int dispc_runtime_resume(struct dispc_device *dispc);
 int dispc_plane_check(struct dispc_device *dispc, u32 hw_plane,
 		      const struct drm_plane_state *state,
 		      u32 hw_videoport);
-int dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
-		      const struct drm_plane_state *state,
-		      u32 hw_videoport);
-int dispc_plane_enable(struct dispc_device *dispc, u32 hw_plane, bool enable);
+void dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
+		       const struct drm_plane_state *state,
+		       u32 hw_videoport);
+void dispc_plane_enable(struct dispc_device *dispc, u32 hw_plane, bool enable);
 const u32 *dispc_plane_formats(struct dispc_device *dispc, unsigned int *len);
 
 int dispc_init(struct tidss_device *tidss);

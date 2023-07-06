@@ -152,7 +152,7 @@ COMPAT_SYSCALL_DEFINE3(sched_getaffinity, compat_pid_t,  pid, unsigned int, len,
 	if (len & (sizeof(compat_ulong_t)-1))
 		return -EINVAL;
 
-	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
+	if (!zalloc_cpumask_var(&mask, GFP_KERNEL))
 		return -ENOMEM;
 
 	ret = sched_getaffinity(pid, mask);
@@ -199,7 +199,7 @@ long compat_get_bitmap(unsigned long *mask, const compat_ulong_t __user *umask,
 	bitmap_size = ALIGN(bitmap_size, BITS_PER_COMPAT_LONG);
 	nr_compat_longs = BITS_TO_COMPAT_LONGS(bitmap_size);
 
-	if (!user_access_begin(umask, bitmap_size / 8))
+	if (!user_read_access_begin(umask, bitmap_size / 8))
 		return -EFAULT;
 
 	while (nr_compat_longs > 1) {
@@ -211,11 +211,11 @@ long compat_get_bitmap(unsigned long *mask, const compat_ulong_t __user *umask,
 	}
 	if (nr_compat_longs)
 		unsafe_get_user(*mask, umask++, Efault);
-	user_access_end();
+	user_read_access_end();
 	return 0;
 
 Efault:
-	user_access_end();
+	user_read_access_end();
 	return -EFAULT;
 }
 
@@ -228,7 +228,7 @@ long compat_put_bitmap(compat_ulong_t __user *umask, unsigned long *mask,
 	bitmap_size = ALIGN(bitmap_size, BITS_PER_COMPAT_LONG);
 	nr_compat_longs = BITS_TO_COMPAT_LONGS(bitmap_size);
 
-	if (!user_access_begin(umask, bitmap_size / 8))
+	if (!user_write_access_begin(umask, bitmap_size / 8))
 		return -EFAULT;
 
 	while (nr_compat_longs > 1) {
@@ -239,10 +239,10 @@ long compat_put_bitmap(compat_ulong_t __user *umask, unsigned long *mask,
 	}
 	if (nr_compat_longs)
 		unsafe_put_user((compat_ulong_t)*mask, umask++, Efault);
-	user_access_end();
+	user_write_access_end();
 	return 0;
 Efault:
-	user_access_end();
+	user_write_access_end();
 	return -EFAULT;
 }
 
@@ -255,11 +255,11 @@ get_compat_sigset(sigset_t *set, const compat_sigset_t __user *compat)
 		return -EFAULT;
 	switch (_NSIG_WORDS) {
 	case 4: set->sig[3] = v.sig[6] | (((long)v.sig[7]) << 32 );
-		/* fall through */
+		fallthrough;
 	case 3: set->sig[2] = v.sig[4] | (((long)v.sig[5]) << 32 );
-		/* fall through */
+		fallthrough;
 	case 2: set->sig[1] = v.sig[2] | (((long)v.sig[3]) << 32 );
-		/* fall through */
+		fallthrough;
 	case 1: set->sig[0] = v.sig[0] | (((long)v.sig[1]) << 32 );
 	}
 #else
@@ -269,24 +269,3 @@ get_compat_sigset(sigset_t *set, const compat_sigset_t __user *compat)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(get_compat_sigset);
-
-/*
- * Allocate user-space memory for the duration of a single system call,
- * in order to marshall parameters inside a compat thunk.
- */
-void __user *compat_alloc_user_space(unsigned long len)
-{
-	void __user *ptr;
-
-	/* If len would occupy more than half of the entire compat space... */
-	if (unlikely(len > (((compat_uptr_t)~0) >> 1)))
-		return NULL;
-
-	ptr = arch_compat_alloc_user_space(len);
-
-	if (unlikely(!access_ok(ptr, len)))
-		return NULL;
-
-	return ptr;
-}
-EXPORT_SYMBOL_GPL(compat_alloc_user_space);

@@ -7,6 +7,7 @@
 
 #include <linux/sysfs.h>
 #include <linux/init.h>
+#include <linux/of.h>
 #include <linux/stat.h>
 #include <linux/slab.h>
 #include <linux/idr.h>
@@ -17,9 +18,9 @@
 
 static DEFINE_IDA(soc_ida);
 
-static ssize_t soc_info_get(struct device *dev,
-			    struct device_attribute *attr,
-			    char *buf);
+/* Prototype to allow declarations of DEVICE_ATTR(<foo>) before soc_info_show */
+static ssize_t soc_info_show(struct device *dev, struct device_attribute *attr,
+			     char *buf);
 
 struct soc_device {
 	struct device dev;
@@ -30,12 +31,13 @@ struct soc_device {
 static struct bus_type soc_bus_type = {
 	.name  = "soc",
 };
+static bool soc_bus_registered;
 
-static DEVICE_ATTR(machine,  S_IRUGO, soc_info_get,  NULL);
-static DEVICE_ATTR(family,   S_IRUGO, soc_info_get,  NULL);
-static DEVICE_ATTR(serial_number, S_IRUGO, soc_info_get,  NULL);
-static DEVICE_ATTR(soc_id,   S_IRUGO, soc_info_get,  NULL);
-static DEVICE_ATTR(revision, S_IRUGO, soc_info_get,  NULL);
+static DEVICE_ATTR(machine,		0444, soc_info_show,  NULL);
+static DEVICE_ATTR(family,		0444, soc_info_show,  NULL);
+static DEVICE_ATTR(serial_number,	0444, soc_info_show,  NULL);
+static DEVICE_ATTR(soc_id,		0444, soc_info_show,  NULL);
+static DEVICE_ATTR(revision,		0444, soc_info_show,  NULL);
 
 struct device *soc_device_to_device(struct soc_device *soc_dev)
 {
@@ -46,48 +48,44 @@ static umode_t soc_attribute_mode(struct kobject *kobj,
 				struct attribute *attr,
 				int index)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct soc_device *soc_dev = container_of(dev, struct soc_device, dev);
 
-	if ((attr == &dev_attr_machine.attr)
-	    && (soc_dev->attr->machine != NULL))
+	if ((attr == &dev_attr_machine.attr) && soc_dev->attr->machine)
 		return attr->mode;
-	if ((attr == &dev_attr_family.attr)
-	    && (soc_dev->attr->family != NULL))
+	if ((attr == &dev_attr_family.attr) && soc_dev->attr->family)
 		return attr->mode;
-	if ((attr == &dev_attr_revision.attr)
-	    && (soc_dev->attr->revision != NULL))
+	if ((attr == &dev_attr_revision.attr) && soc_dev->attr->revision)
 		return attr->mode;
-	if ((attr == &dev_attr_serial_number.attr)
-	    && (soc_dev->attr->serial_number != NULL))
+	if ((attr == &dev_attr_serial_number.attr) && soc_dev->attr->serial_number)
 		return attr->mode;
-	if ((attr == &dev_attr_soc_id.attr)
-	    && (soc_dev->attr->soc_id != NULL))
+	if ((attr == &dev_attr_soc_id.attr) && soc_dev->attr->soc_id)
 		return attr->mode;
 
-	/* Unknown or unfilled attribute. */
+	/* Unknown or unfilled attribute */
 	return 0;
 }
 
-static ssize_t soc_info_get(struct device *dev,
-			    struct device_attribute *attr,
-			    char *buf)
+static ssize_t soc_info_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
 {
 	struct soc_device *soc_dev = container_of(dev, struct soc_device, dev);
+	const char *output;
 
 	if (attr == &dev_attr_machine)
-		return sprintf(buf, "%s\n", soc_dev->attr->machine);
-	if (attr == &dev_attr_family)
-		return sprintf(buf, "%s\n", soc_dev->attr->family);
-	if (attr == &dev_attr_revision)
-		return sprintf(buf, "%s\n", soc_dev->attr->revision);
-	if (attr == &dev_attr_serial_number)
-		return sprintf(buf, "%s\n", soc_dev->attr->serial_number);
-	if (attr == &dev_attr_soc_id)
-		return sprintf(buf, "%s\n", soc_dev->attr->soc_id);
+		output = soc_dev->attr->machine;
+	else if (attr == &dev_attr_family)
+		output = soc_dev->attr->family;
+	else if (attr == &dev_attr_revision)
+		output = soc_dev->attr->revision;
+	else if (attr == &dev_attr_serial_number)
+		output = soc_dev->attr->serial_number;
+	else if (attr == &dev_attr_soc_id)
+		output = soc_dev->attr->soc_id;
+	else
+		return -EINVAL;
 
-	return -EINVAL;
-
+	return sysfs_emit(buf, "%s\n", output);
 }
 
 static struct attribute *soc_attr[] = {
@@ -113,6 +111,18 @@ static void soc_release(struct device *dev)
 	kfree(soc_dev);
 }
 
+static void soc_device_get_machine(struct soc_device_attribute *soc_dev_attr)
+{
+	struct device_node *np;
+
+	if (soc_dev_attr->machine)
+		return;
+
+	np = of_find_node_by_path("/");
+	of_property_read_string(np, "model", &soc_dev_attr->machine);
+	of_node_put(np);
+}
+
 static struct soc_device_attribute *early_soc_dev_attr;
 
 struct soc_device *soc_device_register(struct soc_device_attribute *soc_dev_attr)
@@ -121,7 +131,9 @@ struct soc_device *soc_device_register(struct soc_device_attribute *soc_dev_attr
 	const struct attribute_group **soc_attr_groups;
 	int ret;
 
-	if (!soc_bus_type.p) {
+	soc_device_get_machine(soc_dev_attr);
+
+	if (!soc_bus_registered) {
 		if (early_soc_dev_attr)
 			return ERR_PTR(-EBUSY);
 		early_soc_dev_attr = soc_dev_attr;
@@ -172,7 +184,7 @@ out1:
 }
 EXPORT_SYMBOL_GPL(soc_device_register);
 
-/* Ensure soc_dev->attr is freed prior to calling soc_device_unregister. */
+/* Ensure soc_dev->attr is freed after calling soc_device_unregister. */
 void soc_device_unregister(struct soc_device *soc_dev)
 {
 	device_unregister(&soc_dev->dev);
@@ -187,6 +199,7 @@ static int __init soc_bus_register(void)
 	ret = bus_register(&soc_bus_type);
 	if (ret)
 		return ret;
+	soc_bus_registered = true;
 
 	if (early_soc_dev_attr)
 		return PTR_ERR(soc_device_register(early_soc_dev_attr));
@@ -245,15 +258,13 @@ static int soc_device_match_one(struct device *dev, void *arg)
 const struct soc_device_attribute *soc_device_match(
 	const struct soc_device_attribute *matches)
 {
-	int ret = 0;
+	int ret;
 
 	if (!matches)
 		return NULL;
 
-	while (!ret) {
-		if (!(matches->machine || matches->family ||
-		      matches->revision || matches->soc_id))
-			break;
+	while (matches->machine || matches->family || matches->revision ||
+	       matches->soc_id) {
 		ret = bus_for_each_dev(&soc_bus_type, NULL, (void *)matches,
 				       soc_device_match_one);
 		if (ret < 0 && early_soc_dev_attr)
@@ -261,10 +272,10 @@ const struct soc_device_attribute *soc_device_match(
 						    matches);
 		if (ret < 0)
 			return NULL;
-		if (!ret)
-			matches++;
-		else
+		if (ret)
 			return matches;
+
+		matches++;
 	}
 	return NULL;
 }

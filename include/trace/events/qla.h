@@ -9,6 +9,11 @@
 
 #define QLA_MSG_MAX 256
 
+#pragma GCC diagnostic push
+#ifndef __clang__
+#pragma GCC diagnostic ignored "-Wsuggest-attribute=format"
+#endif
+
 DECLARE_EVENT_CLASS(qla_log_event,
 	TP_PROTO(const char *buf,
 		struct va_format *vaf),
@@ -17,15 +22,17 @@ DECLARE_EVENT_CLASS(qla_log_event,
 
 	TP_STRUCT__entry(
 		__string(buf, buf)
-		__dynamic_array(char, msg, QLA_MSG_MAX)
+		__vstring(msg, vaf->fmt, vaf->va)
 	),
 	TP_fast_assign(
 		__assign_str(buf, buf);
-		vsnprintf(__get_str(msg), QLA_MSG_MAX, vaf->fmt, *vaf->va);
+		__assign_vstr(msg, vaf->fmt, vaf->va);
 	),
 
 	TP_printk("%s %s", __get_str(buf), __get_str(msg))
 );
+
+#pragma GCC diagnostic pop
 
 DEFINE_EVENT(qla_log_event, ql_dbg_log,
 	TP_PROTO(const char *buf, struct va_format *vaf),

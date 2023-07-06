@@ -27,12 +27,14 @@
 #include <linux/seqlock.h>
 #include <linux/idr.h>
 #include <linux/poll.h>
+#include <linux/kthread.h>
 
 #include <drm/drm_file.h>
 #include <drm/drm_modes.h>
 
 struct drm_device;
 struct drm_crtc;
+struct drm_vblank_work;
 
 /**
  * struct drm_pending_vblank_event - pending vblank event tracking
@@ -203,6 +205,24 @@ struct drm_vblank_crtc {
 	 * disabling functions multiple times.
 	 */
 	bool enabled;
+
+	/**
+	 * @worker: The &kthread_worker used for executing vblank works.
+	 */
+	struct kthread_worker *worker;
+
+	/**
+	 * @pending_work: A list of scheduled &drm_vblank_work items that are
+	 * waiting for a future vblank.
+	 */
+	struct list_head pending_work;
+
+	/**
+	 * @work_wait_queue: The wait queue used for signaling that a
+	 * &drm_vblank_work item has either finished executing, or was
+	 * cancelled.
+	 */
+	wait_queue_head_t work_wait_queue;
 };
 
 int drm_vblank_init(struct drm_device *dev, unsigned int num_crtcs);
@@ -210,6 +230,7 @@ bool drm_dev_has_vblank(const struct drm_device *dev);
 u64 drm_crtc_vblank_count(struct drm_crtc *crtc);
 u64 drm_crtc_vblank_count_and_time(struct drm_crtc *crtc,
 				   ktime_t *vblanktime);
+int drm_crtc_next_vblank_start(struct drm_crtc *crtc, ktime_t *vblanktime);
 void drm_crtc_send_vblank_event(struct drm_crtc *crtc,
 			       struct drm_pending_vblank_event *e);
 void drm_crtc_arm_vblank_event(struct drm_crtc *crtc,
@@ -227,7 +248,6 @@ void drm_crtc_vblank_off(struct drm_crtc *crtc);
 void drm_crtc_vblank_reset(struct drm_crtc *crtc);
 void drm_crtc_vblank_on(struct drm_crtc *crtc);
 u64 drm_crtc_accurate_vblank_count(struct drm_crtc *crtc);
-void drm_vblank_restore(struct drm_device *dev, unsigned int pipe);
 void drm_crtc_vblank_restore(struct drm_crtc *crtc);
 
 void drm_calc_timestamping_constants(struct drm_crtc *crtc,

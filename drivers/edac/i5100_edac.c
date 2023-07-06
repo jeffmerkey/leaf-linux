@@ -244,11 +244,6 @@ static inline u32 i5100_nrecmema_rank(u32 a)
 	return a >>  8 & ((1 << 3) - 1);
 }
 
-static inline u32 i5100_nrecmema_dm_buf_id(u32 a)
-{
-	return a & ((1 << 8) - 1);
-}
-
 static inline u32 i5100_nrecmemb_cas(u32 a)
 {
 	return a >> 16 & ((1 << 13) - 1);
@@ -914,7 +909,7 @@ static void i5100_do_inject(struct mem_ctl_info *mci)
 	 *
 	 * The injection code don't work without setting this register.
 	 * The register needs to be flipped off then on else the hardware
-	 * will only preform the first injection.
+	 * will only perform the first injection.
 	 *
 	 * Stop condition bits 7:4
 	 * 1010 - Stop after one injection
@@ -1061,15 +1056,14 @@ static int i5100_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
 				    PCI_DEVICE_ID_INTEL_5100_19, 0);
 	if (!einj) {
 		ret = -ENODEV;
-		goto bail_einj;
+		goto bail_mc_free;
 	}
 
 	rc = pci_enable_device(einj);
 	if (rc < 0) {
 		ret = rc;
-		goto bail_disable_einj;
+		goto bail_einj;
 	}
-
 
 	mci->pdev = &pdev->dev;
 
@@ -1136,13 +1130,13 @@ static int i5100_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
 bail_scrub:
 	priv->scrub_enable = 0;
 	cancel_delayed_work_sync(&(priv->i5100_scrubbing));
-	edac_mc_free(mci);
-
-bail_disable_einj:
 	pci_disable_device(einj);
 
 bail_einj:
 	pci_dev_put(einj);
+
+bail_mc_free:
+	edac_mc_free(mci);
 
 bail_disable_ch1:
 	pci_disable_device(ch1mm);
@@ -1226,6 +1220,5 @@ module_init(i5100_init);
 module_exit(i5100_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR
-    ("Arthur Jones <ajones@riverbed.com>");
+MODULE_AUTHOR("Arthur Jones <ajones@riverbed.com>");
 MODULE_DESCRIPTION("MC Driver for Intel I5100 memory controllers");

@@ -15,6 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/platform_device.h>
 
 #include <acpi/processor.h>
 
@@ -22,17 +23,10 @@
 
 #include "internal.h"
 
-#define _COMPONENT	ACPI_PROCESSOR_COMPONENT
-
-ACPI_MODULE_NAME("processor");
-
 DEFINE_PER_CPU(struct acpi_processor *, processors);
 EXPORT_PER_CPU_SYMBOL(processors);
 
-/* --------------------------------------------------------------------------
-                                Errata Handling
-   -------------------------------------------------------------------------- */
-
+/* Errata Handling */
 struct acpi_processor_errata errata __read_mostly;
 EXPORT_SYMBOL_GPL(errata);
 
@@ -51,19 +45,19 @@ static int acpi_processor_errata_piix4(struct pci_dev *dev)
 
 	switch (dev->revision) {
 	case 0:
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Found PIIX4 A-step\n"));
+		dev_dbg(&dev->dev, "Found PIIX4 A-step\n");
 		break;
 	case 1:
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Found PIIX4 B-step\n"));
+		dev_dbg(&dev->dev, "Found PIIX4 B-step\n");
 		break;
 	case 2:
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Found PIIX4E\n"));
+		dev_dbg(&dev->dev, "Found PIIX4E\n");
 		break;
 	case 3:
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Found PIIX4M\n"));
+		dev_dbg(&dev->dev, "Found PIIX4M\n");
 		break;
 	default:
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Found unknown PIIX4\n"));
+		dev_dbg(&dev->dev, "Found unknown PIIX4\n");
 		break;
 	}
 
@@ -79,7 +73,7 @@ static int acpi_processor_errata_piix4(struct pci_dev *dev)
 		 * PIIX4 models.
 		 */
 		errata.piix4.throttle = 1;
-		/* fall through*/
+		fallthrough;
 
 	case 2:		/* PIIX4E */
 	case 3:		/* PIIX4M */
@@ -129,11 +123,9 @@ static int acpi_processor_errata_piix4(struct pci_dev *dev)
 	}
 
 	if (errata.piix4.bmisx)
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-				  "Bus master activity detection (BM-IDE) erratum enabled\n"));
+		dev_dbg(&dev->dev, "Bus master activity detection (BM-IDE) erratum enabled\n");
 	if (errata.piix4.fdma)
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-				  "Type-F DMA livelock erratum (C3 disabled)\n"));
+		dev_dbg(&dev->dev, "Type-F DMA livelock erratum (C3 disabled)\n");
 
 	return 0;
 }
@@ -157,10 +149,35 @@ static int acpi_processor_errata(void)
 	return result;
 }
 
-/* --------------------------------------------------------------------------
-                                Initialization
-   -------------------------------------------------------------------------- */
+/* Create a platform device to represent a CPU frequency control mechanism. */
+static void cpufreq_add_device(const char *name)
+{
+	struct platform_device *pdev;
 
+	pdev = platform_device_register_simple(name, PLATFORM_DEVID_NONE, NULL, 0);
+	if (IS_ERR(pdev))
+		pr_info("%s device creation failed: %ld\n", name, PTR_ERR(pdev));
+}
+
+#ifdef CONFIG_X86
+/* Check presence of Processor Clocking Control by searching for \_SB.PCCH. */
+static void __init acpi_pcc_cpufreq_init(void)
+{
+	acpi_status status;
+	acpi_handle handle;
+
+	status = acpi_get_handle(NULL, "\\_SB", &handle);
+	if (ACPI_FAILURE(status))
+		return;
+
+	if (acpi_has_method(handle, "PCCH"))
+		cpufreq_add_device("pcc-cpufreq");
+}
+#else
+static void __init acpi_pcc_cpufreq_init(void) {}
+#endif /* CONFIG_X86 */
+
+/* Initialization */
 #ifdef CONFIG_ACPI_HOTPLUG_CPU
 int __weak acpi_map_cpu(acpi_handle handle,
 		phys_cpuid_t physid, u32 acpi_id, int *pcpu)
@@ -194,7 +211,7 @@ static int acpi_processor_hotadd_init(struct acpi_processor *pr)
 		return -ENODEV;
 
 	cpu_maps_update_begin();
-	cpu_hotplug_begin();
+	cpus_write_lock();
 
 	ret = acpi_map_cpu(pr->handle, pr->phys_id, pr->acpi_id, &pr->id);
 	if (ret)
@@ -215,7 +232,7 @@ static int acpi_processor_hotadd_init(struct acpi_processor *pr)
 	pr->flags.need_hotplug_init = 1;
 
 out:
-	cpu_hotplug_done();
+	cpus_write_unlock();
 	cpu_maps_update_done();
 	return ret;
 }
@@ -244,11 +261,9 @@ static int acpi_processor_get_info(struct acpi_device *device)
 	 */
 	if (acpi_gbl_FADT.pm2_control_block && acpi_gbl_FADT.pm2_control_length) {
 		pr->flags.bm_control = 1;
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-				  "Bus mastering arbitration control present\n"));
+		dev_dbg(&device->dev, "Bus mastering arbitration control present\n");
 	} else
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-				  "No bus mastering arbitration control\n"));
+		dev_dbg(&device->dev, "No bus mastering arbitration control\n");
 
 	if (!strcmp(acpi_device_hid(device), ACPI_PROCESSOR_OBJECT_HID)) {
 		/* Declared with "Processor" statement; match ProcessorID */
@@ -264,7 +279,6 @@ static int acpi_processor_get_info(struct acpi_device *device)
 	} else {
 		/*
 		 * Declared with "Device" statement; match _UID.
-		 * Note that we don't handle string _UIDs yet.
 		 */
 		status = acpi_evaluate_integer(pr->handle, METHOD_NAME__UID,
 						NULL, &value);
@@ -292,17 +306,25 @@ static int acpi_processor_get_info(struct acpi_device *device)
 	pr->phys_id = acpi_get_phys_id(pr->handle, device_declaration,
 					pr->acpi_id);
 	if (invalid_phys_cpuid(pr->phys_id))
-		acpi_handle_debug(pr->handle, "failed to get CPU physical ID.\n");
+		dev_dbg(&device->dev, "Failed to get CPU physical ID.\n");
 
 	pr->id = acpi_map_cpuid(pr->phys_id, pr->acpi_id);
-	if (!cpu0_initialized && !acpi_has_cpu_in_madt()) {
+	if (!cpu0_initialized) {
 		cpu0_initialized = 1;
 		/*
 		 * Handle UP system running SMP kernel, with no CPU
 		 * entry in MADT
 		 */
-		if (invalid_logical_cpuid(pr->id) && (num_online_cpus() == 1))
+		if (!acpi_has_cpu_in_madt() && invalid_logical_cpuid(pr->id) &&
+		    (num_online_cpus() == 1))
 			pr->id = 0;
+		/*
+		 * Check availability of Processor Performance Control by
+		 * looking at the presence of the _PCT object under the first
+		 * processor definition.
+		 */
+		if (acpi_has_method(pr->handle, "_PCT"))
+			cpufreq_add_device("acpi-cpufreq");
 	}
 
 	/*
@@ -315,6 +337,7 @@ static int acpi_processor_get_info(struct acpi_device *device)
 	 */
 	if (invalid_logical_cpuid(pr->id) || !cpu_present(pr->id)) {
 		int ret = acpi_processor_hotadd_init(pr);
+
 		if (ret)
 			return ret;
 	}
@@ -329,11 +352,10 @@ static int acpi_processor_get_info(struct acpi_device *device)
 	 * CPU+CPU ID.
 	 */
 	sprintf(acpi_device_bid(device), "CPU%X", pr->id);
-	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Processor [%d:%d]\n", pr->id,
-			  pr->acpi_id));
+	dev_dbg(&device->dev, "Processor [%d:%d]\n", pr->id, pr->acpi_id);
 
 	if (!object.processor.pblk_address)
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "No PBLK (NULL address)\n"));
+		dev_dbg(&device->dev, "No PBLK (NULL address)\n");
 	else if (object.processor.pblk_length != 6)
 		dev_err(&device->dev, "Invalid PBLK length [%d]\n",
 			    object.processor.pblk_length);
@@ -441,10 +463,7 @@ static int acpi_processor_add(struct acpi_device *device,
 }
 
 #ifdef CONFIG_ACPI_HOTPLUG_CPU
-/* --------------------------------------------------------------------------
-                                    Removal
-   -------------------------------------------------------------------------- */
-
+/* Removal */
 static void acpi_processor_remove(struct acpi_device *device)
 {
 	struct acpi_processor *pr;
@@ -472,13 +491,13 @@ static void acpi_processor_remove(struct acpi_device *device)
 	per_cpu(processors, pr->id) = NULL;
 
 	cpu_maps_update_begin();
-	cpu_hotplug_begin();
+	cpus_write_lock();
 
 	/* Remove the CPU. */
 	arch_unregister_cpu(pr->id);
 	acpi_unmap_cpu(pr->id);
 
-	cpu_hotplug_done();
+	cpus_write_unlock();
 	cpu_maps_update_done();
 
 	try_offline_node(cpu_to_node(pr->id));
@@ -704,6 +723,7 @@ void __init acpi_processor_init(void)
 	acpi_processor_check_duplicates();
 	acpi_scan_add_handler_with_hotplug(&processor_handler, "processor");
 	acpi_scan_add_handler(&processor_container_handler);
+	acpi_pcc_cpufreq_init();
 }
 
 #ifdef CONFIG_ACPI_PROCESSOR_CSTATE
@@ -798,22 +818,34 @@ int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
 		memset(&cx, 0, sizeof(cx));
 
 		element = &cst->package.elements[i];
-		if (element->type != ACPI_TYPE_PACKAGE)
+		if (element->type != ACPI_TYPE_PACKAGE) {
+			acpi_handle_info(handle, "_CST C%d type(%x) is not package, skip...\n",
+					 i, element->type);
 			continue;
+		}
 
-		if (element->package.count != 4)
+		if (element->package.count != 4) {
+			acpi_handle_info(handle, "_CST C%d package count(%d) is not 4, skip...\n",
+					 i, element->package.count);
 			continue;
+		}
 
 		obj = &element->package.elements[0];
 
-		if (obj->type != ACPI_TYPE_BUFFER)
+		if (obj->type != ACPI_TYPE_BUFFER) {
+			acpi_handle_info(handle, "_CST C%d package element[0] type(%x) is not buffer, skip...\n",
+					 i, obj->type);
 			continue;
+		}
 
 		reg = (struct acpi_power_register *)obj->buffer.pointer;
 
 		obj = &element->package.elements[1];
-		if (obj->type != ACPI_TYPE_INTEGER)
+		if (obj->type != ACPI_TYPE_INTEGER) {
+			acpi_handle_info(handle, "_CST C[%d] package element[1] type(%x) is not integer, skip...\n",
+					 i, obj->type);
 			continue;
+		}
 
 		cx.type = obj->integer.value;
 		/*
@@ -850,6 +882,8 @@ int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
 				cx.entry_method = ACPI_CSTATE_HALT;
 				snprintf(cx.desc, ACPI_CX_DESC_LEN, "ACPI HLT");
 			} else {
+				acpi_handle_info(handle, "_CST C%d declares FIXED_HARDWARE C-state but not supported in hardware, skip...\n",
+						 i);
 				continue;
 			}
 		} else if (reg->space_id == ACPI_ADR_SPACE_SYSTEM_IO) {
@@ -857,6 +891,8 @@ int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
 			snprintf(cx.desc, ACPI_CX_DESC_LEN, "ACPI IOPORT 0x%x",
 				 cx.address);
 		} else {
+			acpi_handle_info(handle, "_CST C%d space_id(%x) neither FIXED_HARDWARE nor SYSTEM_IO, skip...\n",
+					 i, reg->space_id);
 			continue;
 		}
 
@@ -864,14 +900,20 @@ int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
 			cx.valid = 1;
 
 		obj = &element->package.elements[2];
-		if (obj->type != ACPI_TYPE_INTEGER)
+		if (obj->type != ACPI_TYPE_INTEGER) {
+			acpi_handle_info(handle, "_CST C%d package element[2] type(%x) not integer, skip...\n",
+					 i, obj->type);
 			continue;
+		}
 
 		cx.latency = obj->integer.value;
 
 		obj = &element->package.elements[3];
-		if (obj->type != ACPI_TYPE_INTEGER)
+		if (obj->type != ACPI_TYPE_INTEGER) {
+			acpi_handle_info(handle, "_CST C%d package element[3] type(%x) not integer, skip...\n",
+					 i, obj->type);
 			continue;
+		}
 
 		memcpy(&info->states[++last_index], &cx, sizeof(cx));
 	}
@@ -880,7 +922,7 @@ int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
 
 	info->count = last_index;
 
-      end:
+end:
 	kfree(buffer.pointer);
 
 	return ret;

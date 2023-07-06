@@ -215,8 +215,8 @@ static long ath79_wdt_ioctl(struct file *file, unsigned int cmd,
 		err = ath79_wdt_set_timeout(t);
 		if (err)
 			break;
+		fallthrough;
 
-		/* fallthrough */
 	case WDIOC_GETTIMEOUT:
 		err = put_user(timeout, p);
 		break;
@@ -296,11 +296,10 @@ err_clk_disable:
 	return err;
 }
 
-static int ath79_wdt_remove(struct platform_device *pdev)
+static void ath79_wdt_remove(struct platform_device *pdev)
 {
 	misc_deregister(&ath79_wdt_miscdev);
 	clk_disable_unprepare(wdt_clk);
-	return 0;
 }
 
 static void ath79_wdt_shutdown(struct platform_device *pdev)
@@ -318,7 +317,7 @@ MODULE_DEVICE_TABLE(of, ath79_wdt_match);
 
 static struct platform_driver ath79_wdt_driver = {
 	.probe		= ath79_wdt_probe,
-	.remove		= ath79_wdt_remove,
+	.remove_new	= ath79_wdt_remove,
 	.shutdown	= ath79_wdt_shutdown,
 	.driver		= {
 		.name	= DRIVER_NAME,

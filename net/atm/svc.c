@@ -28,6 +28,11 @@
 #include "signaling.h"
 #include "addr.h"
 
+#ifdef CONFIG_COMPAT
+/* It actually takes struct sockaddr_atmsvc, not struct atm_iobuf */
+#define COMPAT_ATM_ADDPARTY _IOW('a', ATMIOC_SPECIAL + 4, struct compat_atm_iobuf)
+#endif
+
 static int svc_create(struct net *net, struct socket *sock, int protocol,
 		      int kern);
 
@@ -451,7 +456,7 @@ int svc_change_qos(struct atm_vcc *vcc, struct atm_qos *qos)
 }
 
 static int svc_setsockopt(struct socket *sock, int level, int optname,
-			  char __user *optval, unsigned int optlen)
+			  sockptr_t optval, unsigned int optlen)
 {
 	struct sock *sk = sock->sk;
 	struct atm_vcc *vcc = ATM_SD(sock);
@@ -464,7 +469,7 @@ static int svc_setsockopt(struct socket *sock, int level, int optname,
 			error = -EINVAL;
 			goto out;
 		}
-		if (copy_from_user(&vcc->sap, optval, optlen)) {
+		if (copy_from_sockptr(&vcc->sap, optval, optlen)) {
 			error = -EFAULT;
 			goto out;
 		}
@@ -475,7 +480,7 @@ static int svc_setsockopt(struct socket *sock, int level, int optname,
 			error = -EINVAL;
 			goto out;
 		}
-		if (get_user(value, (int __user *)optval)) {
+		if (copy_from_sockptr(&value, optval, sizeof(int))) {
 			error = -EFAULT;
 			goto out;
 		}
@@ -649,7 +654,6 @@ static const struct proto_ops svc_proto_ops = {
 	.sendmsg =	vcc_sendmsg,
 	.recvmsg =	vcc_recvmsg,
 	.mmap =		sock_no_mmap,
-	.sendpage =	sock_no_sendpage,
 };
 
 

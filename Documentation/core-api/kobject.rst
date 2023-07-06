@@ -6,7 +6,7 @@ Everything you never wanted to know about kobjects, ksets, and ktypes
 :Last updated: December 19, 2007
 
 Based on an original article by Jon Corbet for lwn.net written October 1,
-2003 and located at http://lwn.net/Articles/51437/
+2003 and located at https://lwn.net/Articles/51437/
 
 Part of the difficulty in understanding the driver model - and the kobject
 abstraction upon which it is built - is that there is no obvious starting
@@ -80,11 +80,11 @@ what is the pointer to the containing structure?  You must avoid tricks
 (such as assuming that the kobject is at the beginning of the structure)
 and, instead, use the container_of() macro, found in ``<linux/kernel.h>``::
 
-    container_of(pointer, type, member)
+    container_of(ptr, type, member)
 
 where:
 
-  * ``pointer`` is the pointer to the embedded kobject,
+  * ``ptr`` is the pointer to the embedded kobject,
   * ``type`` is the type of the containing structure, and
   * ``member`` is the name of the structure field to which ``pointer`` points.
 
@@ -118,7 +118,7 @@ Initialization of kobjects
 Code which creates a kobject must, of course, initialize that object. Some
 of the internal fields are setup with a (mandatory) call to kobject_init()::
 
-    void kobject_init(struct kobject *kobj, struct kobj_type *ktype);
+    void kobject_init(struct kobject *kobj, const struct kobj_type *ktype);
 
 The ktype is required for a kobject to be created properly, as every kobject
 must have an associated kobj_type.  After calling kobject_init(), to
@@ -140,7 +140,7 @@ the name of the kobject, call kobject_rename()::
 
     int kobject_rename(struct kobject *kobj, const char *new_name);
 
-kobject_rename does not perform any locking or have a solid notion of
+kobject_rename() does not perform any locking or have a solid notion of
 what names are valid so the caller must provide their own sanity checking
 and serialization.
 
@@ -156,7 +156,7 @@ kobject_name()::
 There is a helper function to both initialize and add the kobject to the
 kernel at the same time, called surprisingly enough kobject_init_and_add()::
 
-    int kobject_init_and_add(struct kobject *kobj, struct kobj_type *ktype,
+    int kobject_init_and_add(struct kobject *kobj, const struct kobj_type *ktype,
                              struct kobject *parent, const char *fmt, ...);
 
 The arguments are the same as the individual kobject_init() and
@@ -210,7 +210,7 @@ statically and will warn the developer of this improper usage.
 If all that you want to use a kobject for is to provide a reference counter
 for your structure, please use the struct kref instead; a kobject would be
 overkill.  For more information on how to use struct kref, please see the
-file Documentation/kref.txt in the Linux kernel source tree.
+file Documentation/core-api/kref.rst in the Linux kernel source tree.
 
 
 Creating "simple" kobjects
@@ -222,17 +222,17 @@ ksets, show and store functions, and other details.  This is the one
 exception where a single kobject should be created.  To create such an
 entry, use the function::
 
-    struct kobject *kobject_create_and_add(char *name, struct kobject *parent);
+    struct kobject *kobject_create_and_add(const char *name, struct kobject *parent);
 
 This function will create a kobject and place it in sysfs in the location
 underneath the specified parent kobject.  To create simple attributes
 associated with this kobject, use::
 
-    int sysfs_create_file(struct kobject *kobj, struct attribute *attr);
+    int sysfs_create_file(struct kobject *kobj, const struct attribute *attr);
 
 or::
 
-    int sysfs_create_group(struct kobject *kobj, struct attribute_group *grp);
+    int sysfs_create_group(struct kobject *kobj, const struct attribute_group *grp);
 
 Both types of attributes used here, with a kobject that has been created
 with the kobject_create_and_add(), can be of type kobj_attribute, so no
@@ -299,9 +299,10 @@ kobj_type::
     struct kobj_type {
             void (*release)(struct kobject *kobj);
             const struct sysfs_ops *sysfs_ops;
-            struct attribute **default_attrs;
+            const struct attribute_group **default_groups;
             const struct kobj_ns_type_operations *(*child_ns_type)(struct kobject *kobj);
             const void *(*namespace)(struct kobject *kobj);
+            void (*get_ownership)(struct kobject *kobj, kuid_t *uid, kgid_t *gid);
     };
 
 This structure is used to describe a particular type of kobject (or, more
@@ -311,10 +312,10 @@ call kobject_init() or kobject_init_and_add().
 
 The release field in struct kobj_type is, of course, a pointer to the
 release() method for this type of kobject. The other two fields (sysfs_ops
-and default_attrs) control how objects of this type are represented in
+and default_groups) control how objects of this type are represented in
 sysfs; they are beyond the scope of this document.
 
-The default_attrs pointer is a list of default attributes that will be
+The default_groups pointer is a list of default attributes that will be
 automatically created for any kobject that is registered with this ktype.
 
 
@@ -352,12 +353,12 @@ created and never declared statically or on the stack.  To create a new
 kset use::
 
   struct kset *kset_create_and_add(const char *name,
-                                   struct kset_uevent_ops *u,
-                                   struct kobject *parent);
+                                   const struct kset_uevent_ops *uevent_ops,
+                                   struct kobject *parent_kobj);
 
 When you are finished with the kset, call::
 
-  void kset_unregister(struct kset *kset);
+  void kset_unregister(struct kset *k);
 
 to destroy it.  This removes the kset from sysfs and decrements its reference
 count.  When the reference count goes to zero, the kset will be released.
@@ -371,10 +372,9 @@ If a kset wishes to control the uevent operations of the kobjects
 associated with it, it can use the struct kset_uevent_ops to handle it::
 
   struct kset_uevent_ops {
-          int (*filter)(struct kset *kset, struct kobject *kobj);
-          const char *(*name)(struct kset *kset, struct kobject *kobj);
-          int (*uevent)(struct kset *kset, struct kobject *kobj,
-                        struct kobj_uevent_env *env);
+          int (* const filter)(struct kobject *kobj);
+          const char *(* const name)(struct kobject *kobj);
+          int (* const uevent)(struct kobject *kobj, struct kobj_uevent_env *env);
   };
 
 

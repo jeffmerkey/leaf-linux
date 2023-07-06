@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/thermal/sprd-thermal.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Spreadtrum thermal sensor controller bindings
+title: Spreadtrum thermal sensor controller
 
 maintainers:
   - Orson Zhai <orsonzhai@gmail.com>
@@ -68,6 +68,8 @@ patternProperties:
       - nvmem-cells
       - nvmem-cell-names
 
+    additionalProperties: false
+
 required:
   - compatible
   - reg
@@ -79,11 +81,13 @@ required:
   - "#address-cells"
   - "#size-cells"
 
+additionalProperties: false
+
 examples:
   - |
         ap_thm0: thermal@32200000 {
                 compatible = "sprd,ums512-thermal";
-                reg = <0 0x32200000 0 0x10000>;
+                reg = <0x32200000 0x10000>;
                 clock-names = "enable";
                 clocks = <&aonapb_gate 32>;
                 #thermal-sensor-cells = <1>;

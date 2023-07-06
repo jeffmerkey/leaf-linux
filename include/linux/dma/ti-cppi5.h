@@ -2,7 +2,7 @@
 /*
  * CPPI5 descriptors interface
  *
- * Copyright (C) 2019 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2019 Texas Instruments Incorporated - https://www.ti.com
  */
 
 #ifndef __TI_CPPI5_H__
@@ -47,7 +47,7 @@ struct cppi5_host_desc_t {
 	u32 buf_info1;
 	u32 org_buf_len;
 	u64 org_buf_ptr;
-	u32 epib[0];
+	u32 epib[];
 } __packed;
 
 #define CPPI5_DESC_MIN_ALIGN			(16U)
@@ -139,7 +139,7 @@ struct cppi5_desc_epib_t {
  */
 struct cppi5_monolithic_desc_t {
 	struct cppi5_desc_hdr_t hdr;
-	u32 epib[0];
+	u32 epib[];
 };
 
 #define CPPI5_INFO2_MDESC_DATA_OFFSET_SHIFT	(18U)
@@ -616,6 +616,7 @@ static inline void *cppi5_hdesc_get_swdata(struct cppi5_host_desc_t *desc)
 #define   CPPI5_TR_CSF_SUPR_EVT			BIT(2)
 #define   CPPI5_TR_CSF_EOL_ADV_SHIFT		(4U)
 #define   CPPI5_TR_CSF_EOL_ADV_MASK		GENMASK(6, 4)
+#define   CPPI5_TR_CSF_EOL_ICNT0		BIT(4)
 #define   CPPI5_TR_CSF_EOP			BIT(7)
 
 /**

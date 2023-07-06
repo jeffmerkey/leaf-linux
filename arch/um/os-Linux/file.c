@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -289,7 +290,7 @@ int os_write_file(int fd, const void *buf, int len)
 
 int os_sync_file(int fd)
 {
-	int n = fsync(fd);
+	int n = fdatasync(fd);
 
 	if (n < 0)
 		return -errno;
@@ -618,6 +619,15 @@ unsigned long long os_makedev(unsigned major, unsigned minor)
 int os_falloc_punch(int fd, unsigned long long offset, int len)
 {
 	int n = fallocate(fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE, offset, len);
+
+	if (n < 0)
+		return -errno;
+	return n;
+}
+
+int os_falloc_zeroes(int fd, unsigned long long offset, int len)
+{
+	int n = fallocate(fd, FALLOC_FL_ZERO_RANGE|FALLOC_FL_KEEP_SIZE, offset, len);
 
 	if (n < 0)
 		return -errno;

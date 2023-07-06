@@ -1279,7 +1279,7 @@ static int isp1362_urb_enqueue(struct usb_hcd *hcd,
 		ep->udev = usb_get_dev(udev);
 		ep->hep = hep;
 		ep->epnum = epnum;
-		ep->maxpacket = usb_maxpacket(udev, urb->pipe, is_out);
+		ep->maxpacket = usb_maxpacket(udev, urb->pipe);
 		ep->ptd_offset = -EINVAL;
 		ep->ptd_index = -EINVAL;
 		usb_settoggle(udev, epnum, is_out, 0);
@@ -1299,8 +1299,8 @@ static int isp1362_urb_enqueue(struct usb_hcd *hcd,
 			ep->interval = urb->interval;
 			ep->branch = PERIODIC_SIZE;
 			ep->load = usb_calc_bus_time(udev->speed, !is_out,
-						     (type == PIPE_ISOCHRONOUS),
-						     usb_maxpacket(udev, pipe, is_out)) / 1000;
+						     type == PIPE_ISOCHRONOUS,
+						     usb_maxpacket(udev, pipe)) / 1000;
 			break;
 		}
 		hep->hcpriv = ep;
@@ -1748,7 +1748,7 @@ static int isp1362_bus_suspend(struct usb_hcd *hcd)
 		isp1362_hcd->hc_control &= ~OHCI_CTRL_HCFS;
 		isp1362_hcd->hc_control |= OHCI_USB_RESET;
 		isp1362_write_reg32(isp1362_hcd, HCCONTROL, isp1362_hcd->hc_control);
-		/* FALL THROUGH */
+		fallthrough;
 	case OHCI_USB_RESET:
 		status = -EBUSY;
 		pr_warn("%s: needs reinit!\n", __func__);
@@ -2164,15 +2164,13 @@ DEFINE_SHOW_ATTRIBUTE(isp1362);
 /* expect just one isp1362_hcd per system */
 static void create_debug_file(struct isp1362_hcd *isp1362_hcd)
 {
-	isp1362_hcd->debug_file = debugfs_create_file("isp1362", S_IRUGO,
-						      usb_debug_root,
-						      isp1362_hcd,
-						      &isp1362_fops);
+	debugfs_create_file("isp1362", S_IRUGO, usb_debug_root, isp1362_hcd,
+			    &isp1362_fops);
 }
 
 static void remove_debug_file(struct isp1362_hcd *isp1362_hcd)
 {
-	debugfs_remove(isp1362_hcd->debug_file);
+	debugfs_lookup_and_remove("isp1362", usb_debug_root);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -2608,7 +2606,7 @@ static const struct hc_driver isp1362_hc_driver = {
 
 /*-------------------------------------------------------------------------*/
 
-static int isp1362_remove(struct platform_device *pdev)
+static void isp1362_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct isp1362_hcd *isp1362_hcd = hcd_to_isp1362_hcd(hcd);
@@ -2619,8 +2617,6 @@ static int isp1362_remove(struct platform_device *pdev)
 	DBG(0, "%s: put_hcd\n", __func__);
 	usb_put_hcd(hcd);
 	DBG(0, "%s: Done\n", __func__);
-
-	return 0;
 }
 
 static int isp1362_probe(struct platform_device *pdev)
@@ -2762,7 +2758,7 @@ static int isp1362_resume(struct platform_device *pdev)
 
 static struct platform_driver isp1362_driver = {
 	.probe = isp1362_probe,
-	.remove = isp1362_remove,
+	.remove_new = isp1362_remove,
 
 	.suspend = isp1362_suspend,
 	.resume = isp1362_resume,

@@ -1,15 +1,5 @@
-/*
- * Copyright (C) 2014 Broadcom Corporation
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation version 2.
- *
- * This program is distributed "as is" WITHOUT ANY WARRANTY of any
- * kind, whether express or implied; without even the implied warranty
- * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2014 Broadcom Corporation
 
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -22,7 +12,6 @@
 #include <linux/platform_device.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
-#include <linux/version.h>
 
 #define N_DATA_REGS					8
 
@@ -316,7 +305,7 @@ static int brcmstb_send_i2c_cmd(struct brcmstb_i2c_dev *dev,
 		goto cmd_out;
 	}
 
-	if ((CMD_RD || CMD_WR) &&
+	if ((cmd == CMD_RD || cmd == CMD_WR) &&
 	    bsc_readl(dev, iic_enable) & BSC_IIC_EN_NOACK_MASK) {
 		rc = -EREMOTEIO;
 		dev_dbg(dev->device, "controller received NOACK intr for %s\n",
@@ -586,12 +575,10 @@ static void brcmstb_i2c_set_bsc_reg_defaults(struct brcmstb_i2c_dev *dev)
 static int bcm2711_release_bsc(struct brcmstb_i2c_dev *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev->device);
-	struct resource *iomem;
 	void __iomem *autoi2c;
 
 	/* Map hardware registers */
-	iomem = platform_get_resource_byname(pdev, IORESOURCE_MEM, "auto-i2c");
-	autoi2c = devm_ioremap_resource(&pdev->dev, iomem);
+	autoi2c = devm_platform_ioremap_resource_byname(pdev, "auto-i2c");
 	if (IS_ERR(autoi2c))
 		return PTR_ERR(autoi2c);
 
@@ -647,20 +634,22 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 		int_name = NULL;
 
 	/* Get the interrupt number */
-	dev->irq = platform_get_irq(pdev, 0);
+	dev->irq = platform_get_irq_optional(pdev, 0);
 
 	/* disable the bsc interrupt line */
 	brcmstb_i2c_enable_disable_irq(dev, INT_DISABLE);
 
 	/* register the ISR handler */
-	rc = devm_request_irq(&pdev->dev, dev->irq, brcmstb_i2c_isr,
-			      IRQF_SHARED,
-			      int_name ? int_name : pdev->name,
-			      dev);
+	if (dev->irq >= 0) {
+		rc = devm_request_irq(&pdev->dev, dev->irq, brcmstb_i2c_isr,
+				      IRQF_SHARED,
+				      int_name ? int_name : pdev->name,
+				      dev);
 
-	if (rc) {
-		dev_dbg(dev->device, "falling back to polling mode");
-		dev->irq = -1;
+		if (rc) {
+			dev_dbg(dev->device, "falling back to polling mode");
+			dev->irq = -1;
+		}
 	}
 
 	if (of_property_read_u32(dev->device->of_node,
@@ -672,7 +661,7 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 
 	/* set the data in/out register size for compatible SoCs */
 	if (of_device_is_compatible(dev->device->of_node,
-				    "brcmstb,brcmper-i2c"))
+				    "brcm,brcmper-i2c"))
 		dev->data_regsz = sizeof(u8);
 	else
 		dev->data_regsz = sizeof(u32);
@@ -683,9 +672,7 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 	adap = &dev->adapter;
 	i2c_set_adapdata(adap, dev);
 	adap->owner = THIS_MODULE;
-	strlcpy(adap->name, "Broadcom STB : ", sizeof(adap->name));
-	if (int_name)
-		strlcat(adap->name, int_name, sizeof(adap->name));
+	strscpy(adap->name, dev_name(&pdev->dev), sizeof(adap->name));
 	adap->algo = &brcmstb_i2c_algo;
 	adap->dev.parent = &pdev->dev;
 	adap->dev.of_node = pdev->dev.of_node;
@@ -703,12 +690,11 @@ probe_errorout:
 	return rc;
 }
 
-static int brcmstb_i2c_remove(struct platform_device *pdev)
+static void brcmstb_i2c_remove(struct platform_device *pdev)
 {
 	struct brcmstb_i2c_dev *dev = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&dev->adapter);
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -749,7 +735,7 @@ static struct platform_driver brcmstb_i2c_driver = {
 		   .pm = &brcmstb_i2c_pm,
 		   },
 	.probe = brcmstb_i2c_probe,
-	.remove = brcmstb_i2c_remove,
+	.remove_new = brcmstb_i2c_remove,
 };
 module_platform_driver(brcmstb_i2c_driver);
 

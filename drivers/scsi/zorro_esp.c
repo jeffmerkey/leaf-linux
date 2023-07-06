@@ -34,9 +34,9 @@
 #include <linux/delay.h>
 #include <linux/zorro.h>
 #include <linux/slab.h>
+#include <linux/pgtable.h>
 
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/cacheflush.h>
 #include <asm/amigahw.h>
 #include <asm/amigaints.h>
@@ -713,7 +713,7 @@ MODULE_DEVICE_TABLE(zorro, zorro_esp_zorro_tbl);
 static int zorro_esp_probe(struct zorro_dev *z,
 				       const struct zorro_device_id *ent)
 {
-	struct scsi_host_template *tpnt = &scsi_esp_template;
+	const struct scsi_host_template *tpnt = &scsi_esp_template;
 	struct Scsi_Host *host;
 	struct esp *esp;
 	const struct zorro_driver_data *zdd;

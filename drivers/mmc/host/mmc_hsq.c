@@ -13,19 +13,25 @@
 
 #include "mmc_hsq.h"
 
-#define HSQ_NUM_SLOTS	64
-#define HSQ_INVALID_TAG	HSQ_NUM_SLOTS
+static void mmc_hsq_retry_handler(struct work_struct *work)
+{
+	struct mmc_hsq *hsq = container_of(work, struct mmc_hsq, retry_work);
+	struct mmc_host *mmc = hsq->mmc;
+
+	mmc->ops->request(mmc, hsq->mrq);
+}
 
 static void mmc_hsq_pump_requests(struct mmc_hsq *hsq)
 {
 	struct mmc_host *mmc = hsq->mmc;
 	struct hsq_slot *slot;
 	unsigned long flags;
+	int ret = 0;
 
 	spin_lock_irqsave(&hsq->lock, flags);
 
 	/* Make sure we are not already running a request now */
-	if (hsq->mrq) {
+	if (hsq->mrq || hsq->recovery_halt) {
 		spin_unlock_irqrestore(&hsq->lock, flags);
 		return;
 	}
@@ -42,12 +48,28 @@ static void mmc_hsq_pump_requests(struct mmc_hsq *hsq)
 
 	spin_unlock_irqrestore(&hsq->lock, flags);
 
-	mmc->ops->request(mmc, hsq->mrq);
+	if (mmc->ops->request_atomic)
+		ret = mmc->ops->request_atomic(mmc, hsq->mrq);
+	else
+		mmc->ops->request(mmc, hsq->mrq);
+
+	/*
+	 * If returning BUSY from request_atomic(), which means the card
+	 * may be busy now, and we should change to non-atomic context to
+	 * try again for this unusual case, to avoid time-consuming operations
+	 * in the atomic context.
+	 *
+	 * Note: we just give a warning for other error cases, since the host
+	 * driver will handle them.
+	 */
+	if (ret == -EBUSY)
+		schedule_work(&hsq->retry_work);
+	else
+		WARN_ON_ONCE(ret);
 }
 
 static void mmc_hsq_update_next_tag(struct mmc_hsq *hsq, int remains)
 {
-	struct hsq_slot *slot;
 	int tag;
 
 	/*
@@ -56,29 +78,12 @@ static void mmc_hsq_update_next_tag(struct mmc_hsq *hsq, int remains)
 	 */
 	if (!remains) {
 		hsq->next_tag = HSQ_INVALID_TAG;
+		hsq->tail_tag = HSQ_INVALID_TAG;
 		return;
 	}
 
-	/*
-	 * Increasing the next tag and check if the corresponding request is
-	 * available, if yes, then we found a candidate request.
-	 */
-	if (++hsq->next_tag != HSQ_INVALID_TAG) {
-		slot = &hsq->slot[hsq->next_tag];
-		if (slot->mrq)
-			return;
-	}
-
-	/* Othersie we should iterate all slots to find a available tag. */
-	for (tag = 0; tag < HSQ_NUM_SLOTS; tag++) {
-		slot = &hsq->slot[tag];
-		if (slot->mrq)
-			break;
-	}
-
-	if (tag == HSQ_NUM_SLOTS)
-		tag = HSQ_INVALID_TAG;
-
+	tag = hsq->tag_slot[hsq->next_tag];
+	hsq->tag_slot[hsq->next_tag] = HSQ_INVALID_TAG;
 	hsq->next_tag = tag;
 }
 
@@ -207,8 +212,14 @@ static int mmc_hsq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	 * Set the next tag as current request tag if no available
 	 * next tag.
 	 */
-	if (hsq->next_tag == HSQ_INVALID_TAG)
+	if (hsq->next_tag == HSQ_INVALID_TAG) {
 		hsq->next_tag = tag;
+		hsq->tail_tag = tag;
+		hsq->tag_slot[hsq->tail_tag] = HSQ_INVALID_TAG;
+	} else {
+		hsq->tag_slot[hsq->tail_tag] = tag;
+		hsq->tail_tag = tag;
+	}
 
 	hsq->qcnt++;
 
@@ -313,8 +324,10 @@ static const struct mmc_cqe_ops mmc_hsq_ops = {
 
 int mmc_hsq_init(struct mmc_hsq *hsq, struct mmc_host *mmc)
 {
+	int i;
 	hsq->num_slots = HSQ_NUM_SLOTS;
 	hsq->next_tag = HSQ_INVALID_TAG;
+	hsq->tail_tag = HSQ_INVALID_TAG;
 
 	hsq->slot = devm_kcalloc(mmc_dev(mmc), hsq->num_slots,
 				 sizeof(struct hsq_slot), GFP_KERNEL);
@@ -325,6 +338,10 @@ int mmc_hsq_init(struct mmc_hsq *hsq, struct mmc_host *mmc)
 	hsq->mmc->cqe_private = hsq;
 	mmc->cqe_ops = &mmc_hsq_ops;
 
+	for (i = 0; i < HSQ_NUM_SLOTS; i++)
+		hsq->tag_slot[i] = HSQ_INVALID_TAG;
+
+	INIT_WORK(&hsq->retry_work, mmc_hsq_retry_handler);
 	spin_lock_init(&hsq->lock);
 	init_waitqueue_head(&hsq->wait_queue);
 

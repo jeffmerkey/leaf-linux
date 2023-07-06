@@ -16,7 +16,7 @@
 #include <asm/traps.h>
 #include <linux/uaccess.h>
 
-#if IS_ENABLED(CONFIG_OPROFILE) || IS_ENABLED(CONFIG_PERF_EVENTS)
+#if IS_ENABLED(CONFIG_PERF_EVENTS)
 
 /* Address of common_exception_return, used to check the
  * transition from kernel to user space.
@@ -237,8 +237,6 @@ EXPORT_SYMBOL_GPL(save_stack_trace);
 
 #endif
 
-#ifdef CONFIG_FRAME_POINTER
-
 struct return_addr_data {
 	unsigned long addr;
 	unsigned skip;
@@ -271,5 +269,3 @@ unsigned long return_address(unsigned level)
 	return r.addr;
 }
 EXPORT_SYMBOL(return_address);
-
-#endif

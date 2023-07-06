@@ -836,7 +836,8 @@ static int sii9234_init_resources(struct sii9234 *ctx,
 	ctx->supplies[3].supply = "cvcc12";
 	ret = devm_regulator_bulk_get(ctx->dev, 4, ctx->supplies);
 	if (ret) {
-		dev_err(ctx->dev, "regulator_bulk failed\n");
+		if (ret != -EPROBE_DEFER)
+			dev_err(ctx->dev, "regulator_bulk failed\n");
 		return ret;
 	}
 
@@ -866,12 +867,8 @@ static int sii9234_init_resources(struct sii9234 *ctx,
 	return 0;
 }
 
-static inline struct sii9234 *bridge_to_sii9234(struct drm_bridge *bridge)
-{
-	return container_of(bridge, struct sii9234, bridge);
-}
-
 static enum drm_mode_status sii9234_mode_valid(struct drm_bridge *bridge,
+					 const struct drm_display_info *info,
 					 const struct drm_display_mode *mode)
 {
 	if (mode->clock > MHL1_MAX_CLK)
@@ -884,8 +881,7 @@ static const struct drm_bridge_funcs sii9234_bridge_funcs = {
 	.mode_valid = sii9234_mode_valid,
 };
 
-static int sii9234_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int sii9234_probe(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct sii9234 *ctx;
@@ -934,14 +930,12 @@ static int sii9234_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int sii9234_remove(struct i2c_client *client)
+static void sii9234_remove(struct i2c_client *client)
 {
 	struct sii9234 *ctx = i2c_get_clientdata(client);
 
 	sii9234_cable_out(ctx);
 	drm_bridge_remove(&ctx->bridge);
-
-	return 0;
 }
 
 static const struct of_device_id sii9234_dt_match[] = {

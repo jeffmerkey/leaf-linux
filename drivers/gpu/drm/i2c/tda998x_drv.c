@@ -7,6 +7,7 @@
 #include <linux/component.h>
 #include <linux/gpio/consumer.h>
 #include <linux/hdmi.h>
+#include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/platform_data/tda9950.h>
 #include <linux/irq.h>
@@ -19,6 +20,7 @@
 #include <drm/drm_of.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_simple_kms_helper.h>
 #include <drm/i2c/tda998x.h>
 
 #include <media/cec-notifier.h>
@@ -1094,11 +1096,11 @@ static int tda998x_audio_hw_params(struct device *dev, void *data,
 
 	if (!spdif &&
 	    (daifmt->bit_clk_inv || daifmt->frame_clk_inv ||
-	     daifmt->bit_clk_master || daifmt->frame_clk_master)) {
+	     daifmt->bit_clk_provider || daifmt->frame_clk_provider)) {
 		dev_err(dev, "%s: Bad flags %d %d %d %d\n", __func__,
 			daifmt->bit_clk_inv, daifmt->frame_clk_inv,
-			daifmt->bit_clk_master,
-			daifmt->frame_clk_master);
+			daifmt->bit_clk_provider,
+			daifmt->frame_clk_provider);
 		return -EINVAL;
 	}
 
@@ -1132,7 +1134,8 @@ static void tda998x_audio_shutdown(struct device *dev, void *data)
 	mutex_unlock(&priv->audio_mutex);
 }
 
-int tda998x_audio_digital_mute(struct device *dev, void *data, bool enable)
+static int tda998x_audio_mute_stream(struct device *dev, void *data,
+				     bool enable, int direction)
 {
 	struct tda998x_priv *priv = dev_get_drvdata(dev);
 
@@ -1160,8 +1163,9 @@ static int tda998x_audio_get_eld(struct device *dev, void *data,
 static const struct hdmi_codec_ops audio_codec_ops = {
 	.hw_params = tda998x_audio_hw_params,
 	.audio_shutdown = tda998x_audio_shutdown,
-	.digital_mute = tda998x_audio_digital_mute,
+	.mute_stream = tda998x_audio_mute_stream,
 	.get_eld = tda998x_audio_get_eld,
+	.no_capture_mute = 1,
 };
 
 static int tda998x_audio_codec_init(struct tda998x_priv *priv,
@@ -1170,6 +1174,8 @@ static int tda998x_audio_codec_init(struct tda998x_priv *priv,
 	struct hdmi_codec_pdata codec_data = {
 		.ops = &audio_codec_ops,
 		.max_i2s_channels = 2,
+		.no_i2s_capture = 1,
+		.no_spdif_capture = 1,
 	};
 
 	if (priv->audio_port_enable[AUDIO_ROUTE_I2S])
@@ -1377,6 +1383,7 @@ static void tda998x_bridge_detach(struct drm_bridge *bridge)
 }
 
 static enum drm_mode_status tda998x_bridge_mode_valid(struct drm_bridge *bridge,
+				     const struct drm_display_info *info,
 				     const struct drm_display_mode *mode)
 {
 	/* TDA19988 dotclock can go up to 165MHz */
@@ -1944,14 +1951,14 @@ static int tda998x_create(struct device *dev)
 	 * offset.
 	 */
 	memset(&cec_info, 0, sizeof(cec_info));
-	strlcpy(cec_info.type, "tda9950", sizeof(cec_info.type));
+	strscpy(cec_info.type, "tda9950", sizeof(cec_info.type));
 	cec_info.addr = priv->cec_addr;
 	cec_info.platform_data = &priv->cec_glue;
 	cec_info.irq = client->irq;
 
-	priv->cec = i2c_new_device(client->adapter, &cec_info);
-	if (!priv->cec) {
-		ret = -ENODEV;
+	priv->cec = i2c_new_client_device(client->adapter, &cec_info);
+	if (IS_ERR(priv->cec)) {
+		ret = PTR_ERR(priv->cec);
 		goto fail;
 	}
 
@@ -1997,15 +2004,6 @@ err_irq:
 
 /* DRM encoder functions */
 
-static void tda998x_encoder_destroy(struct drm_encoder *encoder)
-{
-	drm_encoder_cleanup(encoder);
-}
-
-static const struct drm_encoder_funcs tda998x_encoder_funcs = {
-	.destroy = tda998x_encoder_destroy,
-};
-
 static int tda998x_encoder_init(struct device *dev, struct drm_device *drm)
 {
 	struct tda998x_priv *priv = dev_get_drvdata(dev);
@@ -2023,8 +2021,8 @@ static int tda998x_encoder_init(struct device *dev, struct drm_device *drm)
 
 	priv->encoder.possible_crtcs = crtcs;
 
-	ret = drm_encoder_init(drm, &priv->encoder, &tda998x_encoder_funcs,
-			       DRM_MODE_ENCODER_TMDS, NULL);
+	ret = drm_simple_encoder_init(drm, &priv->encoder,
+				      DRM_MODE_ENCODER_TMDS);
 	if (ret)
 		goto err_encoder;
 
@@ -2061,7 +2059,7 @@ static const struct component_ops tda998x_ops = {
 };
 
 static int
-tda998x_probe(struct i2c_client *client, const struct i2c_device_id *id)
+tda998x_probe(struct i2c_client *client)
 {
 	int ret;
 
@@ -2080,11 +2078,10 @@ tda998x_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	return ret;
 }
 
-static int tda998x_remove(struct i2c_client *client)
+static void tda998x_remove(struct i2c_client *client)
 {
 	component_del(&client->dev, &tda998x_ops);
 	tda998x_destroy(&client->dev);
-	return 0;
 }
 
 #ifdef CONFIG_OF

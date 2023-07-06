@@ -32,26 +32,6 @@ struct modsig {
 	u8 raw_pkcs7[];
 };
 
-/**
- * ima_hook_supports_modsig - can the policy allow modsig for this hook?
- *
- * modsig is only supported by hooks using ima_post_read_file(), because only
- * they preload the contents of the file in a buffer. FILE_CHECK does that in
- * some cases, but not when reached from vfs_open(). POLICY_CHECK can support
- * it, but it's not useful in practice because it's a text file so deny.
- */
-bool ima_hook_supports_modsig(enum ima_hooks func)
-{
-	switch (func) {
-	case KEXEC_KERNEL_CHECK:
-	case KEXEC_INITRAMFS_CHECK:
-	case MODULE_CHECK:
-		return true;
-	default:
-		return false;
-	}
-}
-
 /*
  * ima_read_modsig - Read modsig from buf.
  *
@@ -109,6 +89,9 @@ int ima_read_modsig(enum ima_hooks func, const void *buf, loff_t buf_len,
 
 /**
  * ima_collect_modsig - Calculate the file hash without the appended signature.
+ * @modsig: parsed module signature
+ * @buf: data to verify the signature on
+ * @size: data size
  *
  * Since the modsig is part of the file contents, the hash used in its signature
  * isn't the same one ordinarily calculated by IMA. Therefore PKCS7 code

@@ -26,6 +26,7 @@
 
 #include "power.h"
 
+static bool need_wait;
 
 static struct snapshot_data {
 	struct snapshot_handle handle;
@@ -35,27 +36,32 @@ static struct snapshot_data {
 	bool ready;
 	bool platform_support;
 	bool free_bitmaps;
+	dev_t dev;
 } snapshot_state;
 
-atomic_t snapshot_device_available = ATOMIC_INIT(1);
+int is_hibernate_resume_dev(dev_t dev)
+{
+	return hibernation_available() && snapshot_state.dev == dev;
+}
 
 static int snapshot_open(struct inode *inode, struct file *filp)
 {
 	struct snapshot_data *data;
-	int error, nr_calls = 0;
+	unsigned int sleep_flags;
+	int error;
 
 	if (!hibernation_available())
 		return -EPERM;
 
-	lock_system_sleep();
+	sleep_flags = lock_system_sleep();
 
-	if (!atomic_add_unless(&snapshot_device_available, -1, 0)) {
+	if (!hibernate_acquire()) {
 		error = -EBUSY;
 		goto Unlock;
 	}
 
 	if ((filp->f_flags & O_ACCMODE) == O_RDWR) {
-		atomic_inc(&snapshot_device_available);
+		hibernate_release();
 		error = -ENOSYS;
 		goto Unlock;
 	}
@@ -65,41 +71,35 @@ static int snapshot_open(struct inode *inode, struct file *filp)
 	memset(&data->handle, 0, sizeof(struct snapshot_handle));
 	if ((filp->f_flags & O_ACCMODE) == O_RDONLY) {
 		/* Hibernating.  The image device should be accessible. */
-		data->swap = swsusp_resume_device ?
-			swap_type_of(swsusp_resume_device, 0, NULL) : -1;
+		data->swap = swap_type_of(swsusp_resume_device, 0);
 		data->mode = O_RDONLY;
 		data->free_bitmaps = false;
-		error = __pm_notifier_call_chain(PM_HIBERNATION_PREPARE, -1, &nr_calls);
-		if (error)
-			__pm_notifier_call_chain(PM_POST_HIBERNATION, --nr_calls, NULL);
+		error = pm_notifier_call_chain_robust(PM_HIBERNATION_PREPARE, PM_POST_HIBERNATION);
 	} else {
 		/*
 		 * Resuming.  We may need to wait for the image device to
 		 * appear.
 		 */
-		wait_for_device_probe();
+		need_wait = true;
 
 		data->swap = -1;
 		data->mode = O_WRONLY;
-		error = __pm_notifier_call_chain(PM_RESTORE_PREPARE, -1, &nr_calls);
+		error = pm_notifier_call_chain_robust(PM_RESTORE_PREPARE, PM_POST_RESTORE);
 		if (!error) {
 			error = create_basic_memory_bitmaps();
 			data->free_bitmaps = !error;
-		} else
-			nr_calls--;
-
-		if (error)
-			__pm_notifier_call_chain(PM_POST_RESTORE, nr_calls, NULL);
+		}
 	}
 	if (error)
-		atomic_inc(&snapshot_device_available);
+		hibernate_release();
 
 	data->frozen = false;
 	data->ready = false;
 	data->platform_support = false;
+	data->dev = 0;
 
  Unlock:
-	unlock_system_sleep();
+	unlock_system_sleep(sleep_flags);
 
 	return error;
 }
@@ -107,11 +107,13 @@ static int snapshot_open(struct inode *inode, struct file *filp)
 static int snapshot_release(struct inode *inode, struct file *filp)
 {
 	struct snapshot_data *data;
+	unsigned int sleep_flags;
 
-	lock_system_sleep();
+	sleep_flags = lock_system_sleep();
 
 	swsusp_free();
 	data = filp->private_data;
+	data->dev = 0;
 	free_all_swap_pages(data->swap);
 	if (data->frozen) {
 		pm_restore_gfp_mask();
@@ -122,9 +124,9 @@ static int snapshot_release(struct inode *inode, struct file *filp)
 	}
 	pm_notifier_call_chain(data->mode == O_RDONLY ?
 			PM_POST_HIBERNATION : PM_POST_RESTORE);
-	atomic_inc(&snapshot_device_available);
+	hibernate_release();
 
-	unlock_system_sleep();
+	unlock_system_sleep(sleep_flags);
 
 	return 0;
 }
@@ -132,11 +134,12 @@ static int snapshot_release(struct inode *inode, struct file *filp)
 static ssize_t snapshot_read(struct file *filp, char __user *buf,
                              size_t count, loff_t *offp)
 {
-	struct snapshot_data *data;
-	ssize_t res;
 	loff_t pg_offp = *offp & ~PAGE_MASK;
+	struct snapshot_data *data;
+	unsigned int sleep_flags;
+	ssize_t res;
 
-	lock_system_sleep();
+	sleep_flags = lock_system_sleep();
 
 	data = filp->private_data;
 	if (!data->ready) {
@@ -157,7 +160,7 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 		*offp += res;
 
  Unlock:
-	unlock_system_sleep();
+	unlock_system_sleep(sleep_flags);
 
 	return res;
 }
@@ -165,11 +168,17 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 static ssize_t snapshot_write(struct file *filp, const char __user *buf,
                               size_t count, loff_t *offp)
 {
-	struct snapshot_data *data;
-	ssize_t res;
 	loff_t pg_offp = *offp & ~PAGE_MASK;
+	struct snapshot_data *data;
+	unsigned long sleep_flags;
+	ssize_t res;
 
-	lock_system_sleep();
+	if (need_wait) {
+		wait_for_device_probe();
+		need_wait = false;
+	}
+
+	sleep_flags = lock_system_sleep();
 
 	data = filp->private_data;
 
@@ -178,7 +187,7 @@ static ssize_t snapshot_write(struct file *filp, const char __user *buf,
 		if (res <= 0)
 			goto unlock;
 	} else {
-		res = PAGE_SIZE - pg_offp;
+		res = PAGE_SIZE;
 	}
 
 	if (!data_of(data->handle)) {
@@ -191,7 +200,7 @@ static ssize_t snapshot_write(struct file *filp, const char __user *buf,
 	if (res > 0)
 		*offp += res;
 unlock:
-	unlock_system_sleep();
+	unlock_system_sleep(sleep_flags);
 
 	return res;
 }
@@ -230,13 +239,10 @@ static int snapshot_set_swap_area(struct snapshot_data *data,
 	 * User space encodes device types as two-byte values,
 	 * so we need to recode them
 	 */
-	if (!swdev) {
-		data->swap = -1;
-		return -EINVAL;
-	}
-	data->swap = swap_type_of(swdev, offset, NULL);
+	data->swap = swap_type_of(swdev, offset);
 	if (data->swap < 0)
-		return -ENODEV;
+		return swdev ? -ENODEV : -EINVAL;
+	data->dev = swdev;
 	return 0;
 }
 
@@ -247,6 +253,11 @@ static long snapshot_ioctl(struct file *filp, unsigned int cmd,
 	struct snapshot_data *data;
 	loff_t size;
 	sector_t offset;
+
+	if (need_wait) {
+		wait_for_device_probe();
+		need_wait = false;
+	}
 
 	if (_IOC_TYPE(cmd) != SNAPSHOT_IOC_MAGIC)
 		return -ENOTTY;

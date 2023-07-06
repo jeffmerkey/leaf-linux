@@ -25,16 +25,34 @@ static inline void rcuwait_init(struct rcuwait *w)
 	w->task = NULL;
 }
 
-extern void rcuwait_wake_up(struct rcuwait *w);
+/*
+ * Note: this provides no serialization and, just as with waitqueues,
+ * requires care to estimate as to whether or not the wait is active.
+ */
+static inline int rcuwait_active(struct rcuwait *w)
+{
+	return !!rcu_access_pointer(w->task);
+}
+
+extern int rcuwait_wake_up(struct rcuwait *w);
 
 /*
  * The caller is responsible for locking around rcuwait_wait_event(),
- * such that writes to @task are properly serialized.
+ * and [prepare_to/finish]_rcuwait() such that writes to @task are
+ * properly serialized.
  */
-#define rcuwait_wait_event(w, condition, state)				\
+
+static inline void prepare_to_rcuwait(struct rcuwait *w)
+{
+	rcu_assign_pointer(w->task, current);
+}
+
+extern void finish_rcuwait(struct rcuwait *w);
+
+#define ___rcuwait_wait_event(w, condition, state, ret, cmd)		\
 ({									\
-	int __ret = 0;							\
-	rcu_assign_pointer((w)->task, current);				\
+	long __ret = ret;						\
+	prepare_to_rcuwait(w);						\
 	for (;;) {							\
 		/*							\
 		 * Implicit barrier (A) pairs with (B) in		\
@@ -49,11 +67,26 @@ extern void rcuwait_wake_up(struct rcuwait *w);
 			break;						\
 		}							\
 									\
-		schedule();						\
+		cmd;							\
 	}								\
-									\
-	WRITE_ONCE((w)->task, NULL);					\
-	__set_current_state(TASK_RUNNING);				\
+	finish_rcuwait(w);						\
+	__ret;								\
+})
+
+#define rcuwait_wait_event(w, condition, state)				\
+	___rcuwait_wait_event(w, condition, state, 0, schedule())
+
+#define __rcuwait_wait_event_timeout(w, condition, state, timeout)	\
+	___rcuwait_wait_event(w, ___wait_cond_timeout(condition),	\
+			      state, timeout,				\
+			      __ret = schedule_timeout(__ret))
+
+#define rcuwait_wait_event_timeout(w, condition, state, timeout)	\
+({									\
+	long __ret = timeout;						\
+	if (!___wait_cond_timeout(condition))				\
+		__ret = __rcuwait_wait_event_timeout(w, condition,	\
+						     state, timeout);	\
 	__ret;								\
 })
 

@@ -81,12 +81,14 @@ struct role_datum {
 	struct ebitmap types;		/* set of authorized types for role */
 };
 
-struct role_trans {
+struct role_trans_key {
 	u32 role;		/* current role */
 	u32 type;		/* program executable type, or new object type */
 	u32 tclass;		/* process class, or new object class */
+};
+
+struct role_trans_datum {
 	u32 new_role;		/* new role */
-	struct role_trans *next;
 };
 
 struct filename_trans_key {
@@ -223,7 +225,7 @@ struct genfs {
 
 /* object context array indices */
 #define OCON_ISID	0 /* initial SIDs */
-#define OCON_FS		1 /* unlabeled file systems */
+#define OCON_FS		1 /* unlabeled file systems (deprecated) */
 #define OCON_PORT	2 /* TCP and UDP port numbers */
 #define OCON_NETIF	3 /* network interfaces */
 #define OCON_NODE	4 /* nodes */
@@ -261,14 +263,15 @@ struct policydb {
 	struct avtab te_avtab;
 
 	/* role transitions */
-	struct role_trans *role_tr;
+	struct hashtab role_tr;
 
 	/* file transitions with the last path component */
 	/* quickly exclude lookups when parent ttype has no rules */
 	struct ebitmap filename_trans_ttypes;
 	/* actual set of filename_trans rules */
-	struct hashtab *filename_trans;
-	u32 filename_trans_count;
+	struct hashtab filename_trans;
+	/* only used if policyvers < POLICYDB_VERSION_COMP_FTRANS */
+	u32 compat_filename_trans_count;
 
 	/* bools indexed by (value - 1) */
 	struct cond_bool_datum **bool_val_to_struct;
@@ -291,7 +294,7 @@ struct policydb {
 	struct genfs *genfs;
 
 	/* range transitions table (range_trans_key -> mls_range) */
-	struct hashtab *range_tr;
+	struct hashtab range_tr;
 
 	/* type -> attribute reverse mapping */
 	struct ebitmap *type_attr_map_array;
@@ -320,6 +323,15 @@ extern int policydb_type_isvalid(struct policydb *p, unsigned int type);
 extern int policydb_role_isvalid(struct policydb *p, unsigned int role);
 extern int policydb_read(struct policydb *p, void *fp);
 extern int policydb_write(struct policydb *p, void *fp);
+
+extern struct filename_trans_datum *policydb_filenametr_search(
+	struct policydb *p, struct filename_trans_key *key);
+
+extern struct mls_range *policydb_rangetr_search(
+	struct policydb *p, struct range_trans *key);
+
+extern struct role_trans_datum *policydb_roletr_search(
+	struct policydb *p, struct role_trans_key *key);
 
 #define POLICYDB_CONFIG_MLS    1
 
@@ -358,6 +370,8 @@ static inline int put_entry(const void *buf, size_t bytes, int num, struct polic
 {
 	size_t len = bytes * num;
 
+	if (len > fp->len)
+		return -EINVAL;
 	memcpy(fp->data, buf, len);
 	fp->data += len;
 	fp->len -= len;

@@ -49,11 +49,6 @@
 #define FN(reg_name, field_name) \
 	hubbub1->shifts->field_name, hubbub1->masks->field_name
 
-#ifdef NUM_VMID
-#undef NUM_VMID
-#endif
-#define NUM_VMID 16
-
 static uint32_t convert_and_clamp(
 	uint32_t wm_ns,
 	uint32_t refclk_mhz,
@@ -104,6 +99,8 @@ void dcn21_dchvm_init(struct hubbub *hubbub)
 
 		//Poll until HOSTVM_PREFETCH_DONE = 1
 		REG_WAIT(DCHVM_RIOMMU_STAT0, HOSTVM_PREFETCH_DONE, 1, 5, 100);
+
+		hubbub->riommu_active = true;
 	}
 }
 
@@ -138,7 +135,7 @@ int hubbub21_init_dchub(struct hubbub *hubbub,
 
 	dcn21_dchvm_init(hubbub);
 
-	return NUM_VMID;
+	return hubbub1->num_vmid;
 }
 
 bool hubbub21_program_urgent_watermarks(
@@ -638,7 +635,7 @@ void hubbub21_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_A, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_A,
-			 DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_A, &s->dram_clk_chanage);
+			 DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_A, &s->dram_clk_change);
 
 	s = &wm->sets[1];
 	s->wm_set = 1;
@@ -652,7 +649,7 @@ void hubbub21_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_B, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_B,
-			DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_B, &s->dram_clk_chanage);
+			DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_B, &s->dram_clk_change);
 
 	s = &wm->sets[2];
 	s->wm_set = 2;
@@ -666,7 +663,7 @@ void hubbub21_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_C, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_C,
-			DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_C, &s->dram_clk_chanage);
+			DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_C, &s->dram_clk_change);
 
 	s = &wm->sets[3];
 	s->wm_set = 3;
@@ -680,10 +677,10 @@ void hubbub21_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_D, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_D,
-			DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_D, &s->dram_clk_chanage);
+			DCHUBBUB_ARB_ALLOW_DRAM_CLK_CHANGE_WATERMARK_D, &s->dram_clk_change);
 }
 
-void hubbub21_apply_DEDCN21_147_wa(struct hubbub *hubbub)
+static void hubbub21_apply_DEDCN21_147_wa(struct hubbub *hubbub)
 {
 	struct dcn20_hubbub *hubbub1 = TO_DCN20_HUBBUB(hubbub);
 	uint32_t prog_wm_value;
@@ -704,6 +701,7 @@ static const struct hubbub_funcs hubbub21_funcs = {
 	.program_watermarks = hubbub21_program_watermarks,
 	.allow_self_refresh_control = hubbub1_allow_self_refresh_control,
 	.apply_DEDCN21_147_wa = hubbub21_apply_DEDCN21_147_wa,
+	.hubbub_read_state = hubbub2_read_state,
 };
 
 void hubbub21_construct(struct dcn20_hubbub *hubbub,

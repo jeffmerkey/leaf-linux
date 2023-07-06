@@ -138,7 +138,7 @@ static inline void i2c_pnx_arm_timer(struct i2c_pnx_algo_data *alg_data)
 /**
  * i2c_pnx_start - start a device
  * @slave_addr:		slave address
- * @adap:		pointer to adapter structure
+ * @alg_data:		pointer to local driver data structure
  *
  * Generate a START signal in the desired mode.
  */
@@ -194,7 +194,7 @@ static int i2c_pnx_start(unsigned char slave_addr,
 
 /**
  * i2c_pnx_stop - stop a device
- * @adap:		pointer to I2C adapter structure
+ * @alg_data:		pointer to local driver data structure
  *
  * Generate a STOP signal to terminate the master transaction.
  */
@@ -223,7 +223,7 @@ static void i2c_pnx_stop(struct i2c_pnx_algo_data *alg_data)
 
 /**
  * i2c_pnx_master_xmit - transmit data to slave
- * @adap:		pointer to I2C adapter structure
+ * @alg_data:		pointer to local driver data structure
  *
  * Sends one byte of data to the slave
  */
@@ -293,7 +293,7 @@ static int i2c_pnx_master_xmit(struct i2c_pnx_algo_data *alg_data)
 
 /**
  * i2c_pnx_master_rcv - receive data from slave
- * @adap:		pointer to I2C adapter structure
+ * @alg_data:		pointer to local driver data structure
  *
  * Reads one byte data from the slave
  */
@@ -720,7 +720,6 @@ static int i2c_pnx_probe(struct platform_device *pdev)
 
 	alg_data->irq = platform_get_irq(pdev, 0);
 	if (alg_data->irq < 0) {
-		dev_err(&pdev->dev, "Failed to get IRQ from platform resource\n");
 		ret = alg_data->irq;
 		goto out_clock;
 	}
@@ -744,14 +743,12 @@ out_clock:
 	return ret;
 }
 
-static int i2c_pnx_remove(struct platform_device *pdev)
+static void i2c_pnx_remove(struct platform_device *pdev)
 {
 	struct i2c_pnx_algo_data *alg_data = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&alg_data->adapter);
 	clk_disable_unprepare(alg_data->clk);
-
-	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -769,7 +766,7 @@ static struct platform_driver i2c_pnx_driver = {
 		.pm = PNX_I2C_PM,
 	},
 	.probe = i2c_pnx_probe,
-	.remove = i2c_pnx_remove,
+	.remove_new = i2c_pnx_remove,
 };
 
 static int __init i2c_adap_pnx_init(void)
@@ -782,7 +779,8 @@ static void __exit i2c_adap_pnx_exit(void)
 	platform_driver_unregister(&i2c_pnx_driver);
 }
 
-MODULE_AUTHOR("Vitaly Wool, Dennis Kovalev <source@mvista.com>");
+MODULE_AUTHOR("Vitaly Wool");
+MODULE_AUTHOR("Dennis Kovalev <source@mvista.com>");
 MODULE_DESCRIPTION("I2C driver for Philips IP3204-based I2C busses");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:pnx-i2c");

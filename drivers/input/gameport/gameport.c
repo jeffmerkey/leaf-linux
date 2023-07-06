@@ -11,6 +11,7 @@
 
 #include <linux/stddef.h>
 #include <linux/module.h>
+#include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/gameport.h>
@@ -20,8 +21,6 @@
 #include <linux/sched.h>	/* HZ */
 #include <linux/mutex.h>
 #include <linux/timekeeping.h>
-
-/*#include <asm/io.h>*/
 
 MODULE_AUTHOR("Vojtech Pavlik <vojtech@ucw.cz>");
 MODULE_DESCRIPTION("Generic gameport layer");
@@ -518,6 +517,16 @@ void gameport_set_phys(struct gameport *gameport, const char *fmt, ...)
 }
 EXPORT_SYMBOL(gameport_set_phys);
 
+static void gameport_default_trigger(struct gameport *gameport)
+{
+	outb(0xff, gameport->io);
+}
+
+static unsigned char gameport_default_read(struct gameport *gameport)
+{
+	return inb(gameport->io);
+}
+
 /*
  * Prepare gameport port for registration.
  */
@@ -535,6 +544,11 @@ static void gameport_init_port(struct gameport *gameport)
 	gameport->dev.release = gameport_release_port;
 	if (gameport->parent)
 		gameport->dev.parent = &gameport->parent->dev;
+
+	if (!gameport->trigger)
+		gameport->trigger = gameport_default_trigger;
+	if (!gameport->read)
+		gameport->read = gameport_default_read;
 
 	INIT_LIST_HEAD(&gameport->node);
 	spin_lock_init(&gameport->timer_lock);
@@ -697,13 +711,12 @@ static int gameport_driver_probe(struct device *dev)
 	return gameport->drv ? 0 : -ENODEV;
 }
 
-static int gameport_driver_remove(struct device *dev)
+static void gameport_driver_remove(struct device *dev)
 {
 	struct gameport *gameport = to_gameport_port(dev);
 	struct gameport_driver *drv = to_gameport_driver(dev->driver);
 
 	drv->disconnect(gameport);
-	return 0;
 }
 
 static void gameport_attach_driver(struct gameport_driver *drv)

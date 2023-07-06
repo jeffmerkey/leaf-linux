@@ -151,7 +151,7 @@ static void scx200_acb_machine(struct scx200_acb_iface *iface, u8 status)
 
 	case state_repeat_start:
 		outb(inb(ACBCTL1) | ACBCTL1_START, ACBCTL1);
-		/* fallthrough */
+		fallthrough;
 
 	case state_quick:
 		if (iface->address_byte & 1) {
@@ -523,14 +523,12 @@ static void scx200_cleanup_iface(struct scx200_acb_iface *iface)
 	kfree(iface);
 }
 
-static int scx200_remove(struct platform_device *pdev)
+static void scx200_remove(struct platform_device *pdev)
 {
 	struct scx200_acb_iface *iface;
 
 	iface = platform_get_drvdata(pdev);
 	scx200_cleanup_iface(iface);
-
-	return 0;
 }
 
 static struct platform_driver scx200_pci_driver = {
@@ -538,7 +536,7 @@ static struct platform_driver scx200_pci_driver = {
 		.name = "cs5535-smb",
 	},
 	.probe = scx200_probe,
-	.remove = scx200_remove,
+	.remove_new = scx200_remove,
 };
 
 static const struct pci_device_id scx200_isa[] = {

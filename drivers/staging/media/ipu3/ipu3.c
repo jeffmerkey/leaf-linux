@@ -261,6 +261,7 @@ int imgu_queue_buffers(struct imgu_device *imgu, bool initial, unsigned int pipe
 
 			ivb = list_first_entry(&imgu_pipe->nodes[node].buffers,
 					       struct imgu_vb2_buffer, list);
+			list_del(&ivb->list);
 			vb = &ivb->vbb.vb2_buf;
 			r = imgu_css_set_parameters(&imgu->css, pipe,
 						    vb2_plane_vaddr(vb, 0));
@@ -274,7 +275,6 @@ int imgu_queue_buffers(struct imgu_device *imgu, bool initial, unsigned int pipe
 			vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
 			dev_dbg(&imgu->pci_dev->dev,
 				"queue user parameters %d to css.", vb->index);
-			list_del(&ivb->list);
 		} else if (imgu_pipe->queue_enabled[node]) {
 			struct imgu_css_buffer *buf =
 				imgu_queue_getbuf(imgu, node, pipe);
@@ -392,10 +392,9 @@ int imgu_s_stream(struct imgu_device *imgu, int enable)
 	}
 
 	/* Set Power */
-	r = pm_runtime_get_sync(dev);
+	r = pm_runtime_resume_and_get(dev);
 	if (r < 0) {
 		dev_err(dev, "failed to set imgu power\n");
-		pm_runtime_put(dev);
 		return r;
 	}
 
@@ -439,6 +438,16 @@ fail_start_streaming:
 	pm_runtime_put(dev);
 
 	return r;
+}
+
+static void imgu_video_nodes_exit(struct imgu_device *imgu)
+{
+	int i;
+
+	for (i = 0; i < IMGU_MAX_PIPE_NUM; i++)
+		imgu_dummybufs_cleanup(imgu, i);
+
+	imgu_v4l2_unregister(imgu);
 }
 
 static int imgu_video_nodes_init(struct imgu_device *imgu)
@@ -490,22 +499,9 @@ static int imgu_video_nodes_init(struct imgu_device *imgu)
 	return 0;
 
 out_cleanup:
-	for (j = 0; j < IMGU_MAX_PIPE_NUM; j++)
-		imgu_dummybufs_cleanup(imgu, j);
-
-	imgu_v4l2_unregister(imgu);
+	imgu_video_nodes_exit(imgu);
 
 	return r;
-}
-
-static void imgu_video_nodes_exit(struct imgu_device *imgu)
-{
-	int i;
-
-	for (i = 0; i < IMGU_MAX_PIPE_NUM; i++)
-		imgu_dummybufs_cleanup(imgu, i);
-
-	imgu_v4l2_unregister(imgu);
 }
 
 /**************** PCI interface ****************/
@@ -675,6 +671,7 @@ static int imgu_pci_probe(struct pci_dev *pci_dev,
 		return r;
 
 	mutex_init(&imgu->lock);
+	mutex_init(&imgu->streaming_lock);
 	atomic_set(&imgu->qbuf_barrier, 0);
 	init_waitqueue_head(&imgu->buf_drain_wq);
 
@@ -738,6 +735,7 @@ out_mmu_exit:
 out_css_powerdown:
 	imgu_css_set_powerdown(&pci_dev->dev, imgu->base);
 out_mutex_destroy:
+	mutex_destroy(&imgu->streaming_lock);
 	mutex_destroy(&imgu->lock);
 
 	return r;
@@ -755,6 +753,7 @@ static void imgu_pci_remove(struct pci_dev *pci_dev)
 	imgu_css_set_powerdown(&pci_dev->dev, imgu->base);
 	imgu_dmamap_exit(imgu);
 	imgu_mmu_exit(imgu->mmu);
+	mutex_destroy(&imgu->streaming_lock);
 	mutex_destroy(&imgu->lock);
 }
 

@@ -65,7 +65,7 @@ static const struct sdio_device_id if_sdio_ids[] = {
 	{ SDIO_DEVICE(SDIO_VENDOR_ID_MARVELL,
 			SDIO_DEVICE_ID_MARVELL_LIBERTAS) },
 	{ SDIO_DEVICE(SDIO_VENDOR_ID_MARVELL,
-			SDIO_DEVICE_ID_MARVELL_8688WLAN) },
+			SDIO_DEVICE_ID_MARVELL_8688_WLAN) },
 	{ /* end: all zeroes */				},
 };
 
@@ -981,7 +981,7 @@ out:
 
 static int if_sdio_enter_deep_sleep(struct lbs_private *priv)
 {
-	int ret = -1;
+	int ret;
 	struct cmd_header cmd;
 
 	memset(&cmd, 0, sizeof(cmd));

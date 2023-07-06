@@ -144,10 +144,15 @@
 #define		VIU_SW_RESET_OSD1               BIT(0)
 #define VIU_MISC_CTRL0 0x1a06
 #define		VIU_CTRL0_VD1_AFBC_MASK         0x170000
+#define		VIU_CTRL0_AFBC_TO_VD1		BIT(20)
 #define VIU_MISC_CTRL1 0x1a07
 #define		MALI_AFBC_MISC			GENMASK(15, 8)
 #define D2D3_INTF_LENGTH 0x1a08
 #define D2D3_INTF_CTRL0 0x1a09
+#define VD1_AFBCD0_MISC_CTRL 0x1a0a
+#define		VD1_AXI_SEL_AFBC		(1 << 12)
+#define		AFBC_VD1_SEL			(1 << 10)
+#define VD2_AFBCD1_MISC_CTRL 0x1a0b
 #define VIU_OSD1_CTRL_STAT 0x1a10
 #define		VIU_OSD1_OSD_BLK_ENABLE         BIT(0)
 #define		VIU_OSD1_OSD_MEM_MODE_LINEAR	BIT(2)
@@ -261,6 +266,12 @@
 #define VIU_OSD_FIFO_DEPTH_VAL(val)      ((val & 0x7f) << 12)
 #define VIU_OSD_WORDS_PER_BURST(words)   (((words & 0x4) >> 1) << 22)
 #define VIU_OSD_FIFO_LIMITS(size)        ((size & 0xf) << 24)
+#define VIU_OSD_BURST_LENGTH_24          (0x0 << 31 | 0x0 << 10)
+#define VIU_OSD_BURST_LENGTH_32          (0x0 << 31 | 0x1 << 10)
+#define VIU_OSD_BURST_LENGTH_48          (0x0 << 31 | 0x2 << 10)
+#define VIU_OSD_BURST_LENGTH_64          (0x0 << 31 | 0x3 << 10)
+#define VIU_OSD_BURST_LENGTH_96          (0x1 << 31 | 0x0 << 10)
+#define VIU_OSD_BURST_LENGTH_128         (0x1 << 31 | 0x1 << 10)
 
 #define VD1_IF0_GEN_REG 0x1a50
 #define VD1_IF0_CANVAS0 0x1a51
@@ -365,6 +376,23 @@
 #define VIU_OSD1_OETF_LUT_ADDR_PORT 0x1add
 #define VIU_OSD1_OETF_LUT_DATA_PORT 0x1ade
 #define AFBC_ENABLE 0x1ae0
+#define AFBC_MODE 0x1ae1
+#define AFBC_SIZE_IN 0x1ae2
+#define AFBC_DEC_DEF_COLOR 0x1ae3
+#define AFBC_CONV_CTRL 0x1ae4
+#define AFBC_LBUF_DEPTH 0x1ae5
+#define AFBC_HEAD_BADDR 0x1ae6
+#define AFBC_BODY_BADDR 0x1ae7
+#define AFBC_SIZE_OUT 0x1ae8
+#define AFBC_OUT_YSCOPE 0x1ae9
+#define AFBC_STAT 0x1aea
+#define AFBC_VD_CFMT_CTRL 0x1aeb
+#define AFBC_VD_CFMT_W 0x1aec
+#define AFBC_MIF_HOR_SCOPE 0x1aed
+#define AFBC_MIF_VER_SCOPE 0x1aee
+#define AFBC_PIXEL_HOR_SCOPE 0x1aef
+#define AFBC_PIXEL_VER_SCOPE 0x1af0
+#define AFBC_VD_CFMT_H 0x1af1
 
 /* vpp */
 #define VPP_DUMMY_DATA 0x1d00
@@ -606,6 +634,11 @@
 #define VPP_WRAP_OSD3_MATRIX_PRE_OFFSET2 0x3dbc
 #define VPP_WRAP_OSD3_MATRIX_EN_CTRL 0x3dbd
 
+/* osd1 HDR */
+#define OSD1_HDR2_CTRL 0x38a0
+#define OSD1_HDR2_CTRL_VDIN0_HDR2_TOP_EN       BIT(13)
+#define OSD1_HDR2_CTRL_REG_ONLY_MAT            BIT(16)
+
 /* osd2 scaler */
 #define OSD2_VSC_PHASE_STEP 0x3d00
 #define OSD2_VSC_INI_PHASE 0x3d01
@@ -779,6 +812,7 @@
 #define VENC_STATA 0x1b6d
 #define VENC_INTCTRL 0x1b6e
 #define		VENC_INTCTRL_ENCI_LNRST_INT_EN  BIT(1)
+#define		VENC_INTCTRL_ENCP_LNRST_INT_EN  BIT(9)
 #define VENC_INTFLAG 0x1b6f
 #define VENC_VIDEO_TST_EN 0x1b70
 #define VENC_VIDEO_TST_MDSEL 0x1b71
@@ -1159,7 +1193,11 @@
 #define ENCL_VIDEO_PB_OFFST 0x1ca5
 #define ENCL_VIDEO_PR_OFFST 0x1ca6
 #define ENCL_VIDEO_MODE 0x1ca7
+#define		ENCL_PX_LN_CNT_SHADOW_EN	BIT(15)
 #define ENCL_VIDEO_MODE_ADV 0x1ca8
+#define		ENCL_VIDEO_MODE_ADV_VFIFO_EN	BIT(3)
+#define		ENCL_VIDEO_MODE_ADV_GAIN_HDTV	BIT(4)
+#define		ENCL_SEL_GAMMA_RGB_IN		BIT(10)
 #define ENCL_DBG_PX_RST 0x1ca9
 #define ENCL_DBG_LN_RST 0x1caa
 #define ENCL_DBG_PX_INT 0x1cab
@@ -1186,11 +1224,14 @@
 #define ENCL_VIDEO_VOFFST 0x1cc0
 #define ENCL_VIDEO_RGB_CTRL 0x1cc1
 #define ENCL_VIDEO_FILT_CTRL 0x1cc2
+#define		ENCL_VIDEO_FILT_CTRL_BYPASS_FILTER	BIT(12)
 #define ENCL_VIDEO_OFLD_VPEQ_OFST 0x1cc3
 #define ENCL_VIDEO_OFLD_VOAV_OFST 0x1cc4
 #define ENCL_VIDEO_MATRIX_CB 0x1cc5
 #define ENCL_VIDEO_MATRIX_CR 0x1cc6
 #define ENCL_VIDEO_RGBIN_CTRL 0x1cc7
+#define		ENCL_VIDEO_RGBIN_RGB	BIT(0)
+#define		ENCL_VIDEO_RGBIN_ZBLK	BIT(1)
 #define ENCL_MAX_LINE_SWITCH_POINT 0x1cc8
 #define ENCL_DACSEL_0 0x1cc9
 #define ENCL_DACSEL_1 0x1cca
@@ -1267,13 +1308,28 @@
 #define RDMA_STATUS2 0x1116
 #define RDMA_STATUS3 0x1117
 #define L_GAMMA_CNTL_PORT 0x1400
+#define		L_GAMMA_CNTL_PORT_VCOM_POL	BIT(7)	/* RW */
+#define		L_GAMMA_CNTL_PORT_RVS_OUT	BIT(6)	/* RW */
+#define		L_GAMMA_CNTL_PORT_ADR_RDY	BIT(5)	/* Read Only */
+#define		L_GAMMA_CNTL_PORT_WR_RDY	BIT(4)	/* Read Only */
+#define		L_GAMMA_CNTL_PORT_RD_RDY	BIT(3)	/* Read Only */
+#define		L_GAMMA_CNTL_PORT_TR		BIT(2)	/* RW */
+#define		L_GAMMA_CNTL_PORT_SET		BIT(1)	/* RW */
+#define		L_GAMMA_CNTL_PORT_EN		BIT(0)	/* RW */
 #define L_GAMMA_DATA_PORT 0x1401
 #define L_GAMMA_ADDR_PORT 0x1402
+#define		L_GAMMA_ADDR_PORT_RD		BIT(12)
+#define		L_GAMMA_ADDR_PORT_AUTO_INC	BIT(11)
+#define		L_GAMMA_ADDR_PORT_SEL_R		BIT(10)
+#define		L_GAMMA_ADDR_PORT_SEL_G		BIT(9)
+#define		L_GAMMA_ADDR_PORT_SEL_B		BIT(8)
+#define		L_GAMMA_ADDR_PORT_ADDR		GENMASK(7, 0)
 #define L_GAMMA_VCOM_HSWITCH_ADDR 0x1403
 #define L_RGB_BASE_ADDR 0x1405
 #define L_RGB_COEFF_ADDR 0x1406
 #define L_POL_CNTL_ADDR 0x1407
 #define L_DITH_CNTL_ADDR 0x1408
+#define		L_DITH_CNTL_DITH10_EN	BIT(10)
 #define L_GAMMA_PROBE_CTRL 0x1409
 #define L_GAMMA_PROBE_COLOR_L 0x140a
 #define L_GAMMA_PROBE_COLOR_H 0x140b
@@ -1330,6 +1386,8 @@
 #define L_LCD_PWM1_HI_ADDR 0x143f
 #define L_INV_CNT_ADDR 0x1440
 #define L_TCON_MISC_SEL_ADDR 0x1441
+#define		L_TCON_MISC_SEL_STV1	BIT(4)
+#define		L_TCON_MISC_SEL_STV2	BIT(5)
 #define L_DUAL_PORT_CNTL_ADDR 0x1442
 #define MLVDS_CLK_CTL1_HI 0x1443
 #define MLVDS_CLK_CTL1_LO 0x1444

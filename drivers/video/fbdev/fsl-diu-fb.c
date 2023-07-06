@@ -1287,7 +1287,7 @@ static int fsl_diu_ioctl(struct fb_info *info, unsigned int cmd,
 		dev_warn(info->dev,
 			 "MFB_SET_PIXFMT value of 0x%08x is deprecated.\n",
 			 MFB_SET_PIXFMT_OLD);
-		/* fall through */
+		fallthrough;
 	case MFB_SET_PIXFMT:
 		if (copy_from_user(&pix_fmt, buf, sizeof(pix_fmt)))
 			return -EFAULT;
@@ -1297,7 +1297,7 @@ static int fsl_diu_ioctl(struct fb_info *info, unsigned int cmd,
 		dev_warn(info->dev,
 			 "MFB_GET_PIXFMT value of 0x%08x is deprecated.\n",
 			 MFB_GET_PIXFMT_OLD);
-		/* fall through */
+		fallthrough;
 	case MFB_GET_PIXFMT:
 		pix_fmt = ad->pix_fmt;
 		if (copy_to_user(buf, &pix_fmt, sizeof(pix_fmt)))
@@ -1425,7 +1425,6 @@ static int fsl_diu_open(struct fb_info *info, int user)
 static int fsl_diu_release(struct fb_info *info, int user)
 {
 	struct mfb_info *mfbi = info->par;
-	int res = 0;
 
 	spin_lock(&diu_lock);
 	mfbi->count--;
@@ -1447,7 +1446,7 @@ static int fsl_diu_release(struct fb_info *info, int user)
 	}
 
 	spin_unlock(&diu_lock);
-	return res;
+	return 0;
 }
 
 static const struct fb_ops fsl_diu_ops = {
@@ -1824,7 +1823,7 @@ error:
 	return ret;
 }
 
-static int fsl_diu_remove(struct platform_device *pdev)
+static void fsl_diu_remove(struct platform_device *pdev)
 {
 	struct fsl_diu_data *data;
 	int i;
@@ -1838,8 +1837,6 @@ static int fsl_diu_remove(struct platform_device *pdev)
 		uninstall_fb(&data->fsl_diu_info[i]);
 
 	iounmap(data->diu_reg);
-
-	return 0;
 }
 
 #ifndef MODULE
@@ -1886,7 +1883,7 @@ static struct platform_driver fsl_diu_driver = {
 		.of_match_table = fsl_diu_match,
 	},
 	.probe  	= fsl_diu_probe,
-	.remove 	= fsl_diu_remove,
+	.remove_new 	= fsl_diu_remove,
 	.suspend	= fsl_diu_suspend,
 	.resume		= fsl_diu_resume,
 };

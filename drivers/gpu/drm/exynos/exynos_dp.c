@@ -10,6 +10,7 @@
 #include <linux/component.h>
 #include <linux/err.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -25,6 +26,7 @@
 #include <drm/drm_panel.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_simple_kms_helper.h>
 #include <drm/exynos_drm.h>
 
 #include "exynos_drm_crtc.h"
@@ -108,11 +110,8 @@ static int exynos_dp_bridge_attach(struct analogix_dp_plat_data *plat_data,
 	if (dp->ptn_bridge) {
 		ret = drm_bridge_attach(&dp->encoder, dp->ptn_bridge, bridge,
 					0);
-		if (ret) {
-			DRM_DEV_ERROR(dp->dev,
-				      "Failed to attach bridge to drm\n");
+		if (ret)
 			return ret;
-		}
 	}
 
 	return 0;
@@ -133,10 +132,6 @@ static const struct drm_encoder_helper_funcs exynos_dp_encoder_helper_funcs = {
 	.mode_set = exynos_dp_mode_set,
 	.enable = exynos_dp_nop,
 	.disable = exynos_dp_nop,
-};
-
-static const struct drm_encoder_funcs exynos_dp_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
 };
 
 static int exynos_dp_dt_parse_panel(struct exynos_dp_device *dp)
@@ -167,8 +162,7 @@ static int exynos_dp_bind(struct device *dev, struct device *master, void *data)
 			return ret;
 	}
 
-	drm_encoder_init(drm_dev, encoder, &exynos_dp_encoder_funcs,
-			 DRM_MODE_ENCODER_TMDS, NULL);
+	drm_simple_encoder_init(drm_dev, encoder, DRM_MODE_ENCODER_TMDS);
 
 	drm_encoder_helper_add(encoder, &exynos_dp_encoder_helper_funcs);
 
@@ -266,7 +260,6 @@ static int exynos_dp_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
 static int exynos_dp_suspend(struct device *dev)
 {
 	struct exynos_dp_device *dp = dev_get_drvdata(dev);
@@ -280,13 +273,9 @@ static int exynos_dp_resume(struct device *dev)
 
 	return analogix_dp_resume(dp->adp);
 }
-#endif
 
-static const struct dev_pm_ops exynos_dp_pm_ops = {
-	SET_RUNTIME_PM_OPS(exynos_dp_suspend, exynos_dp_resume, NULL)
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
-};
+static DEFINE_RUNTIME_DEV_PM_OPS(exynos_dp_pm_ops, exynos_dp_suspend,
+				 exynos_dp_resume, NULL);
 
 static const struct of_device_id exynos_dp_match[] = {
 	{ .compatible = "samsung,exynos5-dp" },
@@ -300,7 +289,7 @@ struct platform_driver dp_driver = {
 	.driver		= {
 		.name	= "exynos-dp",
 		.owner	= THIS_MODULE,
-		.pm	= &exynos_dp_pm_ops,
+		.pm	= pm_ptr(&exynos_dp_pm_ops),
 		.of_match_table = exynos_dp_match,
 	},
 };

@@ -26,6 +26,12 @@ properties:
   clocks:
     maxItems: 1
 
+  dmas:
+    maxItems: 1
+
+  dma-names:
+    const: rx-tx
+
   reset-names:
     description: |
       There are three reset signals at maximum
@@ -35,19 +41,29 @@ properties:
     oneOf:
       - const: host
       - items:
-        - const: host
-        - const: bridge
+          - const: host
+          - const: bridge
       - items:
-        - const: host
-        - const: hw
+          - const: host
+          - const: hw
       - items:
-        - const: host
-        - const: bridge
-        - const: hw
+          - const: host
+          - const: bridge
+          - const: hw
 
   resets:
     minItems: 1
     maxItems: 3
+
+  socionext,syscon-uhs-mode:
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: phandle to syscon that configures UHS mode
+          - description: ID of SD instance
+    description:
+      A phandle to syscon with one argument that configures UHS mode.
+      The argument is the ID of SD instance.
 
 allOf:
   - $ref: mmc-controller.yaml
@@ -76,6 +92,8 @@ required:
   - clocks
   - reset-names
   - resets
+
+unevaluatedProperties: false
 
 examples:
   - |

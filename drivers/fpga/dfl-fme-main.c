@@ -265,7 +265,7 @@ static const struct hwmon_ops thermal_hwmon_ops = {
 	.read = thermal_hwmon_read,
 };
 
-static const struct hwmon_channel_info *thermal_hwmon_info[] = {
+static const struct hwmon_channel_info * const thermal_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_EMERGENCY |
 				 HWMON_T_MAX   | HWMON_T_MAX_ALARM |
 				 HWMON_T_CRIT  | HWMON_T_CRIT_ALARM),
@@ -465,7 +465,7 @@ static const struct hwmon_ops power_hwmon_ops = {
 	.write = power_hwmon_write,
 };
 
-static const struct hwmon_channel_info *power_hwmon_info[] = {
+static const struct hwmon_channel_info * const power_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(power, HWMON_P_INPUT |
 				  HWMON_P_MAX   | HWMON_P_MAX_ALARM |
 				  HWMON_P_CRIT  | HWMON_P_CRIT_ALARM),
@@ -580,6 +580,10 @@ static struct dfl_feature_driver fme_feature_drvs[] = {
 		.ops = &fme_power_mgmt_ops,
 	},
 	{
+		.id_table = fme_perf_id_table,
+		.ops = &fme_perf_ops,
+	},
+	{
 		.ops = NULL,
 	},
 };
@@ -600,23 +604,34 @@ static int fme_open(struct inode *inode, struct file *filp)
 	if (WARN_ON(!pdata))
 		return -ENODEV;
 
-	ret = dfl_feature_dev_use_begin(pdata);
-	if (ret)
-		return ret;
+	mutex_lock(&pdata->lock);
+	ret = dfl_feature_dev_use_begin(pdata, filp->f_flags & O_EXCL);
+	if (!ret) {
+		dev_dbg(&fdev->dev, "Device File Opened %d Times\n",
+			dfl_feature_dev_use_count(pdata));
+		filp->private_data = pdata;
+	}
+	mutex_unlock(&pdata->lock);
 
-	dev_dbg(&fdev->dev, "Device File Open\n");
-	filp->private_data = pdata;
-
-	return 0;
+	return ret;
 }
 
 static int fme_release(struct inode *inode, struct file *filp)
 {
 	struct dfl_feature_platform_data *pdata = filp->private_data;
 	struct platform_device *pdev = pdata->dev;
+	struct dfl_feature *feature;
 
 	dev_dbg(&pdev->dev, "Device File Release\n");
+
+	mutex_lock(&pdata->lock);
 	dfl_feature_dev_use_end(pdata);
+
+	if (!dfl_feature_dev_use_count(pdata))
+		dfl_fpga_dev_for_each_feature(pdata, feature)
+			dfl_fpga_set_irq_triggers(feature, 0,
+						  feature->nr_irqs, NULL);
+	mutex_unlock(&pdata->lock);
 
 	return 0;
 }

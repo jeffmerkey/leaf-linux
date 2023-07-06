@@ -88,13 +88,13 @@ static struct time_namespace *clone_time_ns(struct user_namespace *user_ns,
 		goto fail;
 
 	err = -ENOMEM;
-	ns = kmalloc(sizeof(*ns), GFP_KERNEL);
+	ns = kmalloc(sizeof(*ns), GFP_KERNEL_ACCOUNT);
 	if (!ns)
 		goto fail_dec;
 
-	kref_init(&ns->kref);
+	refcount_set(&ns->ns.count, 1);
 
-	ns->vvar_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	ns->vvar_page = alloc_page(GFP_KERNEL_ACCOUNT | __GFP_ZERO);
 	if (!ns->vvar_page)
 		goto fail_free;
 
@@ -192,6 +192,24 @@ static void timens_setup_vdso_data(struct vdso_data *vdata,
 	offset[CLOCK_BOOTTIME_ALARM]	= boottime;
 }
 
+struct page *find_timens_vvar_page(struct vm_area_struct *vma)
+{
+	if (likely(vma->vm_mm == current->mm))
+		return current->nsproxy->time_ns->vvar_page;
+
+	/*
+	 * VM_PFNMAP | VM_IO protect .fault() handler from being called
+	 * through interfaces like /proc/$pid/mem or
+	 * process_vm_{readv,writev}() as long as there's no .access()
+	 * in special_mapping_vmops().
+	 * For more details check_vma_flags() and __access_remote_vm()
+	 */
+
+	WARN(1, "vvar_page accessed remotely");
+
+	return NULL;
+}
+
 /*
  * Protects possibly multiple offsets writers racing each other
  * and tasks entering the namespace.
@@ -226,11 +244,8 @@ out:
 	mutex_unlock(&offset_lock);
 }
 
-void free_time_ns(struct kref *kref)
+void free_time_ns(struct time_namespace *ns)
 {
-	struct time_namespace *ns;
-
-	ns = container_of(kref, struct time_namespace, kref);
 	dec_time_namespaces(ns->ucounts);
 	put_user_ns(ns->user_ns);
 	ns_free_inum(&ns->ns);
@@ -280,23 +295,23 @@ static void timens_put(struct ns_common *ns)
 	put_time_ns(to_time_ns(ns));
 }
 
-static int timens_install(struct nsproxy *nsproxy, struct ns_common *new)
+void timens_commit(struct task_struct *tsk, struct time_namespace *ns)
 {
+	timens_set_vvar_page(tsk, ns);
+	vdso_join_timens(tsk, ns);
+}
+
+static int timens_install(struct nsset *nsset, struct ns_common *new)
+{
+	struct nsproxy *nsproxy = nsset->nsproxy;
 	struct time_namespace *ns = to_time_ns(new);
-	int err;
 
 	if (!current_is_single_threaded())
 		return -EUSERS;
 
 	if (!ns_capable(ns->user_ns, CAP_SYS_ADMIN) ||
-	    !ns_capable(current_user_ns(), CAP_SYS_ADMIN))
+	    !ns_capable(nsset->cred->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-
-	timens_set_vvar_page(current, ns);
-
-	err = vdso_join_timens(current, ns);
-	if (err)
-		return err;
 
 	get_time_ns(ns);
 	put_time_ns(nsproxy->time_ns);
@@ -308,27 +323,20 @@ static int timens_install(struct nsproxy *nsproxy, struct ns_common *new)
 	return 0;
 }
 
-int timens_on_fork(struct nsproxy *nsproxy, struct task_struct *tsk)
+void timens_on_fork(struct nsproxy *nsproxy, struct task_struct *tsk)
 {
 	struct ns_common *nsc = &nsproxy->time_ns_for_children->ns;
 	struct time_namespace *ns = to_time_ns(nsc);
-	int err;
 
 	/* create_new_namespaces() already incremented the ref counter */
 	if (nsproxy->time_ns == nsproxy->time_ns_for_children)
-		return 0;
-
-	timens_set_vvar_page(tsk, ns);
-
-	err = vdso_join_timens(tsk, ns);
-	if (err)
-		return err;
+		return;
 
 	get_time_ns(ns);
 	put_time_ns(nsproxy->time_ns);
 	nsproxy->time_ns = ns;
 
-	return 0;
+	timens_commit(tsk, ns);
 }
 
 static struct user_namespace *timens_owner(struct ns_common *ns)
@@ -469,15 +477,9 @@ const struct proc_ns_operations timens_for_children_operations = {
 };
 
 struct time_namespace init_time_ns = {
-	.kref		= KREF_INIT(3),
+	.ns.count	= REFCOUNT_INIT(3),
 	.user_ns	= &init_user_ns,
 	.ns.inum	= PROC_TIME_INIT_INO,
 	.ns.ops		= &timens_operations,
 	.frozen_offsets	= true,
 };
-
-static int __init time_ns_init(void)
-{
-	return 0;
-}
-subsys_initcall(time_ns_init);

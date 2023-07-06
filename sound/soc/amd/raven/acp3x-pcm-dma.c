@@ -15,7 +15,7 @@
 
 #include "acp3x.h"
 
-#define DRV_NAME "acp3x-i2s-audio"
+#define DRV_NAME "acp3x_rv_i2s_dma"
 
 static const struct snd_pcm_hardware acp3x_pcm_hardware_playback = {
 	.info = SNDRV_PCM_INFO_INTERLEAVED |
@@ -24,8 +24,7 @@ static const struct snd_pcm_hardware acp3x_pcm_hardware_playback = {
 		SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
 		SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE |  SNDRV_PCM_FMTBIT_S8 |
-		   SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S24_LE |
-		   SNDRV_PCM_FMTBIT_S32_LE,
+		   SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S32_LE,
 	.channels_min = 2,
 	.channels_max = 8,
 	.rates = SNDRV_PCM_RATE_8000_96000,
@@ -45,8 +44,7 @@ static const struct snd_pcm_hardware acp3x_pcm_hardware_capture = {
 		SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
 		SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S8 |
-		   SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S24_LE |
-		   SNDRV_PCM_FMTBIT_S32_LE,
+		   SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S32_LE,
 	.channels_min = 2,
 	.channels_max = 2,
 	.rates = SNDRV_PCM_RATE_8000_48000,
@@ -149,7 +147,7 @@ static void config_acp3x_dma(struct i2s_stream_instance *rtd, int direction)
 		high |= BIT(31);
 		rv_writel(high, rtd->acp3x_base + mmACP_SCRATCH_REG_0 + val
 				+ 4);
-		/* Move to next physically contiguos page */
+		/* Move to next physically contiguous page */
 		val += 8;
 		addr += PAGE_SIZE;
 	}
@@ -217,7 +215,7 @@ static int acp3x_dma_open(struct snd_soc_component *component,
 	int ret;
 
 	runtime = substream->runtime;
-	prtd = substream->private_data;
+	prtd = asoc_substream_to_rtd(substream);
 	component = snd_soc_rtdcom_lookup(prtd, DRV_NAME);
 	adata = dev_get_drvdata(component->dev);
 	i2s_data = kzalloc(sizeof(*i2s_data), GFP_KERNEL);
@@ -237,18 +235,6 @@ static int acp3x_dma_open(struct snd_soc_component *component,
 		return ret;
 	}
 
-	if (!adata->play_stream && !adata->capture_stream &&
-		adata->i2ssp_play_stream && !adata->i2ssp_capture_stream)
-		rv_writel(1, adata->acp3x_base + mmACP_EXTERNAL_INTR_ENB);
-
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		adata->play_stream = substream;
-		adata->i2ssp_play_stream = substream;
-	} else {
-		adata->capture_stream = substream;
-		adata->i2ssp_capture_stream = substream;
-	}
-
 	i2s_data->acp3x_base = adata->acp3x_base;
 	runtime->private_data = i2s_data;
 	return ret;
@@ -263,25 +249,44 @@ static int acp3x_dma_hw_params(struct snd_soc_component *component,
 	struct snd_soc_pcm_runtime *prtd;
 	struct snd_soc_card *card;
 	struct acp3x_platform_info *pinfo;
+	struct i2s_dev_data *adata;
 	u64 size;
 
-	prtd = substream->private_data;
+	prtd = asoc_substream_to_rtd(substream);
 	card = prtd->card;
 	pinfo = snd_soc_card_get_drvdata(card);
+	adata = dev_get_drvdata(component->dev);
 	rtd = substream->runtime->private_data;
 	if (!rtd)
 		return -EINVAL;
 
-	if (pinfo)
-		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+	if (pinfo) {
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 			rtd->i2s_instance = pinfo->play_i2s_instance;
-		else
+			switch (rtd->i2s_instance) {
+			case I2S_BT_INSTANCE:
+				adata->play_stream = substream;
+				break;
+			case I2S_SP_INSTANCE:
+			default:
+				adata->i2ssp_play_stream = substream;
+			}
+		} else {
 			rtd->i2s_instance = pinfo->cap_i2s_instance;
-	else
+			switch (rtd->i2s_instance) {
+			case I2S_BT_INSTANCE:
+				adata->capture_stream = substream;
+				break;
+			case I2S_SP_INSTANCE:
+			default:
+				adata->i2ssp_capture_stream = substream;
+			}
+		}
+	} else {
 		pr_err("pinfo failed\n");
-
+	}
 	size = params_buffer_bytes(params);
-	rtd->dma_addr = substream->dma_buffer.addr;
+	rtd->dma_addr = substream->runtime->dma_addr;
 	rtd->num_pages = (PAGE_ALIGN(size) >> PAGE_SHIFT);
 	config_acp3x_dma(rtd, substream->stream);
 	return 0;
@@ -290,24 +295,12 @@ static int acp3x_dma_hw_params(struct snd_soc_component *component,
 static snd_pcm_uframes_t acp3x_dma_pointer(struct snd_soc_component *component,
 					   struct snd_pcm_substream *substream)
 {
-	struct snd_soc_pcm_runtime *prtd;
-	struct snd_soc_card *card;
-	struct acp3x_platform_info *pinfo;
 	struct i2s_stream_instance *rtd;
 	u32 pos;
 	u32 buffersize;
 	u64 bytescount;
 
-	prtd = substream->private_data;
-	card = prtd->card;
 	rtd = substream->runtime->private_data;
-	pinfo = snd_soc_card_get_drvdata(card);
-	if (pinfo) {
-		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-			rtd->i2s_instance = pinfo->play_i2s_instance;
-		else
-			rtd->i2s_instance = pinfo->cap_i2s_instance;
-	}
 
 	buffersize = frames_to_bytes(substream->runtime,
 				     substream->runtime->buffer_size);
@@ -327,37 +320,40 @@ static int acp3x_dma_new(struct snd_soc_component *component,
 	return 0;
 }
 
-static int acp3x_dma_mmap(struct snd_soc_component *component,
-			  struct snd_pcm_substream *substream,
-			  struct vm_area_struct *vma)
-{
-	return snd_pcm_lib_default_mmap(substream, vma);
-}
-
 static int acp3x_dma_close(struct snd_soc_component *component,
 			   struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *prtd;
 	struct i2s_dev_data *adata;
+	struct i2s_stream_instance *ins;
 
-	prtd = substream->private_data;
+	prtd = asoc_substream_to_rtd(substream);
 	component = snd_soc_rtdcom_lookup(prtd, DRV_NAME);
 	adata = dev_get_drvdata(component->dev);
+	ins = substream->runtime->private_data;
+	if (!ins)
+		return -EINVAL;
 
-
-	/* Disable ACP irq, when the current stream is being closed and
-	 * another stream is also not active.
-	 */
-	if (!adata->play_stream && !adata->capture_stream &&
-		!adata->i2ssp_play_stream && !adata->i2ssp_capture_stream)
-		rv_writel(0, adata->acp3x_base + mmACP_EXTERNAL_INTR_ENB);
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		adata->play_stream = NULL;
-		adata->i2ssp_play_stream = NULL;
+		switch (ins->i2s_instance) {
+		case I2S_BT_INSTANCE:
+			adata->play_stream = NULL;
+			break;
+		case I2S_SP_INSTANCE:
+		default:
+			adata->i2ssp_play_stream = NULL;
+		}
 	} else {
-		adata->capture_stream = NULL;
-		adata->i2ssp_capture_stream = NULL;
+		switch (ins->i2s_instance) {
+		case I2S_BT_INSTANCE:
+			adata->capture_stream = NULL;
+			break;
+		case I2S_SP_INSTANCE:
+		default:
+			adata->i2ssp_capture_stream = NULL;
+		}
 	}
+
 	return 0;
 }
 
@@ -367,7 +363,6 @@ static const struct snd_soc_component_driver acp3x_i2s_component = {
 	.close		= acp3x_dma_close,
 	.hw_params	= acp3x_dma_hw_params,
 	.pointer	= acp3x_dma_pointer,
-	.mmap		= acp3x_dma_mmap,
 	.pcm_construct	= acp3x_dma_new,
 };
 
@@ -399,13 +394,10 @@ static int acp3x_audio_probe(struct platform_device *pdev)
 	if (!adata->acp3x_base)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "IORESOURCE_IRQ FAILED\n");
-		return -ENODEV;
-	}
-
-	adata->i2s_irq = res->start;
+	status = platform_get_irq(pdev, 0);
+	if (status < 0)
+		return status;
+	adata->i2s_irq = status;
 
 	dev_set_drvdata(&pdev->dev, adata);
 	status = devm_snd_soc_register_component(&pdev->dev,
@@ -424,15 +416,15 @@ static int acp3x_audio_probe(struct platform_device *pdev)
 
 	pm_runtime_set_autosuspend_delay(&pdev->dev, 2000);
 	pm_runtime_use_autosuspend(&pdev->dev);
+	pm_runtime_mark_last_busy(&pdev->dev);
+	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
-	pm_runtime_allow(&pdev->dev);
 	return 0;
 }
 
-static int acp3x_audio_remove(struct platform_device *pdev)
+static void acp3x_audio_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
-	return 0;
 }
 
 static int acp3x_resume(struct device *dev)
@@ -517,7 +509,7 @@ static const struct dev_pm_ops acp3x_pm_ops = {
 
 static struct platform_driver acp3x_dma_driver = {
 	.probe = acp3x_audio_probe,
-	.remove = acp3x_audio_remove,
+	.remove_new = acp3x_audio_remove,
 	.driver = {
 		.name = "acp3x_rv_i2s_dma",
 		.pm = &acp3x_pm_ops,
@@ -531,4 +523,4 @@ MODULE_AUTHOR("Maruthi.Bayyavarapu@amd.com");
 MODULE_AUTHOR("Vijendar.Mukunda@amd.com");
 MODULE_DESCRIPTION("AMD ACP 3.x PCM Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_ALIAS("platform:" DRV_NAME);
+MODULE_ALIAS("platform:"DRV_NAME);

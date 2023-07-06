@@ -7,14 +7,18 @@ powerpc
 .. toctree::
     :maxdepth: 1
 
+    associativity
+    booting
     bootwrapper
     cpu_families
     cpu_features
     cxl
     cxlflash
     dawr-power9
+    dexcr
     dscr
     eeh-pci-error-recovery
+    elf_hwcaps
     elfnote
     firmware-assisted-dump
     hvcs
@@ -30,6 +34,10 @@ powerpc
     syscall64-abi
     transactional_memory
     ultravisor
+    vas-api
+    vcpudispatch_stats
+
+    features
 
 .. only::  subproject and html
 

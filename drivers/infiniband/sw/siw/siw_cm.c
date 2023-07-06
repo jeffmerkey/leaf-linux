@@ -16,6 +16,7 @@
 #include <net/tcp.h>
 #include <linux/inet.h>
 #include <linux/tcp.h>
+#include <trace/events/sock.h>
 
 #include <rdma/iw_cm.h>
 #include <rdma/ib_verbs.h>
@@ -108,6 +109,8 @@ static void siw_rtr_data_ready(struct sock *sk)
 	struct siw_cep *cep;
 	struct siw_qp *qp = NULL;
 	read_descriptor_t rd_desc;
+
+	trace_sk_data_ready(sk);
 
 	read_lock(&sk->sk_callback_lock);
 
@@ -725,10 +728,10 @@ static int siw_proc_mpareply(struct siw_cep *cep)
 	enum mpa_v2_ctrl mpa_p2p_mode = MPA_V2_RDMA_NO_RTR;
 
 	rv = siw_recv_mpa_rr(cep);
-	if (rv != -EAGAIN)
-		siw_cancel_mpatimer(cep);
 	if (rv)
 		goto out_err;
+
+	siw_cancel_mpatimer(cep);
 
 	rep = &cep->mpa.hdr;
 
@@ -895,7 +898,8 @@ static int siw_proc_mpareply(struct siw_cep *cep)
 	}
 
 out_err:
-	siw_cm_upcall(cep, IW_CM_EVENT_CONNECT_REPLY, -EINVAL);
+	if (rv != -EAGAIN)
+		siw_cm_upcall(cep, IW_CM_EVENT_CONNECT_REPLY, -EINVAL);
 
 	return rv;
 }
@@ -947,16 +951,8 @@ static void siw_accept_newconn(struct siw_cep *cep)
 	siw_cep_get(new_cep);
 	new_s->sk->sk_user_data = new_cep;
 
-	if (siw_tcp_nagle == false) {
-		int val = 1;
-
-		rv = kernel_setsockopt(new_s, SOL_TCP, TCP_NODELAY,
-				       (char *)&val, sizeof(val));
-		if (rv) {
-			siw_dbg_cep(cep, "setsockopt NODELAY error: %d\n", rv);
-			goto error;
-		}
-	}
+	if (siw_tcp_nagle == false)
+		tcp_sock_set_nodelay(new_s->sk);
 	new_cep->state = SIW_EPSTATE_AWAIT_MPAREQ;
 
 	rv = siw_cm_queue_work(new_cep, SIW_CM_WORK_MPATIMEOUT);
@@ -976,14 +972,15 @@ static void siw_accept_newconn(struct siw_cep *cep)
 
 		siw_cep_set_inuse(new_cep);
 		rv = siw_proc_mpareq(new_cep);
-		siw_cep_set_free(new_cep);
-
 		if (rv != -EAGAIN) {
 			siw_cep_put(cep);
 			new_cep->listen_cep = NULL;
-			if (rv)
+			if (rv) {
+				siw_cep_set_free(new_cep);
 				goto error;
+			}
 		}
+		siw_cep_set_free(new_cep);
 	}
 	return;
 
@@ -1055,7 +1052,7 @@ static void siw_cm_work_handler(struct work_struct *w)
 					    cep->state);
 			}
 		}
-		if (rv && rv != EAGAIN)
+		if (rv && rv != -EAGAIN)
 			release_cep = 1;
 		break;
 
@@ -1222,6 +1219,8 @@ static void siw_cm_llp_data_ready(struct sock *sk)
 {
 	struct siw_cep *cep;
 
+	trace_sk_data_ready(sk);
+
 	read_lock(&sk->sk_callback_lock);
 
 	cep = sk_to_cep(sk);
@@ -1232,12 +1231,10 @@ static void siw_cm_llp_data_ready(struct sock *sk)
 
 	switch (cep->state) {
 	case SIW_EPSTATE_RDMA_MODE:
-		/* fall through */
 	case SIW_EPSTATE_LISTENING:
 		break;
 
 	case SIW_EPSTATE_AWAIT_MPAREQ:
-		/* fall through */
 	case SIW_EPSTATE_AWAIT_MPAREP:
 		siw_cm_queue_work(cep, SIW_CM_WORK_READ_MPAHDR);
 		break;
@@ -1310,19 +1307,22 @@ static void siw_cm_llp_state_change(struct sock *sk)
 }
 
 static int kernel_bindconnect(struct socket *s, struct sockaddr *laddr,
-			      struct sockaddr *raddr)
+			      struct sockaddr *raddr, bool afonly)
 {
-	int rv, flags = 0, s_val = 1;
+	int rv, flags = 0;
 	size_t size = laddr->sa_family == AF_INET ?
 		sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
 
 	/*
 	 * Make address available again asap.
 	 */
-	rv = kernel_setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&s_val,
-			       sizeof(s_val));
-	if (rv < 0)
-		return rv;
+	sock_set_reuseaddr(s->sk);
+
+	if (afonly) {
+		rv = ip6_sock_set_v6only(s->sk);
+		if (rv)
+			return rv;
+	}
 
 	rv = s->ops->bind(s, laddr, size);
 	if (rv < 0)
@@ -1384,21 +1384,13 @@ int siw_connect(struct iw_cm_id *id, struct iw_cm_conn_param *params)
 	 * mode. Might be reconsidered for async connection setup at
 	 * TCP level.
 	 */
-	rv = kernel_bindconnect(s, laddr, raddr);
+	rv = kernel_bindconnect(s, laddr, raddr, id->afonly);
 	if (rv != 0) {
 		siw_dbg_qp(qp, "kernel_bindconnect: error %d\n", rv);
 		goto error;
 	}
-	if (siw_tcp_nagle == false) {
-		int val = 1;
-
-		rv = kernel_setsockopt(s, SOL_TCP, TCP_NODELAY, (char *)&val,
-				       sizeof(val));
-		if (rv) {
-			siw_dbg_qp(qp, "setsockopt NODELAY error: %d\n", rv);
-			goto error;
-		}
-	}
+	if (siw_tcp_nagle == false)
+		tcp_sock_set_nodelay(s->sk);
 	cep = siw_cep_alloc(sdev);
 	if (!cep) {
 		rv = -ENOMEM;
@@ -1781,7 +1773,7 @@ int siw_create_listen(struct iw_cm_id *id, int backlog)
 	struct siw_cep *cep = NULL;
 	struct siw_device *sdev = to_siw_dev(id->device);
 	int addr_family = id->local_addr.ss_family;
-	int rv = 0, s_val;
+	int rv = 0;
 
 	if (addr_family != AF_INET && addr_family != AF_INET6)
 		return -EAFNOSUPPORT;
@@ -1793,13 +1785,8 @@ int siw_create_listen(struct iw_cm_id *id, int backlog)
 	/*
 	 * Allow binding local port when still in TIME_WAIT from last close.
 	 */
-	s_val = 1;
-	rv = kernel_setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&s_val,
-			       sizeof(s_val));
-	if (rv) {
-		siw_dbg(id->device, "setsockopt error: %d\n", rv);
-		goto error;
-	}
+	sock_set_reuseaddr(s->sk);
+
 	if (addr_family == AF_INET) {
 		struct sockaddr_in *laddr = &to_sockaddr_in(id->local_addr);
 
@@ -1811,6 +1798,15 @@ int siw_create_listen(struct iw_cm_id *id, int backlog)
 				  sizeof(struct sockaddr_in));
 	} else {
 		struct sockaddr_in6 *laddr = &to_sockaddr_in6(id->local_addr);
+
+		if (id->afonly) {
+			rv = ip6_sock_set_v6only(s->sk);
+			if (rv) {
+				siw_dbg(id->device,
+					"ip6_sock_set_v6only erro: %d\n", rv);
+				goto error;
+			}
+		}
 
 		/* For wildcard addr, limit binding to current device only */
 		if (ipv6_addr_any(&laddr->sin6_addr))
@@ -1962,8 +1958,6 @@ int siw_cm_init(void)
 
 void siw_cm_exit(void)
 {
-	if (siw_cm_wq) {
-		flush_workqueue(siw_cm_wq);
+	if (siw_cm_wq)
 		destroy_workqueue(siw_cm_wq);
-	}
 }

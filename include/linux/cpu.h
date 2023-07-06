@@ -64,6 +64,12 @@ extern ssize_t cpu_show_tsx_async_abort(struct device *dev,
 					char *buf);
 extern ssize_t cpu_show_itlb_multihit(struct device *dev,
 				      struct device_attribute *attr, char *buf);
+extern ssize_t cpu_show_srbds(struct device *dev, struct device_attribute *attr, char *buf);
+extern ssize_t cpu_show_mmio_stale_data(struct device *dev,
+					struct device_attribute *attr,
+					char *buf);
+extern ssize_t cpu_show_retbleed(struct device *dev,
+				 struct device_attribute *attr, char *buf);
 
 extern __printf(4, 5)
 struct device *cpu_device_create(struct device *parent, void *drvdata,
@@ -107,8 +113,12 @@ static inline void cpu_maps_update_done(void)
 {
 }
 
+static inline int add_cpu(unsigned int cpu) { return 0;}
+
 #endif /* CONFIG_SMP */
 extern struct bus_type cpu_subsys;
+
+extern int lockdep_is_cpus_held(void);
 
 #ifdef CONFIG_HOTPLUG_CPU
 extern void cpus_write_lock(void);
@@ -134,28 +144,13 @@ static inline int  cpus_read_trylock(void) { return true; }
 static inline void lockdep_assert_cpus_held(void) { }
 static inline void cpu_hotplug_disable(void) { }
 static inline void cpu_hotplug_enable(void) { }
+static inline int remove_cpu(unsigned int cpu) { return -EPERM; }
 static inline void smp_shutdown_nonboot_cpus(unsigned int primary_cpu) { }
 #endif	/* !CONFIG_HOTPLUG_CPU */
 
-/* Wrappers which go away once all code is converted */
-static inline void cpu_hotplug_begin(void) { cpus_write_lock(); }
-static inline void cpu_hotplug_done(void) { cpus_write_unlock(); }
-static inline void get_online_cpus(void) { cpus_read_lock(); }
-static inline void put_online_cpus(void) { cpus_read_unlock(); }
-
 #ifdef CONFIG_PM_SLEEP_SMP
-int __freeze_secondary_cpus(int primary, bool suspend);
-static inline int freeze_secondary_cpus(int primary)
-{
-	return __freeze_secondary_cpus(primary, true);
-}
-
-static inline int disable_nonboot_cpus(void)
-{
-	return __freeze_secondary_cpus(0, false);
-}
-
-void enable_nonboot_cpus(void);
+extern int freeze_secondary_cpus(int primary);
+extern void thaw_secondary_cpus(void);
 
 static inline int suspend_disable_secondary_cpus(void)
 {
@@ -168,22 +163,18 @@ static inline int suspend_disable_secondary_cpus(void)
 }
 static inline void suspend_enable_secondary_cpus(void)
 {
-	return enable_nonboot_cpus();
+	return thaw_secondary_cpus();
 }
 
 #else /* !CONFIG_PM_SLEEP_SMP */
-static inline int disable_nonboot_cpus(void) { return 0; }
-static inline void enable_nonboot_cpus(void) {}
+static inline void thaw_secondary_cpus(void) {}
 static inline int suspend_disable_secondary_cpus(void) { return 0; }
 static inline void suspend_enable_secondary_cpus(void) { }
 #endif /* !CONFIG_PM_SLEEP_SMP */
 
-void cpu_startup_entry(enum cpuhp_state state);
+void __noreturn cpu_startup_entry(enum cpuhp_state state);
 
 void cpu_idle_poll_ctrl(bool enable);
-
-/* Attach to any functions which should be considered cpuidle. */
-#define __cpuidle	__attribute__((__section__(".cpuidle.text")))
 
 bool cpu_in_idle(unsigned long pc);
 
@@ -191,10 +182,14 @@ void arch_cpu_idle(void);
 void arch_cpu_idle_prepare(void);
 void arch_cpu_idle_enter(void);
 void arch_cpu_idle_exit(void);
-void arch_cpu_idle_dead(void);
+void __noreturn arch_cpu_idle_dead(void);
 
-int cpu_report_state(int cpu);
-int cpu_check_up_prepare(int cpu);
+#ifdef CONFIG_ARCH_HAS_CPU_FINALIZE_INIT
+void arch_cpu_finalize_init(void);
+#else
+static inline void arch_cpu_finalize_init(void) { }
+#endif
+
 void cpu_set_state_online(int cpu);
 void play_idle_precise(u64 duration_ns, u64 latency_ns);
 
@@ -204,8 +199,6 @@ static inline void play_idle(unsigned long duration_us)
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
-bool cpu_wait_death(unsigned int cpu, int seconds);
-bool cpu_report_death(void);
 void cpuhp_report_idle_dead(void);
 #else
 static inline void cpuhp_report_idle_dead(void) { }

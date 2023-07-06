@@ -59,26 +59,18 @@ struct cr_panel {
 
 static int cr_backlight_set_intensity(struct backlight_device *bd)
 {
-	int intensity = bd->props.brightness;
 	u32 addr = gpio_bar + CRVML_PANEL_PORT;
 	u32 cur = inl(addr);
 
-	if (bd->props.power == FB_BLANK_UNBLANK)
-		intensity = FB_BLANK_UNBLANK;
-	if (bd->props.fb_blank == FB_BLANK_UNBLANK)
-		intensity = FB_BLANK_UNBLANK;
-	if (bd->props.power == FB_BLANK_POWERDOWN)
-		intensity = FB_BLANK_POWERDOWN;
-	if (bd->props.fb_blank == FB_BLANK_POWERDOWN)
-		intensity = FB_BLANK_POWERDOWN;
-
-	if (intensity == FB_BLANK_UNBLANK) { /* FULL ON */
-		cur &= ~CRVML_BACKLIGHT_OFF;
-		outl(cur, addr);
-	} else if (intensity == FB_BLANK_POWERDOWN) { /* OFF */
+	if (backlight_get_brightness(bd) == 0) {
+		/* OFF */
 		cur |= CRVML_BACKLIGHT_OFF;
 		outl(cur, addr);
-	} /* anything else, don't bother */
+	} else {
+		/* FULL ON */
+		cur &= ~CRVML_BACKLIGHT_OFF;
+		outl(cur, addr);
+	}
 
 	return 0;
 }
@@ -90,9 +82,9 @@ static int cr_backlight_get_intensity(struct backlight_device *bd)
 	u8 intensity;
 
 	if (cur & CRVML_BACKLIGHT_OFF)
-		intensity = FB_BLANK_POWERDOWN;
+		intensity = 0;
 	else
-		intensity = FB_BLANK_UNBLANK;
+		intensity = 1;
 
 	return intensity;
 }
@@ -218,7 +210,7 @@ static int cr_backlight_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int cr_backlight_remove(struct platform_device *pdev)
+static void cr_backlight_remove(struct platform_device *pdev)
 {
 	struct cr_panel *crp = platform_get_drvdata(pdev);
 
@@ -228,13 +220,11 @@ static int cr_backlight_remove(struct platform_device *pdev)
 	cr_backlight_set_intensity(crp->cr_backlight_device);
 	cr_lcd_set_power(crp->cr_lcd_device, FB_BLANK_POWERDOWN);
 	pci_dev_put(lpc_dev);
-
-	return 0;
 }
 
 static struct platform_driver cr_backlight_driver = {
 	.probe = cr_backlight_probe,
-	.remove = cr_backlight_remove,
+	.remove_new = cr_backlight_remove,
 	.driver = {
 		   .name = "cr_backlight",
 		   },

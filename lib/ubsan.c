@@ -14,10 +14,77 @@
 #include <linux/types.h>
 #include <linux/sched.h>
 #include <linux/uaccess.h>
+#include <linux/ubsan.h>
+#include <kunit/test-bug.h>
 
 #include "ubsan.h"
 
-const char *type_check_kinds[] = {
+#ifdef CONFIG_UBSAN_TRAP
+/*
+ * Only include matches for UBSAN checks that are actually compiled in.
+ * The mappings of struct SanitizerKind (the -fsanitize=xxx args) to
+ * enum SanitizerHandler (the traps) in Clang is in clang/lib/CodeGen/.
+ */
+const char *report_ubsan_failure(struct pt_regs *regs, u32 check_type)
+{
+	switch (check_type) {
+#ifdef CONFIG_UBSAN_BOUNDS
+	/*
+	 * SanitizerKind::ArrayBounds and SanitizerKind::LocalBounds
+	 * emit SanitizerHandler::OutOfBounds.
+	 */
+	case ubsan_out_of_bounds:
+		return "UBSAN: array index out of bounds";
+#endif
+#ifdef CONFIG_UBSAN_SHIFT
+	/*
+	 * SanitizerKind::ShiftBase and SanitizerKind::ShiftExponent
+	 * emit SanitizerHandler::ShiftOutOfBounds.
+	 */
+	case ubsan_shift_out_of_bounds:
+		return "UBSAN: shift out of bounds";
+#endif
+#ifdef CONFIG_UBSAN_DIV_ZERO
+	/*
+	 * SanitizerKind::IntegerDivideByZero emits
+	 * SanitizerHandler::DivremOverflow.
+	 */
+	case ubsan_divrem_overflow:
+		return "UBSAN: divide/remainder overflow";
+#endif
+#ifdef CONFIG_UBSAN_UNREACHABLE
+	/*
+	 * SanitizerKind::Unreachable emits
+	 * SanitizerHandler::BuiltinUnreachable.
+	 */
+	case ubsan_builtin_unreachable:
+		return "UBSAN: unreachable code";
+#endif
+#if defined(CONFIG_UBSAN_BOOL) || defined(CONFIG_UBSAN_ENUM)
+	/*
+	 * SanitizerKind::Bool and SanitizerKind::Enum emit
+	 * SanitizerHandler::LoadInvalidValue.
+	 */
+	case ubsan_load_invalid_value:
+		return "UBSAN: loading invalid value";
+#endif
+#ifdef CONFIG_UBSAN_ALIGNMENT
+	/*
+	 * SanitizerKind::Alignment emits SanitizerHandler::TypeMismatch
+	 * or SanitizerHandler::AlignmentAssumption.
+	 */
+	case ubsan_alignment_assumption:
+		return "UBSAN: alignment assumption";
+	case ubsan_type_mismatch:
+		return "UBSAN: type mismatch";
+#endif
+	default:
+		return "UBSAN: unrecognized failure code";
+	}
+}
+
+#else
+static const char * const type_check_kinds[] = {
 	"load of",
 	"store to",
 	"reference binding to",
@@ -141,6 +208,8 @@ static void ubsan_prologue(struct source_location *loc, const char *reason)
 		"========================================\n");
 	pr_err("UBSAN: %s in %s:%d:%d\n", reason, loc->file_name,
 		loc->line & LINE_MASK, loc->column & COLUMN_MASK);
+
+	kunit_fail_current_test("%s in %s", reason, loc->file_name);
 }
 
 static void ubsan_epilogue(void)
@@ -151,89 +220,12 @@ static void ubsan_epilogue(void)
 
 	current->in_ubsan--;
 
-	if (panic_on_warn) {
-		/*
-		 * This thread may hit another WARN() in the panic path.
-		 * Resetting this prevents additional WARN() from panicking the
-		 * system on this thread.  Other threads are blocked by the
-		 * panic_mutex in panic().
-		 */
-		panic_on_warn = 0;
-		panic("panic_on_warn set ...\n");
-	}
+	check_panic_on_warn("UBSAN");
 }
 
-static void handle_overflow(struct overflow_data *data, void *lhs,
-			void *rhs, char op)
+void __ubsan_handle_divrem_overflow(void *_data, void *lhs, void *rhs)
 {
-
-	struct type_descriptor *type = data->type;
-	char lhs_val_str[VALUE_LENGTH];
-	char rhs_val_str[VALUE_LENGTH];
-
-	if (suppress_report(&data->location))
-		return;
-
-	ubsan_prologue(&data->location, type_is_signed(type) ?
-			"signed-integer-overflow" :
-			"unsigned-integer-overflow");
-
-	val_to_string(lhs_val_str, sizeof(lhs_val_str), type, lhs);
-	val_to_string(rhs_val_str, sizeof(rhs_val_str), type, rhs);
-	pr_err("%s %c %s cannot be represented in type %s\n",
-		lhs_val_str,
-		op,
-		rhs_val_str,
-		type->type_name);
-
-	ubsan_epilogue();
-}
-
-void __ubsan_handle_add_overflow(struct overflow_data *data,
-				void *lhs, void *rhs)
-{
-
-	handle_overflow(data, lhs, rhs, '+');
-}
-EXPORT_SYMBOL(__ubsan_handle_add_overflow);
-
-void __ubsan_handle_sub_overflow(struct overflow_data *data,
-				void *lhs, void *rhs)
-{
-	handle_overflow(data, lhs, rhs, '-');
-}
-EXPORT_SYMBOL(__ubsan_handle_sub_overflow);
-
-void __ubsan_handle_mul_overflow(struct overflow_data *data,
-				void *lhs, void *rhs)
-{
-	handle_overflow(data, lhs, rhs, '*');
-}
-EXPORT_SYMBOL(__ubsan_handle_mul_overflow);
-
-void __ubsan_handle_negate_overflow(struct overflow_data *data,
-				void *old_val)
-{
-	char old_val_str[VALUE_LENGTH];
-
-	if (suppress_report(&data->location))
-		return;
-
-	ubsan_prologue(&data->location, "negation-overflow");
-
-	val_to_string(old_val_str, sizeof(old_val_str), data->type, old_val);
-
-	pr_err("negation of %s cannot be represented in type %s:\n",
-		old_val_str, data->type->type_name);
-
-	ubsan_epilogue();
-}
-EXPORT_SYMBOL(__ubsan_handle_negate_overflow);
-
-
-void __ubsan_handle_divrem_overflow(struct overflow_data *data,
-				void *lhs, void *rhs)
-{
+	struct overflow_data *data = _data;
 	char rhs_val_str[VALUE_LENGTH];
 
 	if (suppress_report(&data->location))
@@ -326,10 +318,9 @@ void __ubsan_handle_type_mismatch(struct type_mismatch_data *data,
 }
 EXPORT_SYMBOL(__ubsan_handle_type_mismatch);
 
-void __ubsan_handle_type_mismatch_v1(struct type_mismatch_data_v1 *data,
-				void *ptr)
+void __ubsan_handle_type_mismatch_v1(void *_data, void *ptr)
 {
-
+	struct type_mismatch_data_v1 *data = _data;
 	struct type_mismatch_data_common common_data = {
 		.location = &data->location,
 		.type = data->type,
@@ -341,8 +332,9 @@ void __ubsan_handle_type_mismatch_v1(struct type_mismatch_data_v1 *data,
 }
 EXPORT_SYMBOL(__ubsan_handle_type_mismatch_v1);
 
-void __ubsan_handle_out_of_bounds(struct out_of_bounds_data *data, void *index)
+void __ubsan_handle_out_of_bounds(void *_data, void *index)
 {
+	struct out_of_bounds_data *data = _data;
 	char index_str[VALUE_LENGTH];
 
 	if (suppress_report(&data->location))
@@ -357,9 +349,9 @@ void __ubsan_handle_out_of_bounds(struct out_of_bounds_data *data, void *index)
 }
 EXPORT_SYMBOL(__ubsan_handle_out_of_bounds);
 
-void __ubsan_handle_shift_out_of_bounds(struct shift_out_of_bounds_data *data,
-					void *lhs, void *rhs)
+void __ubsan_handle_shift_out_of_bounds(void *_data, void *lhs, void *rhs)
 {
+	struct shift_out_of_bounds_data *data = _data;
 	struct type_descriptor *rhs_type = data->rhs_type;
 	struct type_descriptor *lhs_type = data->lhs_type;
 	char rhs_str[VALUE_LENGTH];
@@ -399,8 +391,9 @@ out:
 EXPORT_SYMBOL(__ubsan_handle_shift_out_of_bounds);
 
 
-void __ubsan_handle_builtin_unreachable(struct unreachable_data *data)
+void __ubsan_handle_builtin_unreachable(void *_data)
 {
+	struct unreachable_data *data = _data;
 	ubsan_prologue(&data->location, "unreachable");
 	pr_err("calling __builtin_unreachable()\n");
 	ubsan_epilogue();
@@ -408,13 +401,14 @@ void __ubsan_handle_builtin_unreachable(struct unreachable_data *data)
 }
 EXPORT_SYMBOL(__ubsan_handle_builtin_unreachable);
 
-void __ubsan_handle_load_invalid_value(struct invalid_value_data *data,
-				void *val)
+void __ubsan_handle_load_invalid_value(void *_data, void *val)
 {
+	struct invalid_value_data *data = _data;
 	char val_str[VALUE_LENGTH];
+	unsigned long ua_flags = user_access_save();
 
 	if (suppress_report(&data->location))
-		return;
+		goto out;
 
 	ubsan_prologue(&data->location, "invalid-load");
 
@@ -424,5 +418,37 @@ void __ubsan_handle_load_invalid_value(struct invalid_value_data *data,
 		val_str, data->type->type_name);
 
 	ubsan_epilogue();
+out:
+	user_access_restore(ua_flags);
 }
 EXPORT_SYMBOL(__ubsan_handle_load_invalid_value);
+
+void __ubsan_handle_alignment_assumption(void *_data, unsigned long ptr,
+					 unsigned long align,
+					 unsigned long offset)
+{
+	struct alignment_assumption_data *data = _data;
+	unsigned long real_ptr;
+
+	if (suppress_report(&data->location))
+		return;
+
+	ubsan_prologue(&data->location, "alignment-assumption");
+
+	if (offset)
+		pr_err("assumption of %lu byte alignment (with offset of %lu byte) for pointer of type %s failed",
+		       align, offset, data->type->type_name);
+	else
+		pr_err("assumption of %lu byte alignment for pointer of type %s failed",
+		       align, data->type->type_name);
+
+	real_ptr = ptr - offset;
+	pr_err("%saddress is %lu aligned, misalignment offset is %lu bytes",
+	       offset ? "offset " : "", BIT(real_ptr ? __ffs(real_ptr) : 0),
+	       real_ptr & (align - 1));
+
+	ubsan_epilogue();
+}
+EXPORT_SYMBOL(__ubsan_handle_alignment_assumption);
+
+#endif /* !CONFIG_UBSAN_TRAP */

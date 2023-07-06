@@ -15,8 +15,39 @@
 #include <sys/socket.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include "bpf_misc.h"
 
-int _version SEC("version") = 1;
+#if defined(IPROUTE2_HAVE_LIBBPF)
+/* Use a new-style map definition. */
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__type(key, int);
+	__type(value, __u64);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(max_entries, 1);
+} server_map SEC(".maps");
+#else
+/* Pin map under /sys/fs/bpf/tc/globals/<map name> */
+#define PIN_GLOBAL_NS 2
+
+/* Must match struct bpf_elf_map layout from iproute2 */
+struct {
+	__u32 type;
+	__u32 size_key;
+	__u32 size_value;
+	__u32 max_elem;
+	__u32 flags;
+	__u32 id;
+	__u32 pinning;
+} server_map SEC("maps") = {
+	.type = BPF_MAP_TYPE_SOCKMAP,
+	.size_key = sizeof(int),
+	.size_value  = sizeof(__u64),
+	.max_elem = 1,
+	.pinning = PIN_GLOBAL_NS,
+};
+#endif
+
 char _license[] SEC("license") = "GPL";
 
 /* Fill 'tuple' with L3 info, and attempt to find L4. On fail, return NULL. */
@@ -27,7 +58,6 @@ get_tuple(struct __sk_buff *skb, bool *ipv4, bool *tcp)
 	void *data = (void *)(long)skb->data;
 	struct bpf_sock_tuple *result;
 	struct ethhdr *eth;
-	__u64 tuple_len;
 	__u8 proto = 0;
 	__u64 ihl_len;
 
@@ -64,15 +94,17 @@ get_tuple(struct __sk_buff *skb, bool *ipv4, bool *tcp)
 		return NULL;
 
 	*tcp = (proto == IPPROTO_TCP);
+	__sink(ihl_len);
 	return result;
 }
 
 static inline int
 handle_udp(struct __sk_buff *skb, struct bpf_sock_tuple *tuple, bool ipv4)
 {
-	struct bpf_sock_tuple ln = {0};
 	struct bpf_sock *sk;
+	const int zero = 0;
 	size_t tuple_len;
+	__be16 dport;
 	int ret;
 
 	tuple_len = ipv4 ? sizeof(tuple->ipv4) : sizeof(tuple->ipv6);
@@ -83,32 +115,11 @@ handle_udp(struct __sk_buff *skb, struct bpf_sock_tuple *tuple, bool ipv4)
 	if (sk)
 		goto assign;
 
-	if (ipv4) {
-		if (tuple->ipv4.dport != bpf_htons(4321))
-			return TC_ACT_OK;
+	dport = ipv4 ? tuple->ipv4.dport : tuple->ipv6.dport;
+	if (dport != bpf_htons(4321))
+		return TC_ACT_OK;
 
-		ln.ipv4.daddr = bpf_htonl(0x7f000001);
-		ln.ipv4.dport = bpf_htons(1234);
-
-		sk = bpf_sk_lookup_udp(skb, &ln, sizeof(ln.ipv4),
-					BPF_F_CURRENT_NETNS, 0);
-	} else {
-		if (tuple->ipv6.dport != bpf_htons(4321))
-			return TC_ACT_OK;
-
-		/* Upper parts of daddr are already zero. */
-		ln.ipv6.daddr[3] = bpf_htonl(0x1);
-		ln.ipv6.dport = bpf_htons(1234);
-
-		sk = bpf_sk_lookup_udp(skb, &ln, sizeof(ln.ipv6),
-					BPF_F_CURRENT_NETNS, 0);
-	}
-
-	/* workaround: We can't do a single socket lookup here, because then
-	 * the compiler will likely spill tuple_len to the stack. This makes it
-	 * lose all bounds information in the verifier, which then rejects the
-	 * call as unsafe.
-	 */
+	sk = bpf_map_lookup_elem(&server_map, &zero);
 	if (!sk)
 		return TC_ACT_SHOT;
 
@@ -121,9 +132,10 @@ assign:
 static inline int
 handle_tcp(struct __sk_buff *skb, struct bpf_sock_tuple *tuple, bool ipv4)
 {
-	struct bpf_sock_tuple ln = {0};
 	struct bpf_sock *sk;
+	const int zero = 0;
 	size_t tuple_len;
+	__be16 dport;
 	int ret;
 
 	tuple_len = ipv4 ? sizeof(tuple->ipv4) : sizeof(tuple->ipv6);
@@ -137,32 +149,11 @@ handle_tcp(struct __sk_buff *skb, struct bpf_sock_tuple *tuple, bool ipv4)
 		bpf_sk_release(sk);
 	}
 
-	if (ipv4) {
-		if (tuple->ipv4.dport != bpf_htons(4321))
-			return TC_ACT_OK;
+	dport = ipv4 ? tuple->ipv4.dport : tuple->ipv6.dport;
+	if (dport != bpf_htons(4321))
+		return TC_ACT_OK;
 
-		ln.ipv4.daddr = bpf_htonl(0x7f000001);
-		ln.ipv4.dport = bpf_htons(1234);
-
-		sk = bpf_skc_lookup_tcp(skb, &ln, sizeof(ln.ipv4),
-					BPF_F_CURRENT_NETNS, 0);
-	} else {
-		if (tuple->ipv6.dport != bpf_htons(4321))
-			return TC_ACT_OK;
-
-		/* Upper parts of daddr are already zero. */
-		ln.ipv6.daddr[3] = bpf_htonl(0x1);
-		ln.ipv6.dport = bpf_htons(1234);
-
-		sk = bpf_skc_lookup_tcp(skb, &ln, sizeof(ln.ipv6),
-					BPF_F_CURRENT_NETNS, 0);
-	}
-
-	/* workaround: We can't do a single socket lookup here, because then
-	 * the compiler will likely spill tuple_len to the stack. This makes it
-	 * lose all bounds information in the verifier, which then rejects the
-	 * call as unsafe.
-	 */
+	sk = bpf_map_lookup_elem(&server_map, &zero);
 	if (!sk)
 		return TC_ACT_SHOT;
 
@@ -177,13 +168,12 @@ assign:
 	return ret;
 }
 
-SEC("classifier/sk_assign_test")
+SEC("tc")
 int bpf_sk_assign_test(struct __sk_buff *skb)
 {
-	struct bpf_sock_tuple *tuple, ln = {0};
+	struct bpf_sock_tuple *tuple;
 	bool ipv4 = false;
 	bool tcp = false;
-	int tuple_len;
 	int ret = 0;
 
 	tuple = get_tuple(skb, &ipv4, &tcp);

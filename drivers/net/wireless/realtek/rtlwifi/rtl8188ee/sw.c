@@ -67,9 +67,9 @@ static int rtl88e_init_sw_vars(struct ieee80211_hw *hw)
 	char *fw_name;
 
 	rtl8188ee_bt_reg_init(hw);
-	rtlpriv->dm.dm_initialgain_enable = 1;
+	rtlpriv->dm.dm_initialgain_enable = true;
 	rtlpriv->dm.dm_flag = 0;
-	rtlpriv->dm.disable_framebursting = 0;
+	rtlpriv->dm.disable_framebursting = false;
 	rtlpriv->dm.thermalvalue = 0;
 	rtlpci->transmit_config = CFENDFORM | BIT(15);
 
@@ -230,7 +230,6 @@ static struct rtl_hal_ops rtl8188ee_hal_ops = {
 	.tx_polling = rtl88ee_tx_polling,
 	.enable_hw_sec = rtl88ee_enable_hw_security_config,
 	.set_key = rtl88ee_set_key,
-	.init_sw_leds = rtl88ee_init_sw_leds,
 	.get_bbreg = rtl88e_phy_query_bb_reg,
 	.set_bbreg = rtl88e_phy_set_bb_reg,
 	.get_rfreg = rtl88e_phy_query_rf_reg,

@@ -22,14 +22,14 @@
 #include <linux/of_platform.h>
 #include <linux/regulator/of_regulator.h>
 
-static const struct regulator_linear_range smps_low_ranges[] = {
+static const struct linear_range smps_low_ranges[] = {
 	REGULATOR_LINEAR_RANGE(0, 0x0, 0x0, 0),
 	REGULATOR_LINEAR_RANGE(500000, 0x1, 0x6, 0),
 	REGULATOR_LINEAR_RANGE(510000, 0x7, 0x79, 10000),
 	REGULATOR_LINEAR_RANGE(1650000, 0x7A, 0x7f, 0),
 };
 
-static const struct regulator_linear_range smps_high_ranges[] = {
+static const struct linear_range smps_high_ranges[] = {
 	REGULATOR_LINEAR_RANGE(0, 0x0, 0x0, 0),
 	REGULATOR_LINEAR_RANGE(1000000, 0x1, 0x6, 0),
 	REGULATOR_LINEAR_RANGE(1020000, 0x7, 0x79, 20000),
@@ -1666,6 +1666,7 @@ static int palmas_regulators_probe(struct platform_device *pdev)
 static struct platform_driver palmas_driver = {
 	.driver = {
 		.name = "palmas-pmic",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_palmas_match_tbl,
 	},
 	.probe = palmas_regulators_probe,

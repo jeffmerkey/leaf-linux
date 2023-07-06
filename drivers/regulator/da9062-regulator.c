@@ -907,10 +907,8 @@ static irqreturn_t da9062_ldo_lim_event(int irq, void *data)
 			continue;
 
 		if (BIT(regl->info->oc_event.lsb) & bits) {
-			regulator_lock(regl->rdev);
 			regulator_notifier_call_chain(regl->rdev,
 					REGULATOR_EVENT_OVER_CURRENT, NULL);
-			regulator_unlock(regl->rdev);
 			handled = IRQ_HANDLED;
 		}
 	}
@@ -1035,6 +1033,7 @@ static int da9062_regulator_probe(struct platform_device *pdev)
 static struct platform_driver da9062_regulator_driver = {
 	.driver = {
 		.name = "da9062-regulators",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = da9062_regulator_probe,
 };

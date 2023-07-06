@@ -65,8 +65,8 @@ static void rtl92se_fw_cb(const struct firmware *firmware, void *context)
 	struct rt_firmware *pfirmware = NULL;
 	char *fw_name = "rtlwifi/rtl8192sefw.bin";
 
-	RT_TRACE(rtlpriv, COMP_ERR, DBG_LOUD,
-			 "Firmware callback routine entered!\n");
+	rtl_dbg(rtlpriv, COMP_ERR, DBG_LOUD,
+		"Firmware callback routine entered!\n");
 	complete(&rtlpriv->firmware_loading_complete);
 	if (!firmware) {
 		pr_err("Firmware %s not available\n", fw_name);
@@ -260,7 +260,6 @@ static struct rtl_hal_ops rtl8192se_hal_ops = {
 	.tx_polling = rtl92se_tx_polling,
 	.enable_hw_sec = rtl92se_enable_hw_security_config,
 	.set_key = rtl92se_set_key,
-	.init_sw_leds = rtl92se_init_sw_leds,
 	.get_bbreg = rtl92s_phy_query_bb_reg,
 	.set_bbreg = rtl92s_phy_set_bb_reg,
 	.get_rfreg = rtl92s_phy_query_rf_reg,

@@ -25,6 +25,7 @@
 #endif
 
 #include <net/ip.h>
+#include <net/gso.h>
 #include <net/icmp.h>
 #include <net/route.h>
 
@@ -1085,13 +1086,13 @@ static inline int vnet_skb_map(struct ldc_channel *lp, struct sk_buff *skb,
 		u8 *vaddr;
 
 		if (nc < ncookies) {
-			vaddr = kmap_atomic(skb_frag_page(f));
+			vaddr = kmap_local_page(skb_frag_page(f));
 			blen = skb_frag_size(f);
 			blen += 8 - (blen & 7);
 			err = ldc_map_single(lp, vaddr + skb_frag_off(f),
 					     blen, cookies + nc, ncookies - nc,
 					     map_perm);
-			kunmap_atomic(vaddr);
+			kunmap_local(vaddr);
 		} else {
 			err = -EMSGSIZE;
 		}
@@ -1168,7 +1169,7 @@ static inline struct sk_buff *vnet_skb_shape(struct sk_buff *skb, int ncookies)
 			*(__sum16 *)(skb->data + offset) = 0;
 			csum = skb_copy_and_csum_bits(skb, start,
 						      nskb->data + start,
-						      skb->len - start, 0);
+						      skb->len - start);
 
 			/* add in the header checksums */
 			if (skb->protocol == htons(ETH_P_IP)) {

@@ -1014,7 +1014,10 @@ static int cxusb_medion_try_s_fmt_vid_cap(struct file *file,
 {
 	struct dvb_usb_device *dvbdev = video_drvdata(file);
 	struct cxusb_medion_dev *cxdev = dvbdev->priv;
-	struct v4l2_subdev_format subfmt;
+	struct v4l2_subdev_format subfmt = {
+		.which = isset ? V4L2_SUBDEV_FORMAT_ACTIVE :
+			 V4L2_SUBDEV_FORMAT_TRY,
+	};
 	u32 field;
 	int ret;
 
@@ -1024,9 +1027,6 @@ static int cxusb_medion_try_s_fmt_vid_cap(struct file *file,
 	field = vb2_start_streaming_called(&cxdev->videoqueue) ?
 		cxdev->field_order : cxusb_medion_field_order(cxdev);
 
-	memset(&subfmt, 0, sizeof(subfmt));
-	subfmt.which = isset ? V4L2_SUBDEV_FORMAT_ACTIVE :
-		V4L2_SUBDEV_FORMAT_TRY;
 	subfmt.format.width = f->fmt.pix.width & ~1;
 	subfmt.format.height = f->fmt.pix.height & ~1;
 	subfmt.format.code = MEDIA_BUS_FMT_FIXED;
@@ -1464,7 +1464,9 @@ int cxusb_medion_analog_init(struct dvb_usb_device *dvbdev)
 					    .buf = tuner_analog_msg_data,
 					    .len =
 					    sizeof(tuner_analog_msg_data) };
-	struct v4l2_subdev_format subfmt;
+	struct v4l2_subdev_format subfmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
 	int ret;
 
 	/* switch tuner to analog mode so IF demod will become accessible */
@@ -1507,8 +1509,6 @@ int cxusb_medion_analog_init(struct dvb_usb_device *dvbdev)
 	v4l2_subdev_call(cxdev->tuner, video, s_std, cxdev->norm);
 	v4l2_subdev_call(cxdev->cx25840, video, s_std, cxdev->norm);
 
-	memset(&subfmt, 0, sizeof(subfmt));
-	subfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	subfmt.format.width = cxdev->width;
 	subfmt.format.height = cxdev->height;
 	subfmt.format.code = MEDIA_BUS_FMT_FIXED;
@@ -1615,8 +1615,6 @@ static void cxusb_medion_videodev_release(struct video_device *vdev)
 
 	cxusb_vprintk(dvbdev, OPS, "video device release\n");
 
-	vb2_queue_release(vdev->queue);
-
 	video_device_release(vdev);
 }
 
@@ -1647,8 +1645,7 @@ static int cxusb_medion_register_analog_video(struct dvb_usb_device *dvbdev)
 	cxdev->videodev = video_device_alloc();
 	if (!cxdev->videodev) {
 		dev_err(&dvbdev->udev->dev, "video device alloc failed\n");
-		ret = -ENOMEM;
-		goto ret_qrelease;
+		return -ENOMEM;
 	}
 
 	cxdev->videodev->device_caps = videocaps;
@@ -1674,10 +1671,6 @@ static int cxusb_medion_register_analog_video(struct dvb_usb_device *dvbdev)
 
 ret_vrelease:
 	video_device_release(cxdev->videodev);
-
-ret_qrelease:
-	vb2_queue_release(&cxdev->videoqueue);
-
 	return ret;
 }
 
@@ -1820,7 +1813,7 @@ int cxusb_medion_register_analog(struct dvb_usb_device *dvbdev)
 	return 0;
 
 ret_vunreg:
-	video_unregister_device(cxdev->videodev);
+	vb2_video_unregister_device(cxdev->videodev);
 
 ret_unregister:
 	v4l2_device_put(&cxdev->v4l2dev);
@@ -1836,7 +1829,7 @@ void cxusb_medion_unregister_analog(struct dvb_usb_device *dvbdev)
 	cxusb_vprintk(dvbdev, OPS, "unregistering analog\n");
 
 	video_unregister_device(cxdev->radiodev);
-	video_unregister_device(cxdev->videodev);
+	vb2_video_unregister_device(cxdev->videodev);
 
 	v4l2_device_put(&cxdev->v4l2dev);
 	wait_for_completion(&cxdev->v4l2_release);

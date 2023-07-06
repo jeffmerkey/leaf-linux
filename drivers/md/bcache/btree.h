@@ -194,7 +194,7 @@ static inline unsigned int bset_block_offset(struct btree *b, struct bset *i)
 
 static inline void set_gc_sectors(struct cache_set *c)
 {
-	atomic_set(&c->sectors_to_gc, c->sb.bucket_size * c->nbuckets / 16);
+	atomic_set(&c->sectors_to_gc, c->cache->sb.bucket_size * c->nbuckets / 16);
 }
 
 void bkey_put(struct cache_set *c, struct bkey *k);
@@ -226,7 +226,7 @@ struct btree_check_info {
 	int				result;
 };
 
-#define BCH_BTR_CHKTHREAD_MAX	64
+#define BCH_BTR_CHKTHREAD_MAX	12
 struct btree_check_state {
 	struct cache_set		*c;
 	int				total_threads;
@@ -247,8 +247,8 @@ static inline void bch_btree_op_init(struct btree_op *op, int write_lock_level)
 
 static inline void rw_lock(bool w, struct btree *b, int level)
 {
-	w ? down_write_nested(&b->lock, level + 1)
-	  : down_read_nested(&b->lock, level + 1);
+	w ? down_write(&b->lock)
+	  : down_read(&b->lock);
 	if (w)
 		b->seq++;
 }
@@ -282,6 +282,7 @@ void bch_initial_gc_finish(struct cache_set *c);
 void bch_moving_gc(struct cache_set *c);
 int bch_btree_check(struct cache_set *c);
 void bch_initial_mark_key(struct cache_set *c, int level, struct bkey *k);
+void bch_cannibalize_unlock(struct cache_set *c);
 
 static inline void wake_up_gc(struct cache_set *c)
 {

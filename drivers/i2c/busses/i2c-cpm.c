@@ -65,6 +65,9 @@ struct i2c_ram {
 	char    res1[4];	/* Reserved */
 	ushort  rpbase;		/* Relocation pointer */
 	char    res2[2];	/* Reserved */
+	/* The following elements are only for CPM2 */
+	char    res3[4];	/* Reserved */
+	uint    sdmatmp;	/* Internal */
 };
 
 #define I2COM_START	0x80
@@ -673,7 +676,7 @@ out_free:
 	return result;
 }
 
-static int cpm_i2c_remove(struct platform_device *ofdev)
+static void cpm_i2c_remove(struct platform_device *ofdev)
 {
 	struct cpm_i2c *cpm = platform_get_drvdata(ofdev);
 
@@ -682,8 +685,6 @@ static int cpm_i2c_remove(struct platform_device *ofdev)
 	cpm_i2c_shutdown(cpm);
 
 	kfree(cpm);
-
-	return 0;
 }
 
 static const struct of_device_id cpm_i2c_match[] = {
@@ -700,7 +701,7 @@ MODULE_DEVICE_TABLE(of, cpm_i2c_match);
 
 static struct platform_driver cpm_i2c_driver = {
 	.probe		= cpm_i2c_probe,
-	.remove		= cpm_i2c_remove,
+	.remove_new	= cpm_i2c_remove,
 	.driver = {
 		.name = "fsl-i2c-cpm",
 		.of_match_table = cpm_i2c_match,

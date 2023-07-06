@@ -31,6 +31,7 @@
 #include "dvb-pll.h"
 #include <media/drv-intf/saa7146_vv.h>
 #include <linux/module.h>
+#include <linux/etherdevice.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
@@ -1226,7 +1227,7 @@ static void frontend_init(struct budget_av *budget_av)
 		 * but so far it has been only confirmed for this type
 		 */
 		budget_av->reinitialise_demod = 1;
-		/* fall through */
+		fallthrough;
 	case SUBID_DVBS_KNC1_PLUS:
 	case SUBID_DVBS_EASYWATCH_1:
 		if (saa->pci->subsystem_vendor == 0x1894) {
@@ -1410,7 +1411,7 @@ static int vidioc_enum_input(struct file *file, void *fh, struct v4l2_input *i)
 
 static int vidioc_g_input(struct file *file, void *fh, unsigned int *i)
 {
-	struct saa7146_dev *dev = ((struct saa7146_fh *)fh)->dev;
+	struct saa7146_dev *dev = video_drvdata(file);
 	struct budget_av *budget_av = (struct budget_av *)dev->ext_priv;
 
 	*i = budget_av->cur_input;
@@ -1421,7 +1422,7 @@ static int vidioc_g_input(struct file *file, void *fh, unsigned int *i)
 
 static int vidioc_s_input(struct file *file, void *fh, unsigned int input)
 {
-	struct saa7146_dev *dev = ((struct saa7146_fh *)fh)->dev;
+	struct saa7146_dev *dev = video_drvdata(file);
 	struct budget_av *budget_av = (struct budget_av *)dev->ext_priv;
 
 	dprintk(1, "VIDIOC_S_INPUT %d\n", input);

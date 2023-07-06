@@ -25,13 +25,12 @@ static int gen8_emit_rpcs_config(struct i915_request *rq,
 		return PTR_ERR(cs);
 
 	offset = i915_ggtt_offset(ce->state) +
-		 LRC_STATE_PN * PAGE_SIZE +
-		 CTX_R_PWR_CLK_STATE * 4;
+		 LRC_STATE_OFFSET + CTX_R_PWR_CLK_STATE * 4;
 
 	*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
 	*cs++ = lower_32_bits(offset);
 	*cs++ = upper_32_bits(offset);
-	*cs++ = intel_sseu_make_rpcs(rq->i915, &sseu);
+	*cs++ = intel_sseu_make_rpcs(rq->engine->gt, &sseu);
 
 	intel_ring_advance(rq, cs);
 
@@ -78,7 +77,7 @@ intel_context_reconfigure_sseu(struct intel_context *ce,
 {
 	int ret;
 
-	GEM_BUG_ON(INTEL_GEN(ce->engine->i915) < 8);
+	GEM_BUG_ON(GRAPHICS_VER(ce->engine->i915) < 8);
 
 	ret = intel_context_lock_pinned(ce);
 	if (ret)

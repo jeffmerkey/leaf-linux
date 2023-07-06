@@ -18,14 +18,12 @@ struct rt715_priv {
 	int dbg_nid;
 	int dbg_vid;
 	int dbg_payload;
-	enum sdw_slave_status status;
 	struct sdw_bus_params params;
 	bool hw_init;
 	bool first_hw_init;
-};
-
-struct sdw_stream_data {
-	struct sdw_stream_runtime *sdw_stream;
+	unsigned int kctl_2ch_vol_ori[2];
+	unsigned int kctl_8ch_switch_ori[8];
+	unsigned int kctl_8ch_vol_ori[8];
 };
 
 /* NID */
@@ -207,8 +205,9 @@ struct sdw_stream_data {
 enum {
 	RT715_AIF1,
 	RT715_AIF2,
-	RT715_AIFS,
 };
+
+#define RT715_POWER_UP_DELAY_MS 400
 
 int rt715_io_init(struct device *dev, struct sdw_slave *slave);
 int rt715_init(struct device *dev, struct regmap *sdw_regmap,

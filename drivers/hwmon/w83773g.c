@@ -233,7 +233,7 @@ static umode_t w83773_is_visible(const void *data, enum hwmon_sensor_types type,
 	return 0;
 }
 
-static const struct hwmon_channel_info *w83773_info[] = {
+static const struct hwmon_channel_info * const w83773_info[] = {
 	HWMON_CHANNEL_INFO(chip,
 			   HWMON_C_REGISTER_TZ | HWMON_C_UPDATE_INTERVAL),
 	HWMON_CHANNEL_INFO(temp,
@@ -259,8 +259,7 @@ static const struct regmap_config w83773_regmap_config = {
 	.val_bits = 8,
 };
 
-static int w83773_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int w83773_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;

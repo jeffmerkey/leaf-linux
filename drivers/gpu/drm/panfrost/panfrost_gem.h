@@ -69,10 +69,7 @@ panfrost_gem_prime_import_sg_table(struct drm_device *dev,
 				   struct sg_table *sgt);
 
 struct panfrost_gem_object *
-panfrost_gem_create_with_handle(struct drm_file *file_priv,
-				struct drm_device *dev, size_t size,
-				u32 flags,
-				uint32_t *handle);
+panfrost_gem_create(struct drm_device *dev, size_t size, u32 flags);
 
 int panfrost_gem_open(struct drm_gem_object *obj, struct drm_file *file_priv);
 void panfrost_gem_close(struct drm_gem_object *obj,
@@ -82,7 +79,7 @@ struct panfrost_gem_mapping *
 panfrost_gem_mapping_get(struct panfrost_gem_object *bo,
 			 struct panfrost_file_priv *priv);
 void panfrost_gem_mapping_put(struct panfrost_gem_mapping *mapping);
-void panfrost_gem_teardown_mappings(struct panfrost_gem_object *bo);
+void panfrost_gem_teardown_mappings_locked(struct panfrost_gem_object *bo);
 
 void panfrost_gem_shrinker_init(struct drm_device *dev);
 void panfrost_gem_shrinker_cleanup(struct drm_device *dev);

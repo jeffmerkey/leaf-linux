@@ -6,8 +6,13 @@ RISC-V architecture
     :maxdepth: 1
 
     boot-image-header
-    pmu
+    vm-layout
+    hwprobe
     patch-acceptance
+    uabi
+    vector
+
+    features
 
 .. only::  subproject and html
 

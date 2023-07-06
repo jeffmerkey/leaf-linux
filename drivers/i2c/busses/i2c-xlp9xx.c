@@ -506,23 +506,19 @@ static int xlp9xx_i2c_smbus_setup(struct xlp9xx_i2c_dev *priv,
 static int xlp9xx_i2c_probe(struct platform_device *pdev)
 {
 	struct xlp9xx_i2c_dev *priv;
-	struct resource *res;
 	int err = 0;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	priv->base = devm_ioremap_resource(&pdev->dev, res);
+	priv->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->base))
 		return PTR_ERR(priv->base);
 
 	priv->irq = platform_get_irq(pdev, 0);
-	if (priv->irq <= 0) {
-		dev_err(&pdev->dev, "invalid irq!\n");
+	if (priv->irq < 0)
 		return priv->irq;
-	}
 	/* SMBAlert irq */
 	priv->alert_data.irq = platform_get_irq(pdev, 1);
 	if (priv->alert_data.irq <= 0)
@@ -563,7 +559,7 @@ static int xlp9xx_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int xlp9xx_i2c_remove(struct platform_device *pdev)
+static void xlp9xx_i2c_remove(struct platform_device *pdev)
 {
 	struct xlp9xx_i2c_dev *priv;
 
@@ -572,15 +568,7 @@ static int xlp9xx_i2c_remove(struct platform_device *pdev)
 	synchronize_irq(priv->irq);
 	i2c_del_adapter(&priv->adapter);
 	xlp9xx_write_i2c_reg(priv, XLP9XX_I2C_CTRL, 0);
-
-	return 0;
 }
-
-static const struct of_device_id xlp9xx_i2c_of_match[] = {
-	{ .compatible = "netlogic,xlp980-i2c", },
-	{ /* sentinel */ },
-};
-MODULE_DEVICE_TABLE(of, xlp9xx_i2c_of_match);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id xlp9xx_i2c_acpi_ids[] = {
@@ -593,10 +581,9 @@ MODULE_DEVICE_TABLE(acpi, xlp9xx_i2c_acpi_ids);
 
 static struct platform_driver xlp9xx_i2c_driver = {
 	.probe = xlp9xx_i2c_probe,
-	.remove = xlp9xx_i2c_remove,
+	.remove_new = xlp9xx_i2c_remove,
 	.driver = {
 		.name = "xlp9xx-i2c",
-		.of_match_table = xlp9xx_i2c_of_match,
 		.acpi_match_table = ACPI_PTR(xlp9xx_i2c_acpi_ids),
 	},
 };

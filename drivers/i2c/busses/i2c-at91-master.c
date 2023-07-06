@@ -26,7 +26,6 @@
 #include <linux/of_device.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
-#include <linux/platform_data/dma-atmel.h>
 #include <linux/pm_runtime.h>
 
 #include "i2c-at91.h"
@@ -139,9 +138,9 @@ static void at91_twi_dma_cleanup(struct at91_twi_dev *dev)
 
 	if (dma->xfer_in_progress) {
 		if (dma->direction == DMA_FROM_DEVICE)
-			dmaengine_terminate_all(dma->chan_rx);
+			dmaengine_terminate_sync(dma->chan_rx);
 		else
-			dmaengine_terminate_all(dma->chan_tx);
+			dmaengine_terminate_sync(dma->chan_tx);
 		dma->xfer_in_progress = false;
 	}
 	if (dma->buf_mapped) {
@@ -480,7 +479,6 @@ static int at91_do_twi_transfer(struct at91_twi_dev *dev)
 	unsigned long time_left;
 	bool has_unre_flag = dev->pdata->has_unre_flag;
 	bool has_alt_cmd = dev->pdata->has_alt_cmd;
-	struct i2c_bus_recovery_info *rinfo = &dev->rinfo;
 
 	/*
 	 * WARNING: the TXCOMP bit in the Status Register is NOT a clear on
@@ -641,11 +639,12 @@ error:
 			       AT91_TWI_THRCLR | AT91_TWI_LOCKCLR);
 	}
 
-	if (rinfo->get_sda && !(rinfo->get_sda(&dev->adapter))) {
-		dev_dbg(dev->dev,
-			"SDA is down; clear bus using gpio\n");
-		i2c_recover_bus(&dev->adapter);
-	}
+	/*
+	 * some faulty I2C slave devices might hold SDA down;
+	 * we can send a bus clear command, hoping that the pins will be
+	 * released
+	 */
+	i2c_recover_bus(&dev->adapter);
 
 	return ret;
 }
@@ -657,6 +656,7 @@ static int at91_twi_xfer(struct i2c_adapter *adap, struct i2c_msg *msg, int num)
 	unsigned int_addr_flag = 0;
 	struct i2c_msg *m_start = msg;
 	bool is_read;
+	u8 *dma_buf = NULL;
 
 	dev_dbg(&adap->dev, "at91_xfer: processing %d messages:\n", num);
 
@@ -704,7 +704,17 @@ static int at91_twi_xfer(struct i2c_adapter *adap, struct i2c_msg *msg, int num)
 	dev->msg = m_start;
 	dev->recv_len_abort = false;
 
+	if (dev->use_dma) {
+		dma_buf = i2c_get_dma_safe_msg_buf(m_start, 1);
+		if (!dma_buf) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		dev->buf = dma_buf;
+	}
+
 	ret = at91_do_twi_transfer(dev);
+	i2c_put_dma_safe_msg_buf(dma_buf, m_start, !ret);
 
 	ret = (ret < 0) ? ret : num;
 out:
@@ -816,65 +826,51 @@ error:
 	return ret;
 }
 
-static void at91_prepare_twi_recovery(struct i2c_adapter *adap)
+static int at91_init_twi_recovery_gpio(struct platform_device *pdev,
+				       struct at91_twi_dev *dev)
 {
-	struct at91_twi_dev *dev = i2c_get_adapdata(adap);
+	struct i2c_bus_recovery_info *rinfo = &dev->rinfo;
 
-	pinctrl_select_state(dev->pinctrl, dev->pinctrl_pins_gpio);
+	rinfo->pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (!rinfo->pinctrl || IS_ERR(rinfo->pinctrl)) {
+		dev_info(dev->dev, "can't get pinctrl, bus recovery not supported\n");
+		return PTR_ERR(rinfo->pinctrl);
+	}
+	dev->adapter.bus_recovery_info = rinfo;
+
+	return 0;
 }
 
-static void at91_unprepare_twi_recovery(struct i2c_adapter *adap)
+static int at91_twi_recover_bus_cmd(struct i2c_adapter *adap)
 {
 	struct at91_twi_dev *dev = i2c_get_adapdata(adap);
 
-	pinctrl_select_state(dev->pinctrl, dev->pinctrl_pins_default);
+	dev->transfer_status |= at91_twi_read(dev, AT91_TWI_SR);
+	if (!(dev->transfer_status & AT91_TWI_SDA)) {
+		dev_dbg(dev->dev, "SDA is down; sending bus clear command\n");
+		if (dev->use_alt_cmd) {
+			unsigned int acr;
+
+			acr = at91_twi_read(dev, AT91_TWI_ACR);
+			acr &= ~AT91_TWI_ACR_DATAL_MASK;
+			at91_twi_write(dev, AT91_TWI_ACR, acr);
+		}
+		at91_twi_write(dev, AT91_TWI_CR, AT91_TWI_CLEAR);
+	}
+
+	return 0;
 }
 
 static int at91_init_twi_recovery_info(struct platform_device *pdev,
 				       struct at91_twi_dev *dev)
 {
 	struct i2c_bus_recovery_info *rinfo = &dev->rinfo;
+	bool has_clear_cmd = dev->pdata->has_clear_cmd;
 
-	dev->pinctrl = devm_pinctrl_get(&pdev->dev);
-	if (!dev->pinctrl || IS_ERR(dev->pinctrl)) {
-		dev_info(dev->dev, "can't get pinctrl, bus recovery not supported\n");
-		return PTR_ERR(dev->pinctrl);
-	}
+	if (!has_clear_cmd)
+		return at91_init_twi_recovery_gpio(pdev, dev);
 
-	dev->pinctrl_pins_default = pinctrl_lookup_state(dev->pinctrl,
-							 PINCTRL_STATE_DEFAULT);
-	dev->pinctrl_pins_gpio = pinctrl_lookup_state(dev->pinctrl,
-						      "gpio");
-	rinfo->sda_gpiod = devm_gpiod_get(&pdev->dev, "sda", GPIOD_IN);
-	if (PTR_ERR(rinfo->sda_gpiod) == -EPROBE_DEFER)
-		return -EPROBE_DEFER;
-
-	rinfo->scl_gpiod = devm_gpiod_get(&pdev->dev, "scl",
-					  GPIOD_OUT_HIGH_OPEN_DRAIN);
-	if (PTR_ERR(rinfo->scl_gpiod) == -EPROBE_DEFER)
-		return -EPROBE_DEFER;
-
-	if (IS_ERR(rinfo->sda_gpiod) ||
-	    IS_ERR(rinfo->scl_gpiod) ||
-	    IS_ERR(dev->pinctrl_pins_default) ||
-	    IS_ERR(dev->pinctrl_pins_gpio)) {
-		dev_info(&pdev->dev, "recovery information incomplete\n");
-		if (!IS_ERR(rinfo->sda_gpiod)) {
-			gpiod_put(rinfo->sda_gpiod);
-			rinfo->sda_gpiod = NULL;
-		}
-		if (!IS_ERR(rinfo->scl_gpiod)) {
-			gpiod_put(rinfo->scl_gpiod);
-			rinfo->scl_gpiod = NULL;
-		}
-		return -EINVAL;
-	}
-
-	dev_info(&pdev->dev, "using scl, sda for recovery\n");
-
-	rinfo->prepare_recovery = at91_prepare_twi_recovery;
-	rinfo->unprepare_recovery = at91_unprepare_twi_recovery;
-	rinfo->recover_bus = i2c_generic_scl_recovery;
+	rinfo->recover_bus = at91_twi_recover_bus_cmd;
 	dev->adapter.bus_recovery_info = rinfo;
 
 	return 0;

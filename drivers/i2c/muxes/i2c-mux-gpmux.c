@@ -85,18 +85,14 @@ static int i2c_mux_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mux->control = devm_mux_control_get(dev, NULL);
-	if (IS_ERR(mux->control)) {
-		if (PTR_ERR(mux->control) != -EPROBE_DEFER)
-			dev_err(dev, "failed to get control-mux\n");
-		return PTR_ERR(mux->control);
-	}
+	if (IS_ERR(mux->control))
+		return dev_err_probe(dev, PTR_ERR(mux->control),
+				     "failed to get control-mux\n");
 
 	parent = mux_parent_adapter(dev);
-	if (IS_ERR(parent)) {
-		if (PTR_ERR(parent) != -EPROBE_DEFER)
-			dev_err(dev, "failed to get i2c-parent adapter\n");
-		return PTR_ERR(parent);
-	}
+	if (IS_ERR(parent))
+		return dev_err_probe(dev, PTR_ERR(parent),
+				     "failed to get i2c-parent adapter\n");
 
 	children = of_get_child_count(np);
 
@@ -138,6 +134,7 @@ static int i2c_mux_probe(struct platform_device *pdev)
 	return 0;
 
 err_children:
+	of_node_put(child);
 	i2c_mux_del_adapters(muxc);
 err_parent:
 	i2c_put_adapter(parent);
@@ -145,19 +142,17 @@ err_parent:
 	return ret;
 }
 
-static int i2c_mux_remove(struct platform_device *pdev)
+static void i2c_mux_remove(struct platform_device *pdev)
 {
 	struct i2c_mux_core *muxc = platform_get_drvdata(pdev);
 
 	i2c_mux_del_adapters(muxc);
 	i2c_put_adapter(muxc->parent);
-
-	return 0;
 }
 
 static struct platform_driver i2c_mux_driver = {
 	.probe	= i2c_mux_probe,
-	.remove	= i2c_mux_remove,
+	.remove_new = i2c_mux_remove,
 	.driver	= {
 		.name	= "i2c-mux-gpmux",
 		.of_match_table = i2c_mux_of_match,

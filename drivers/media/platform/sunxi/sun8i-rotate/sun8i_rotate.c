@@ -494,7 +494,7 @@ static int rotate_start_streaming(struct vb2_queue *vq, unsigned int count)
 		struct device *dev = ctx->dev->dev;
 		int ret;
 
-		ret = pm_runtime_get_sync(dev);
+		ret = pm_runtime_resume_and_get(dev);
 		if (ret < 0) {
 			dev_err(dev, "Failed to enable module\n");
 
@@ -747,11 +747,8 @@ static int rotate_probe(struct platform_device *pdev)
 	dev->dev = &pdev->dev;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq <= 0) {
-		dev_err(dev->dev, "Failed to get IRQ\n");
-
+	if (irq <= 0)
 		return irq;
-	}
 
 	ret = devm_request_irq(dev->dev, irq, rotate_irq,
 			       0, dev_name(dev->dev), dev);
@@ -836,7 +833,7 @@ err_v4l2:
 	return ret;
 }
 
-static int rotate_remove(struct platform_device *pdev)
+static void rotate_remove(struct platform_device *pdev)
 {
 	struct rotate_dev *dev = platform_get_drvdata(pdev);
 
@@ -845,8 +842,6 @@ static int rotate_remove(struct platform_device *pdev)
 	v4l2_device_unregister(&dev->v4l2_dev);
 
 	pm_runtime_force_suspend(&pdev->dev);
-
-	return 0;
 }
 
 static int rotate_runtime_resume(struct device *device)
@@ -910,7 +905,7 @@ static const struct dev_pm_ops rotate_pm_ops = {
 
 static struct platform_driver rotate_driver = {
 	.probe		= rotate_probe,
-	.remove		= rotate_remove,
+	.remove_new	= rotate_remove,
 	.driver		= {
 		.name		= ROTATE_NAME,
 		.of_match_table	= rotate_dt_match,

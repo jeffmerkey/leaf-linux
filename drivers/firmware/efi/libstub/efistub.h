@@ -3,8 +3,12 @@
 #ifndef _DRIVERS_FIRMWARE_EFI_EFISTUB_H
 #define _DRIVERS_FIRMWARE_EFI_EFISTUB_H
 
-/* error code which can't be mistaken for valid address */
-#define EFI_ERROR	(~0UL)
+#include <linux/compiler.h>
+#include <linux/efi.h>
+#include <linux/kernel.h>
+#include <linux/kern_levels.h>
+#include <linux/types.h>
+#include <asm/efi.h>
 
 /*
  * __init annotations should not be used in the EFI stub, since the code is
@@ -25,25 +29,71 @@
 #define EFI_ALLOC_ALIGN		EFI_PAGE_SIZE
 #endif
 
-#if defined(CONFIG_ARM) || defined(CONFIG_X86)
-#define __efistub_global	__section(.data)
-#else
-#define __efistub_global
+#ifndef EFI_ALLOC_LIMIT
+#define EFI_ALLOC_LIMIT		ULONG_MAX
 #endif
 
-extern bool __pure nochunk(void);
-extern bool __pure nokaslr(void);
-extern bool __pure noinitrd(void);
-extern bool __pure is_quiet(void);
-extern bool __pure novamap(void);
+extern bool efi_nochunk;
+extern bool efi_nokaslr;
+extern int efi_loglevel;
+extern bool efi_novamap;
 
-extern __pure efi_system_table_t  *efi_system_table(void);
+extern const efi_system_table_t *efi_system_table;
 
-#define pr_efi(msg)		do {			\
-	if (!is_quiet()) efi_printk("EFI stub: "msg);	\
-} while (0)
+typedef union efi_dxe_services_table efi_dxe_services_table_t;
+extern const efi_dxe_services_table_t *efi_dxe_table;
 
-#define pr_efi_err(msg) efi_printk("EFI stub: ERROR: "msg)
+efi_status_t __efiapi efi_pe_entry(efi_handle_t handle,
+				   efi_system_table_t *sys_table_arg);
+
+#ifndef ARCH_HAS_EFISTUB_WRAPPERS
+
+#define efi_is_native()			(true)
+#define efi_table_attr(inst, attr)	(inst)->attr
+#define efi_fn_call(inst, func, ...)	(inst)->func(__VA_ARGS__)
+
+#endif
+
+#define efi_call_proto(inst, func, ...) ({			\
+	__typeof__(inst) __inst = (inst);			\
+	efi_fn_call(__inst, func, __inst, ##__VA_ARGS__);	\
+})
+#define efi_bs_call(func, ...) \
+	efi_fn_call(efi_table_attr(efi_system_table, boottime), func, ##__VA_ARGS__)
+#define efi_rt_call(func, ...) \
+	efi_fn_call(efi_table_attr(efi_system_table, runtime), func, ##__VA_ARGS__)
+#define efi_dxe_call(func, ...) \
+	efi_fn_call(efi_dxe_table, func, ##__VA_ARGS__)
+
+#define efi_info(fmt, ...) \
+	efi_printk(KERN_INFO fmt, ##__VA_ARGS__)
+#define efi_warn(fmt, ...) \
+	efi_printk(KERN_WARNING "WARNING: " fmt, ##__VA_ARGS__)
+#define efi_err(fmt, ...) \
+	efi_printk(KERN_ERR "ERROR: " fmt, ##__VA_ARGS__)
+#define efi_debug(fmt, ...) \
+	efi_printk(KERN_DEBUG "DEBUG: " fmt, ##__VA_ARGS__)
+
+#define efi_printk_once(fmt, ...) 		\
+({						\
+	static bool __print_once;		\
+	bool __ret_print_once = !__print_once;	\
+						\
+	if (!__print_once) {			\
+		__print_once = true;		\
+		efi_printk(fmt, ##__VA_ARGS__);	\
+	}					\
+	__ret_print_once;			\
+})
+
+#define efi_info_once(fmt, ...) \
+	efi_printk_once(KERN_INFO fmt, ##__VA_ARGS__)
+#define efi_warn_once(fmt, ...) \
+	efi_printk_once(KERN_WARNING "WARNING: " fmt, ##__VA_ARGS__)
+#define efi_err_once(fmt, ...) \
+	efi_printk_once(KERN_ERR "ERROR: " fmt, ##__VA_ARGS__)
+#define efi_debug_once(fmt, ...) \
+	efi_printk_once(KERN_DEBUG "DEBUG: " fmt, ##__VA_ARGS__)
 
 /* Helper macros for the usual case of using simple C variables: */
 #ifndef fdt_setprop_inplace_var
@@ -77,6 +127,13 @@ extern __pure efi_system_table_t  *efi_system_table(void);
 		((handle = efi_get_handle_at((array), i)) || true);	\
 	     i++)
 
+static inline
+void efi_set_u64_split(u64 data, u32 *lo, u32 *hi)
+{
+	*lo = lower_32_bits(data);
+	*hi = upper_32_bits(data);
+}
+
 /*
  * Allocation types for calls to boottime->allocate_pages.
  */
@@ -92,16 +149,101 @@ extern __pure efi_system_table_t  *efi_system_table(void);
 #define EFI_LOCATE_BY_REGISTER_NOTIFY		1
 #define EFI_LOCATE_BY_PROTOCOL			2
 
-struct efi_boot_memmap {
-	efi_memory_desc_t	**map;
-	unsigned long		*map_size;
-	unsigned long		*desc_size;
-	u32			*desc_ver;
-	unsigned long		*key_ptr;
-	unsigned long		*buff_size;
-};
+/*
+ * boottime->stall takes the time period in microseconds
+ */
+#define EFI_USEC_PER_SEC		1000000
+
+/*
+ * boottime->set_timer takes the time in 100ns units
+ */
+#define EFI_100NSEC_PER_USEC	((u64)10)
+
+/*
+ * An efi_boot_memmap is used by efi_get_memory_map() to return the
+ * EFI memory map in a dynamically allocated buffer.
+ *
+ * The buffer allocated for the EFI memory map includes extra room for
+ * a minimum of EFI_MMAP_NR_SLACK_SLOTS additional EFI memory descriptors.
+ * This facilitates the reuse of the EFI memory map buffer when a second
+ * call to ExitBootServices() is needed because of intervening changes to
+ * the EFI memory map. Other related structures, e.g. x86 e820ext, need
+ * to factor in this headroom requirement as well.
+ */
+#define EFI_MMAP_NR_SLACK_SLOTS	8
 
 typedef struct efi_generic_dev_path efi_device_path_protocol_t;
+
+union efi_device_path_to_text_protocol {
+	struct {
+		efi_char16_t *(__efiapi *convert_device_node_to_text)(
+					const efi_device_path_protocol_t *,
+					bool, bool);
+		efi_char16_t *(__efiapi *convert_device_path_to_text)(
+					const efi_device_path_protocol_t *,
+					bool, bool);
+	};
+	struct {
+		u32 convert_device_node_to_text;
+		u32 convert_device_path_to_text;
+	} mixed_mode;
+};
+
+typedef union efi_device_path_to_text_protocol efi_device_path_to_text_protocol_t;
+
+union efi_device_path_from_text_protocol {
+	struct {
+		efi_device_path_protocol_t *
+			(__efiapi *convert_text_to_device_node)(const efi_char16_t *);
+		efi_device_path_protocol_t *
+			(__efiapi *convert_text_to_device_path)(const efi_char16_t *);
+	};
+	struct {
+		u32 convert_text_to_device_node;
+		u32 convert_text_to_device_path;
+	} mixed_mode;
+};
+
+typedef union efi_device_path_from_text_protocol efi_device_path_from_text_protocol_t;
+
+typedef void *efi_event_t;
+/* Note that notifications won't work in mixed mode */
+typedef void (__efiapi *efi_event_notify_t)(efi_event_t, void *);
+
+#define EFI_EVT_TIMER		0x80000000U
+#define EFI_EVT_RUNTIME		0x40000000U
+#define EFI_EVT_NOTIFY_WAIT	0x00000100U
+#define EFI_EVT_NOTIFY_SIGNAL	0x00000200U
+
+/**
+ * efi_set_event_at() - add event to events array
+ *
+ * @events:	array of UEFI events
+ * @ids:	index where to put the event in the array
+ * @event:	event to add to the aray
+ *
+ * boottime->wait_for_event() takes an array of events as input.
+ * Provide a helper to set it up correctly for mixed mode.
+ */
+static inline
+void efi_set_event_at(efi_event_t *events, size_t idx, efi_event_t event)
+{
+	if (efi_is_native())
+		events[idx] = event;
+	else
+		((u32 *)events)[idx] = (u32)(unsigned long)event;
+}
+
+#define EFI_TPL_APPLICATION	4
+#define EFI_TPL_CALLBACK	8
+#define EFI_TPL_NOTIFY		16
+#define EFI_TPL_HIGH_LEVEL	31
+
+typedef enum {
+	EfiTimerCancel,
+	EfiTimerPeriodic,
+	EfiTimerRelative
+} EFI_TIMER_DELAY;
 
 /*
  * EFI Boot Services table
@@ -121,11 +263,16 @@ union efi_boot_services {
 		efi_status_t (__efiapi *allocate_pool)(int, unsigned long,
 						       void **);
 		efi_status_t (__efiapi *free_pool)(void *);
-		void *create_event;
-		void *set_timer;
-		void *wait_for_event;
+		efi_status_t (__efiapi *create_event)(u32, unsigned long,
+						      efi_event_notify_t, void *,
+						      efi_event_t *);
+		efi_status_t (__efiapi *set_timer)(efi_event_t,
+						  EFI_TIMER_DELAY, u64);
+		efi_status_t (__efiapi *wait_for_event)(unsigned long,
+							efi_event_t *,
+							unsigned long *);
 		void *signal_event;
-		void *close_event;
+		efi_status_t (__efiapi *close_event)(efi_event_t);
 		void *check_event;
 		void *install_protocol_interface;
 		void *reinstall_protocol_interface;
@@ -142,17 +289,21 @@ union efi_boot_services {
 							    efi_handle_t *);
 		efi_status_t (__efiapi *install_configuration_table)(efi_guid_t *,
 								     void *);
-		void *load_image;
-		void *start_image;
+		efi_status_t (__efiapi *load_image)(bool, efi_handle_t,
+						    efi_device_path_protocol_t *,
+						    void *, unsigned long,
+						    efi_handle_t *);
+		efi_status_t (__efiapi *start_image)(efi_handle_t, unsigned long *,
+						     efi_char16_t **);
 		efi_status_t __noreturn (__efiapi *exit)(efi_handle_t,
 							 efi_status_t,
 							 unsigned long,
 							 efi_char16_t *);
-		void *unload_image;
+		efi_status_t (__efiapi *unload_image)(efi_handle_t);
 		efi_status_t (__efiapi *exit_boot_services)(efi_handle_t,
 							    unsigned long);
 		void *get_next_monotonic_count;
-		void *stall;
+		efi_status_t (__efiapi *stall)(unsigned long);
 		void *set_watchdog_timer;
 		void *connect_controller;
 		efi_status_t (__efiapi *disconnect_controller)(efi_handle_t,
@@ -165,11 +316,11 @@ union efi_boot_services {
 		void *locate_handle_buffer;
 		efi_status_t (__efiapi *locate_protocol)(efi_guid_t *, void *,
 							 void **);
-		void *install_multiple_protocol_interfaces;
-		void *uninstall_multiple_protocol_interfaces;
+		efi_status_t (__efiapi *install_multiple_protocol_interfaces)(efi_handle_t *, ...);
+		efi_status_t (__efiapi *uninstall_multiple_protocol_interfaces)(efi_handle_t, ...);
 		void *calculate_crc32;
-		void *copy_mem;
-		void *set_mem;
+		void (__efiapi *copy_mem)(void *, const void *, unsigned long);
+		void (__efiapi *set_mem)(void *, unsigned long, unsigned char);
 		void *create_event_ex;
 	};
 	struct {
@@ -221,6 +372,96 @@ union efi_boot_services {
 	} mixed_mode;
 };
 
+typedef enum {
+	EfiGcdMemoryTypeNonExistent,
+	EfiGcdMemoryTypeReserved,
+	EfiGcdMemoryTypeSystemMemory,
+	EfiGcdMemoryTypeMemoryMappedIo,
+	EfiGcdMemoryTypePersistent,
+	EfiGcdMemoryTypeMoreReliable,
+	EfiGcdMemoryTypeMaximum
+} efi_gcd_memory_type_t;
+
+typedef struct {
+	efi_physical_addr_t base_address;
+	u64 length;
+	u64 capabilities;
+	u64 attributes;
+	efi_gcd_memory_type_t gcd_memory_type;
+	void *image_handle;
+	void *device_handle;
+} efi_gcd_memory_space_desc_t;
+
+/*
+ * EFI DXE Services table
+ */
+union efi_dxe_services_table {
+	struct {
+		efi_table_hdr_t hdr;
+		void *add_memory_space;
+		void *allocate_memory_space;
+		void *free_memory_space;
+		void *remove_memory_space;
+		efi_status_t (__efiapi *get_memory_space_descriptor)(efi_physical_addr_t,
+								     efi_gcd_memory_space_desc_t *);
+		efi_status_t (__efiapi *set_memory_space_attributes)(efi_physical_addr_t,
+								     u64, u64);
+		void *get_memory_space_map;
+		void *add_io_space;
+		void *allocate_io_space;
+		void *free_io_space;
+		void *remove_io_space;
+		void *get_io_space_descriptor;
+		void *get_io_space_map;
+		void *dispatch;
+		void *schedule;
+		void *trust;
+		void *process_firmware_volume;
+		void *set_memory_space_capabilities;
+	};
+	struct {
+		efi_table_hdr_t hdr;
+		u32 add_memory_space;
+		u32 allocate_memory_space;
+		u32 free_memory_space;
+		u32 remove_memory_space;
+		u32 get_memory_space_descriptor;
+		u32 set_memory_space_attributes;
+		u32 get_memory_space_map;
+		u32 add_io_space;
+		u32 allocate_io_space;
+		u32 free_io_space;
+		u32 remove_io_space;
+		u32 get_io_space_descriptor;
+		u32 get_io_space_map;
+		u32 dispatch;
+		u32 schedule;
+		u32 trust;
+		u32 process_firmware_volume;
+		u32 set_memory_space_capabilities;
+	} mixed_mode;
+};
+
+typedef union efi_memory_attribute_protocol efi_memory_attribute_protocol_t;
+
+union efi_memory_attribute_protocol {
+	struct {
+		efi_status_t (__efiapi *get_memory_attributes)(
+			efi_memory_attribute_protocol_t *, efi_physical_addr_t, u64, u64 *);
+
+		efi_status_t (__efiapi *set_memory_attributes)(
+			efi_memory_attribute_protocol_t *, efi_physical_addr_t, u64, u64);
+
+		efi_status_t (__efiapi *clear_memory_attributes)(
+			efi_memory_attribute_protocol_t *, efi_physical_addr_t, u64, u64);
+	};
+	struct {
+		u32 get_memory_attributes;
+		u32 set_memory_attributes;
+		u32 clear_memory_attributes;
+	} mixed_mode;
+};
+
 typedef union efi_uga_draw_protocol efi_uga_draw_protocol_t;
 
 union efi_uga_draw_protocol {
@@ -236,6 +477,27 @@ union efi_uga_draw_protocol {
 		u32 blt;
 	} mixed_mode;
 };
+
+typedef struct {
+	u16 scan_code;
+	efi_char16_t unicode_char;
+} efi_input_key_t;
+
+union efi_simple_text_input_protocol {
+	struct {
+		void *reset;
+		efi_status_t (__efiapi *read_keystroke)(efi_simple_text_input_protocol_t *,
+							efi_input_key_t *);
+		efi_event_t wait_for_key;
+	};
+	struct {
+		u32 reset;
+		u32 read_keystroke;
+		u32 wait_for_key;
+	} mixed_mode;
+};
+
+efi_status_t efi_wait_for_key(unsigned long usec, efi_input_key_t *key);
 
 union efi_simple_text_output_protocol {
 	struct {
@@ -298,8 +560,10 @@ typedef union efi_graphics_output_protocol efi_graphics_output_protocol_t;
 
 union efi_graphics_output_protocol {
 	struct {
-		void *query_mode;
-		void *set_mode;
+		efi_status_t (__efiapi *query_mode)(efi_graphics_output_protocol_t *,
+						    u32, unsigned long *,
+						    efi_graphics_output_mode_info_t **);
+		efi_status_t (__efiapi *set_mode)  (efi_graphics_output_protocol_t *, u32);
 		void *blt;
 		efi_graphics_output_protocol_mode_t *mode;
 	};
@@ -355,36 +619,63 @@ typedef struct {
 	efi_char16_t		filename[];
 } efi_file_info_t;
 
-typedef struct efi_file_protocol efi_file_protocol_t;
+typedef union efi_file_protocol efi_file_protocol_t;
 
-struct efi_file_protocol {
-	u64		revision;
-	efi_status_t	(__efiapi *open)	(efi_file_protocol_t *,
-						 efi_file_protocol_t **,
-						 efi_char16_t *, u64, u64);
-	efi_status_t	(__efiapi *close)	(efi_file_protocol_t *);
-	efi_status_t	(__efiapi *delete)	(efi_file_protocol_t *);
-	efi_status_t	(__efiapi *read)	(efi_file_protocol_t *,
-						 unsigned long *, void *);
-	efi_status_t	(__efiapi *write)	(efi_file_protocol_t *,
-						 unsigned long, void *);
-	efi_status_t	(__efiapi *get_position)(efi_file_protocol_t *, u64 *);
-	efi_status_t	(__efiapi *set_position)(efi_file_protocol_t *, u64);
-	efi_status_t	(__efiapi *get_info)	(efi_file_protocol_t *,
-						 efi_guid_t *, unsigned long *,
-						 void *);
-	efi_status_t	(__efiapi *set_info)	(efi_file_protocol_t *,
-						 efi_guid_t *, unsigned long,
-						 void *);
-	efi_status_t	(__efiapi *flush)	(efi_file_protocol_t *);
+union efi_file_protocol {
+	struct {
+		u64		revision;
+		efi_status_t	(__efiapi *open)	(efi_file_protocol_t *,
+							 efi_file_protocol_t **,
+							 efi_char16_t *, u64,
+							 u64);
+		efi_status_t	(__efiapi *close)	(efi_file_protocol_t *);
+		efi_status_t	(__efiapi *delete)	(efi_file_protocol_t *);
+		efi_status_t	(__efiapi *read)	(efi_file_protocol_t *,
+							 unsigned long *,
+							 void *);
+		efi_status_t	(__efiapi *write)	(efi_file_protocol_t *,
+							 unsigned long, void *);
+		efi_status_t	(__efiapi *get_position)(efi_file_protocol_t *,
+							 u64 *);
+		efi_status_t	(__efiapi *set_position)(efi_file_protocol_t *,
+							 u64);
+		efi_status_t	(__efiapi *get_info)	(efi_file_protocol_t *,
+							 efi_guid_t *,
+							 unsigned long *,
+							 void *);
+		efi_status_t	(__efiapi *set_info)	(efi_file_protocol_t *,
+							 efi_guid_t *,
+							 unsigned long,
+							 void *);
+		efi_status_t	(__efiapi *flush)	(efi_file_protocol_t *);
+	};
+	struct {
+		u64 revision;
+		u32 open;
+		u32 close;
+		u32 delete;
+		u32 read;
+		u32 write;
+		u32 get_position;
+		u32 set_position;
+		u32 get_info;
+		u32 set_info;
+		u32 flush;
+	} mixed_mode;
 };
 
-typedef struct efi_simple_file_system_protocol efi_simple_file_system_protocol_t;
+typedef union efi_simple_file_system_protocol efi_simple_file_system_protocol_t;
 
-struct efi_simple_file_system_protocol {
-	u64	revision;
-	int	(__efiapi *open_volume)(efi_simple_file_system_protocol_t *,
-					efi_file_protocol_t **);
+union efi_simple_file_system_protocol {
+	struct {
+		u64		revision;
+		efi_status_t	(__efiapi *open_volume)(efi_simple_file_system_protocol_t *,
+							efi_file_protocol_t **);
+	};
+	struct {
+		u64 revision;
+		u32 open_volume;
+	} mixed_mode;
 };
 
 #define EFI_FILE_MODE_READ	0x0000000000000001
@@ -535,17 +826,45 @@ union apple_properties_protocol {
 
 typedef u32 efi_tcg2_event_log_format;
 
+#define INITRD_EVENT_TAG_ID 0x8F3B22ECU
+#define LOAD_OPTIONS_EVENT_TAG_ID 0x8F3B22EDU
+#define EV_EVENT_TAG 0x00000006U
+#define EFI_TCG2_EVENT_HEADER_VERSION	0x1
+
+struct efi_tcg2_event {
+	u32		event_size;
+	struct {
+		u32	header_size;
+		u16	header_version;
+		u32	pcr_index;
+		u32	event_type;
+	} __packed event_header;
+	/* u8[] event follows here */
+} __packed;
+
+struct efi_tcg2_tagged_event {
+	u32 tagged_event_id;
+	u32 tagged_event_data_size;
+	/* u8  tagged event data follows here */
+} __packed;
+
+typedef struct efi_tcg2_event efi_tcg2_event_t;
+typedef struct efi_tcg2_tagged_event efi_tcg2_tagged_event_t;
 typedef union efi_tcg2_protocol efi_tcg2_protocol_t;
 
 union efi_tcg2_protocol {
 	struct {
 		void *get_capability;
-		efi_status_t (__efiapi *get_event_log)(efi_handle_t,
+		efi_status_t (__efiapi *get_event_log)(efi_tcg2_protocol_t *,
 						       efi_tcg2_event_log_format,
 						       efi_physical_addr_t *,
 						       efi_physical_addr_t *,
 						       efi_bool_t *);
-		void *hash_log_extend_event;
+		efi_status_t (__efiapi *hash_log_extend_event)(efi_tcg2_protocol_t *,
+							       u64,
+							       efi_physical_addr_t,
+							       u64,
+							       const efi_tcg2_event_t *);
 		void *submit_command;
 		void *get_active_pcr_banks;
 		void *set_active_pcr_banks;
@@ -562,6 +881,13 @@ union efi_tcg2_protocol {
 	} mixed_mode;
 };
 
+struct riscv_efi_boot_protocol {
+	u64 revision;
+
+	efi_status_t (__efiapi *get_boot_hartid)(struct riscv_efi_boot_protocol *,
+						 unsigned long *boot_hartid);
+};
+
 typedef union efi_load_file_protocol efi_load_file_protocol_t;
 typedef union efi_load_file_protocol efi_load_file2_protocol_t;
 
@@ -576,29 +902,51 @@ union efi_load_file_protocol {
 	} mixed_mode;
 };
 
+typedef struct {
+	u32 attributes;
+	u16 file_path_list_length;
+	u8 variable_data[];
+	// efi_char16_t description[];
+	// efi_device_path_protocol_t file_path_list[];
+	// u8 optional_data[];
+} __packed efi_load_option_t;
+
+#define EFI_LOAD_OPTION_ACTIVE		0x0001U
+#define EFI_LOAD_OPTION_FORCE_RECONNECT	0x0002U
+#define EFI_LOAD_OPTION_HIDDEN		0x0008U
+#define EFI_LOAD_OPTION_CATEGORY	0x1f00U
+#define   EFI_LOAD_OPTION_CATEGORY_BOOT	0x0000U
+#define   EFI_LOAD_OPTION_CATEGORY_APP	0x0100U
+
+#define EFI_LOAD_OPTION_BOOT_MASK \
+	(EFI_LOAD_OPTION_ACTIVE|EFI_LOAD_OPTION_HIDDEN|EFI_LOAD_OPTION_CATEGORY)
+#define EFI_LOAD_OPTION_MASK (EFI_LOAD_OPTION_FORCE_RECONNECT|EFI_LOAD_OPTION_BOOT_MASK)
+
+typedef struct {
+	u32 attributes;
+	u16 file_path_list_length;
+	const efi_char16_t *description;
+	const efi_device_path_protocol_t *file_path_list;
+	u32 optional_data_size;
+	const void *optional_data;
+} efi_load_option_unpacked_t;
+
 void efi_pci_disable_bridge_busmaster(void);
 
 typedef efi_status_t (*efi_exit_boot_map_processing)(
 	struct efi_boot_memmap *map,
 	void *priv);
 
-efi_status_t efi_exit_boot_services(void *handle,
-				    struct efi_boot_memmap *map,
-				    void *priv,
+efi_status_t efi_exit_boot_services(void *handle, void *priv,
 				    efi_exit_boot_map_processing priv_func);
 
-void efi_char16_printk(efi_char16_t *);
-
-efi_status_t allocate_new_fdt_and_exit_boot(void *handle,
-					    unsigned long *new_fdt_addr,
-					    unsigned long max_addr,
-					    u64 initrd_addr, u64 initrd_size,
-					    char *cmdline_ptr,
-					    unsigned long fdt_addr,
-					    unsigned long fdt_size);
+efi_status_t efi_boot_kernel(void *handle, efi_loaded_image_t *image,
+			     unsigned long kernel_addr, char *cmdline_ptr);
 
 void *get_fdt(unsigned long *fdt_size);
 
+efi_status_t efi_alloc_virtmap(efi_memory_desc_t **virtmap,
+			       unsigned long *desc_size, u32 *desc_ver);
 void efi_get_virtmap(efi_memory_desc_t *memory_map, unsigned long map_size,
 		     unsigned long desc_size, efi_memory_desc_t *runtime_map,
 		     int *count);
@@ -606,38 +954,39 @@ void efi_get_virtmap(efi_memory_desc_t *memory_map, unsigned long map_size,
 efi_status_t efi_get_random_bytes(unsigned long size, u8 *out);
 
 efi_status_t efi_random_alloc(unsigned long size, unsigned long align,
-			      unsigned long *addr, unsigned long random_seed);
+			      unsigned long *addr, unsigned long random_seed,
+			      int memory_type);
+
+efi_status_t efi_random_get_seed(void);
 
 efi_status_t check_platform_features(void);
 
 void *get_efi_config_table(efi_guid_t guid);
 
-void efi_printk(char *str);
+/* NOTE: These functions do not print a trailing newline after the string */
+void efi_char16_puts(efi_char16_t *);
+void efi_puts(const char *str);
+
+__printf(1, 2) int efi_printk(char const *fmt, ...);
 
 void efi_free(unsigned long size, unsigned long addr);
 
-char *efi_convert_cmdline(efi_loaded_image_t *image, int *cmd_line_len,
-			  unsigned long max_addr);
+void efi_apply_loadoptions_quirk(const void **load_options, u32 *load_options_size);
 
-efi_status_t efi_get_memory_map(struct efi_boot_memmap *map);
+char *efi_convert_cmdline(efi_loaded_image_t *image, int *cmd_line_len);
 
-efi_status_t efi_low_alloc_above(unsigned long size, unsigned long align,
-				 unsigned long *addr, unsigned long min);
-
-static inline
-efi_status_t efi_low_alloc(unsigned long size, unsigned long align,
-			   unsigned long *addr)
-{
-	/*
-	 * Don't allocate at 0x0. It will confuse code that
-	 * checks pointers against NULL. Skip the first 8
-	 * bytes so we start at a nice even number.
-	 */
-	return efi_low_alloc_above(size, align, addr, 0x8);
-}
+efi_status_t efi_get_memory_map(struct efi_boot_memmap **map,
+				bool install_cfg_tbl);
 
 efi_status_t efi_allocate_pages(unsigned long size, unsigned long *addr,
 				unsigned long max);
+
+efi_status_t efi_allocate_pages_aligned(unsigned long size, unsigned long *addr,
+					unsigned long max, unsigned long align,
+					int memory_type);
+
+efi_status_t efi_low_alloc_above(unsigned long size, unsigned long align,
+				 unsigned long *addr, unsigned long min);
 
 efi_status_t efi_relocate_kernel(unsigned long *image_addr,
 				 unsigned long image_size,
@@ -648,21 +997,149 @@ efi_status_t efi_relocate_kernel(unsigned long *image_addr,
 
 efi_status_t efi_parse_options(char const *cmdline);
 
+void efi_parse_option_graphics(char *option);
+
 efi_status_t efi_setup_gop(struct screen_info *si, efi_guid_t *proto,
 			   unsigned long size);
 
-efi_status_t efi_load_dtb(efi_loaded_image_t *image,
-			  unsigned long *load_addr,
-			  unsigned long *load_size);
+efi_status_t handle_cmdline_files(efi_loaded_image_t *image,
+				  const efi_char16_t *optstr,
+				  int optstr_size,
+				  unsigned long soft_limit,
+				  unsigned long hard_limit,
+				  unsigned long *load_addr,
+				  unsigned long *load_size);
+
+
+static inline efi_status_t efi_load_dtb(efi_loaded_image_t *image,
+					unsigned long *load_addr,
+					unsigned long *load_size)
+{
+	return handle_cmdline_files(image, L"dtb=", sizeof(L"dtb=") - 2,
+				    ULONG_MAX, ULONG_MAX, load_addr, load_size);
+}
 
 efi_status_t efi_load_initrd(efi_loaded_image_t *image,
-			     unsigned long *load_addr,
-			     unsigned long *load_size,
 			     unsigned long soft_limit,
-			     unsigned long hard_limit);
+			     unsigned long hard_limit,
+			     const struct linux_efi_initrd **out);
+/*
+ * This function handles the architcture specific differences between arm and
+ * arm64 regarding where the kernel image must be loaded and any memory that
+ * must be reserved. On failure it is required to free all
+ * all allocations it has made.
+ */
+efi_status_t handle_kernel_image(unsigned long *image_addr,
+				 unsigned long *image_size,
+				 unsigned long *reserve_addr,
+				 unsigned long *reserve_size,
+				 efi_loaded_image_t *image,
+				 efi_handle_t image_handle);
 
-efi_status_t efi_load_initrd_dev_path(unsigned long *load_addr,
-				      unsigned long *load_size,
-				      unsigned long max);
+/* shared entrypoint between the normal stub and the zboot stub */
+efi_status_t efi_stub_common(efi_handle_t handle,
+			     efi_loaded_image_t *image,
+			     unsigned long image_addr,
+			     char *cmdline_ptr);
+
+efi_status_t efi_handle_cmdline(efi_loaded_image_t *image, char **cmdline_ptr);
+
+asmlinkage void __noreturn efi_enter_kernel(unsigned long entrypoint,
+					    unsigned long fdt_addr,
+					    unsigned long fdt_size);
+
+void efi_handle_post_ebs_state(void);
+
+enum efi_secureboot_mode efi_get_secureboot(void);
+
+#ifdef CONFIG_RESET_ATTACK_MITIGATION
+void efi_enable_reset_attack_mitigation(void);
+#else
+static inline void
+efi_enable_reset_attack_mitigation(void) { }
+#endif
+
+void efi_retrieve_tpm2_eventlog(void);
+
+struct screen_info *alloc_screen_info(void);
+struct screen_info *__alloc_screen_info(void);
+void free_screen_info(struct screen_info *si);
+
+void efi_cache_sync_image(unsigned long image_base,
+			  unsigned long alloc_size);
+
+struct efi_smbios_record {
+	u8	type;
+	u8	length;
+	u16	handle;
+};
+
+const struct efi_smbios_record *efi_get_smbios_record(u8 type);
+
+struct efi_smbios_type1_record {
+	struct efi_smbios_record	header;
+
+	u8				manufacturer;
+	u8				product_name;
+	u8				version;
+	u8				serial_number;
+	efi_guid_t			uuid;
+	u8				wakeup_type;
+	u8				sku_number;
+	u8				family;
+};
+
+struct efi_smbios_type4_record {
+	struct efi_smbios_record	header;
+
+	u8				socket;
+	u8				processor_type;
+	u8				processor_family;
+	u8				processor_manufacturer;
+	u8				processor_id[8];
+	u8				processor_version;
+	u8				voltage;
+	u16				external_clock;
+	u16				max_speed;
+	u16				current_speed;
+	u8				status;
+	u8				processor_upgrade;
+	u16				l1_cache_handle;
+	u16				l2_cache_handle;
+	u16				l3_cache_handle;
+	u8				serial_number;
+	u8				asset_tag;
+	u8				part_number;
+	u8				core_count;
+	u8				enabled_core_count;
+	u8				thread_count;
+	u16				processor_characteristics;
+	u16				processor_family2;
+	u16				core_count2;
+	u16				enabled_core_count2;
+	u16				thread_count2;
+	u16				thread_enabled;
+};
+
+#define efi_get_smbios_string(__record, __type, __name) ({		\
+	int off = offsetof(struct efi_smbios_type ## __type ## _record,	\
+			   __name);					\
+	__efi_get_smbios_string((__record), __type, off);		\
+})
+
+const u8 *__efi_get_smbios_string(const struct efi_smbios_record *record,
+				  u8 type, int offset);
+
+void efi_remap_image(unsigned long image_base, unsigned alloc_size,
+		     unsigned long code_size);
+
+asmlinkage efi_status_t __efiapi
+efi_zboot_entry(efi_handle_t handle, efi_system_table_t *systab);
+
+efi_status_t allocate_unaccepted_bitmap(__u32 nr_desc,
+					struct efi_boot_memmap *map);
+void process_unaccepted_memory(u64 start, u64 end);
+void accept_memory(phys_addr_t start, phys_addr_t end);
+void arch_accept_memory(phys_addr_t start, phys_addr_t end);
 
 #endif

@@ -32,9 +32,9 @@ int nfs_mountpoint_expiry_timeout = 500 * HZ;
 /*
  * nfs_path - reconstruct the path given an arbitrary dentry
  * @base - used to return pointer to the end of devname part of path
- * @dentry - pointer to dentry
+ * @dentry_in - pointer to dentry
  * @buffer - result buffer
- * @buflen - length of buffer
+ * @buflen_in - length of buffer
  * @flags - options (see below)
  *
  * Helper function for constructing the server pathname
@@ -49,15 +49,19 @@ int nfs_mountpoint_expiry_timeout = 500 * HZ;
  *		       the original device (export) name
  *		       (if unset, the original name is returned verbatim)
  */
-char *nfs_path(char **p, struct dentry *dentry, char *buffer, ssize_t buflen,
-	       unsigned flags)
+char *nfs_path(char **p, struct dentry *dentry_in, char *buffer,
+	       ssize_t buflen_in, unsigned flags)
 {
 	char *end;
 	int namelen;
 	unsigned seq;
 	const char *base;
+	struct dentry *dentry;
+	ssize_t buflen;
 
 rename_retry:
+	buflen = buflen_in;
+	dentry = dentry_in;
 	end = buffer+buflen;
 	*--end = '\0';
 	buflen--;
@@ -143,7 +147,7 @@ struct vfsmount *nfs_d_automount(struct path *path)
 	struct nfs_fs_context *ctx;
 	struct fs_context *fc;
 	struct vfsmount *mnt = ERR_PTR(-ENOMEM);
-	struct nfs_server *server = NFS_SERVER(d_inode(path->dentry));
+	struct nfs_server *server = NFS_SB(path->dentry->d_sb);
 	struct nfs_client *client = server->nfs_client;
 	int timeout = READ_ONCE(nfs_mountpoint_expiry_timeout);
 	int ret;
@@ -171,7 +175,7 @@ struct vfsmount *nfs_d_automount(struct path *path)
 	}
 
 	/* for submounts we want the same server; referrals will reassign */
-	memcpy(&ctx->nfs_server.address, &client->cl_addr, client->cl_addrlen);
+	memcpy(&ctx->nfs_server._address, &client->cl_addr, client->cl_addrlen);
 	ctx->nfs_server.addrlen	= client->cl_addrlen;
 	ctx->nfs_server.port	= server->port;
 
@@ -204,20 +208,23 @@ out_fc:
 }
 
 static int
-nfs_namespace_getattr(const struct path *path, struct kstat *stat,
-			u32 request_mask, unsigned int query_flags)
+nfs_namespace_getattr(struct mnt_idmap *idmap,
+		      const struct path *path, struct kstat *stat,
+		      u32 request_mask, unsigned int query_flags)
 {
 	if (NFS_FH(d_inode(path->dentry))->size != 0)
-		return nfs_getattr(path, stat, request_mask, query_flags);
-	generic_fillattr(d_inode(path->dentry), stat);
+		return nfs_getattr(idmap, path, stat, request_mask,
+				   query_flags);
+	generic_fillattr(&nop_mnt_idmap, d_inode(path->dentry), stat);
 	return 0;
 }
 
 static int
-nfs_namespace_setattr(struct dentry *dentry, struct iattr *attr)
+nfs_namespace_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+		      struct iattr *attr)
 {
 	if (NFS_FH(d_inode(dentry))->size != 0)
-		return nfs_setattr(dentry, attr);
+		return nfs_setattr(idmap, dentry, attr);
 	return -EACCES;
 }
 
@@ -301,8 +308,7 @@ int nfs_submount(struct fs_context *fc, struct nfs_server *server)
 
 	/* Look it up again to get its attributes */
 	err = server->nfs_client->rpc_ops->lookup(d_inode(parent), dentry,
-						  ctx->mntfh, ctx->clone_data.fattr,
-						  NULL);
+						  ctx->mntfh, ctx->clone_data.fattr);
 	dput(parent);
 	if (err != 0)
 		return err;
@@ -348,14 +354,14 @@ static int param_get_nfs_timeout(char *buffer, const struct kernel_param *kp)
 			num = (num + (HZ - 1)) / HZ;
 	} else
 		num = -1;
-	return scnprintf(buffer, PAGE_SIZE, "%li\n", num);
+	return sysfs_emit(buffer, "%li\n", num);
 }
 
 static const struct kernel_param_ops param_ops_nfs_timeout = {
 	.set = param_set_nfs_timeout,
 	.get = param_get_nfs_timeout,
 };
-#define param_check_nfs_timeout(name, p) __param_check(name, p, int);
+#define param_check_nfs_timeout(name, p) __param_check(name, p, int)
 
 module_param(nfs_mountpoint_expiry_timeout, nfs_timeout, 0644);
 MODULE_PARM_DESC(nfs_mountpoint_expiry_timeout,

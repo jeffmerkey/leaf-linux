@@ -13,9 +13,11 @@
 #include <linux/leds.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/slab.h>
+#include "leds.h"
 
 struct gpio_led_data {
 	struct led_classdev cdev;
@@ -76,6 +78,7 @@ static int create_gpio_led(const struct gpio_led *template,
 	struct fwnode_handle *fwnode, gpio_blink_set_t blink_set)
 {
 	struct led_init_data init_data = {};
+	struct pinctrl *pinctrl;
 	int ret, state;
 
 	led_dat->cdev.default_trigger = template->default_trigger;
@@ -96,7 +99,8 @@ static int create_gpio_led(const struct gpio_led *template,
 	} else {
 		state = (template->default_state == LEDS_GPIO_DEFSTATE_ON);
 	}
-	led_dat->cdev.brightness = state ? LED_FULL : LED_OFF;
+	led_dat->cdev.brightness = state;
+	led_dat->cdev.max_brightness = 1;
 	if (!template->retain_state_suspended)
 		led_dat->cdev.flags |= LED_CORE_SUSPENDRESUME;
 	if (template->panic_indicator)
@@ -117,6 +121,22 @@ static int create_gpio_led(const struct gpio_led *template,
 						     &init_data);
 	}
 
+	if (ret)
+		return ret;
+
+	pinctrl = devm_pinctrl_get_select_default(led_dat->cdev.dev);
+	if (IS_ERR(pinctrl)) {
+		ret = PTR_ERR(pinctrl);
+		if (ret != -ENODEV) {
+			dev_warn(led_dat->cdev.dev,
+				 "Failed to select %pOF pinctrl: %d\n",
+				 to_of_node(fwnode), ret);
+		} else {
+			/* pinctrl-%d not present, not an error */
+			ret = 0;
+		}
+	}
+
 	return ret;
 }
 
@@ -124,12 +144,6 @@ struct gpio_leds_priv {
 	int num_leds;
 	struct gpio_led_data leds[];
 };
-
-static inline int sizeof_gpio_leds_priv(int num_leds)
-{
-	return sizeof(struct gpio_leds_priv) +
-		(sizeof(struct gpio_led_data) * num_leds);
-}
 
 static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 {
@@ -142,23 +156,21 @@ static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 	if (!count)
 		return ERR_PTR(-ENODEV);
 
-	priv = devm_kzalloc(dev, sizeof_gpio_leds_priv(count), GFP_KERNEL);
+	priv = devm_kzalloc(dev, struct_size(priv, leds, count), GFP_KERNEL);
 	if (!priv)
 		return ERR_PTR(-ENOMEM);
 
 	device_for_each_child_node(dev, child) {
 		struct gpio_led_data *led_dat = &priv->leds[priv->num_leds];
 		struct gpio_led led = {};
-		const char *state = NULL;
 
 		/*
 		 * Acquire gpiod from DT with uninitialized label, which
 		 * will be updated after LED class device is registered,
 		 * Only then the final LED name is known.
 		 */
-		led.gpiod = devm_fwnode_get_gpiod_from_child(dev, NULL, child,
-							     GPIOD_ASIS,
-							     NULL);
+		led.gpiod = devm_fwnode_gpiod_get(dev, child, NULL, GPIOD_ASIS,
+						  NULL);
 		if (IS_ERR(led.gpiod)) {
 			fwnode_handle_put(child);
 			return ERR_CAST(led.gpiod);
@@ -166,18 +178,7 @@ static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 
 		led_dat->gpiod = led.gpiod;
 
-		fwnode_property_read_string(child, "linux,default-trigger",
-					    &led.default_trigger);
-
-		if (!fwnode_property_read_string(child, "default-state",
-						 &state)) {
-			if (!strcmp(state, "keep"))
-				led.default_state = LEDS_GPIO_DEFSTATE_KEEP;
-			else if (!strcmp(state, "on"))
-				led.default_state = LEDS_GPIO_DEFSTATE_ON;
-			else
-				led.default_state = LEDS_GPIO_DEFSTATE_OFF;
-		}
+		led.default_state = led_init_default_state_get(child);
 
 		if (fwnode_property_present(child, "retain-state-suspended"))
 			led.retain_state_suspended = 1;
@@ -220,7 +221,7 @@ static struct gpio_desc *gpio_led_get_gpiod(struct device *dev, int idx,
 	 * device, this will hit the board file, if any and get
 	 * the GPIO from there.
 	 */
-	gpiod = devm_gpiod_get_index(dev, NULL, idx, flags);
+	gpiod = devm_gpiod_get_index(dev, NULL, idx, GPIOD_OUT_LOW);
 	if (!IS_ERR(gpiod)) {
 		gpiod_set_consumer_name(gpiod, template->name);
 		return gpiod;
@@ -260,9 +261,8 @@ static int gpio_led_probe(struct platform_device *pdev)
 	int i, ret = 0;
 
 	if (pdata && pdata->num_leds) {
-		priv = devm_kzalloc(&pdev->dev,
-				sizeof_gpio_leds_priv(pdata->num_leds),
-					GFP_KERNEL);
+		priv = devm_kzalloc(&pdev->dev, struct_size(priv, leds, pdata->num_leds),
+				    GFP_KERNEL);
 		if (!priv)
 			return -ENOMEM;
 

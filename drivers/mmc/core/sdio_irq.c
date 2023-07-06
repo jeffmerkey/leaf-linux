@@ -124,7 +124,7 @@ static void sdio_run_irqs(struct mmc_host *host)
 void sdio_irq_work(struct work_struct *work)
 {
 	struct mmc_host *host =
-		container_of(work, struct mmc_host, sdio_irq_work.work);
+		container_of(work, struct mmc_host, sdio_irq_work);
 
 	sdio_run_irqs(host);
 }
@@ -132,18 +132,17 @@ void sdio_irq_work(struct work_struct *work)
 void sdio_signal_irq(struct mmc_host *host)
 {
 	host->sdio_irq_pending = true;
-	queue_delayed_work(system_wq, &host->sdio_irq_work, 0);
+	schedule_work(&host->sdio_irq_work);
 }
 EXPORT_SYMBOL_GPL(sdio_signal_irq);
 
 static int sdio_irq_thread(void *_host)
 {
 	struct mmc_host *host = _host;
-	struct sched_param param = { .sched_priority = 1 };
 	unsigned long period, idle_period;
 	int ret;
 
-	sched_setscheduler(current, SCHED_FIFO, &param);
+	sched_set_fifo_low(current);
 
 	/*
 	 * We want to allow for SDIO cards to work even on non SDIO

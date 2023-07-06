@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2016-2018 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2016-2018 Texas Instruments Incorporated - https://www.ti.com/
  * Author: Jyri Sarha <jsarha@ti.com>
  */
 
@@ -11,6 +11,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
@@ -19,10 +20,13 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
+#include <linux/sys_soc.h>
 
+#include <drm/drm_blend.h>
 #include <drm/drm_fourcc.h>
-#include <drm/drm_fb_cma_helper.h>
-#include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_fb_dma_helper.h>
+#include <drm/drm_framebuffer.h>
+#include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_panel.h>
 
 #include "tidss_crtc.h"
@@ -181,10 +185,6 @@ const struct dispc_features dispc_am65x_feats = {
 	.vid_name = { "vid", "vidl1" },
 	.vid_lite = { false, true, },
 	.vid_order = { 1, 0 },
-
-	.errata = {
-		.i2000 = true,
-	},
 };
 
 static const u16 tidss_j721e_common_regs[DISPC_COMMON_REG_TABLE_LEN] = {
@@ -306,6 +306,8 @@ struct dispc_device {
 	u32 num_fourccs;
 
 	u32 memory_bandwidth_limit;
+
+	struct dispc_errata errata;
 };
 
 static void dispc_write(struct dispc_device *dispc, u16 reg, u32 val)
@@ -1001,12 +1003,12 @@ void dispc_vp_enable(struct dispc_device *dispc, u32 hw_videoport,
 
 	ieo = !!(tstate->bus_flags & DRM_BUS_FLAG_DE_LOW);
 
-	ipc = !!(tstate->bus_flags & DRM_BUS_FLAG_PIXDATA_NEGEDGE);
+	ipc = !!(tstate->bus_flags & DRM_BUS_FLAG_PIXDATA_DRIVE_NEGEDGE);
 
 	/* always use the 'rf' setting */
 	onoff = true;
 
-	rf = !!(tstate->bus_flags & DRM_BUS_FLAG_SYNC_POSEDGE);
+	rf = !!(tstate->bus_flags & DRM_BUS_FLAG_SYNC_DRIVE_POSEDGE);
 
 	/* always use aligned syncs */
 	align = true;
@@ -1856,8 +1858,8 @@ static const struct {
 	{ DRM_FORMAT_XBGR4444, 0x21, },
 	{ DRM_FORMAT_RGBX4444, 0x22, },
 
-	{ DRM_FORMAT_ARGB1555, 0x25, },
-	{ DRM_FORMAT_ABGR1555, 0x26, },
+	{ DRM_FORMAT_XRGB1555, 0x25, },
+	{ DRM_FORMAT_XBGR1555, 0x26, },
 
 	{ DRM_FORMAT_XRGB8888, 0x27, },
 	{ DRM_FORMAT_XBGR8888, 0x28, },
@@ -1952,16 +1954,16 @@ int dispc_plane_check(struct dispc_device *dispc, u32 hw_plane,
 }
 
 static
-dma_addr_t dispc_plane_state_paddr(const struct drm_plane_state *state)
+dma_addr_t dispc_plane_state_dma_addr(const struct drm_plane_state *state)
 {
 	struct drm_framebuffer *fb = state->fb;
-	struct drm_gem_cma_object *gem;
+	struct drm_gem_dma_object *gem;
 	u32 x = state->src_x >> 16;
 	u32 y = state->src_y >> 16;
 
-	gem = drm_fb_cma_get_gem_obj(state->fb, 0);
+	gem = drm_fb_dma_get_gem_obj(state->fb, 0);
 
-	return gem->paddr + fb->offsets[0] + x * fb->format->cpp[0] +
+	return gem->dma_addr + fb->offsets[0] + x * fb->format->cpp[0] +
 		y * fb->pitches[0];
 }
 
@@ -1969,39 +1971,39 @@ static
 dma_addr_t dispc_plane_state_p_uv_addr(const struct drm_plane_state *state)
 {
 	struct drm_framebuffer *fb = state->fb;
-	struct drm_gem_cma_object *gem;
+	struct drm_gem_dma_object *gem;
 	u32 x = state->src_x >> 16;
 	u32 y = state->src_y >> 16;
 
 	if (WARN_ON(state->fb->format->num_planes != 2))
 		return 0;
 
-	gem = drm_fb_cma_get_gem_obj(fb, 1);
+	gem = drm_fb_dma_get_gem_obj(fb, 1);
 
-	return gem->paddr + fb->offsets[1] +
+	return gem->dma_addr + fb->offsets[1] +
 		(x * fb->format->cpp[1] / fb->format->hsub) +
 		(y * fb->pitches[1] / fb->format->vsub);
 }
 
-int dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
-		      const struct drm_plane_state *state,
-		      u32 hw_videoport)
+void dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
+		       const struct drm_plane_state *state,
+		       u32 hw_videoport)
 {
 	bool lite = dispc->feat->vid_lite[hw_plane];
 	u32 fourcc = state->fb->format->format;
 	u16 cpp = state->fb->format->cpp[0];
 	u32 fb_width = state->fb->pitches[0] / cpp;
-	dma_addr_t paddr = dispc_plane_state_paddr(state);
+	dma_addr_t dma_addr = dispc_plane_state_dma_addr(state);
 	struct dispc_scaling_params scale;
 
 	dispc_vid_calc_scaling(dispc, state, &scale, lite);
 
 	dispc_plane_set_pixel_format(dispc, hw_plane, fourcc);
 
-	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_0, paddr & 0xffffffff);
-	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_EXT_0, (u64)paddr >> 32);
-	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_1, paddr & 0xffffffff);
-	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_EXT_1, (u64)paddr >> 32);
+	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_0, dma_addr & 0xffffffff);
+	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_EXT_0, (u64)dma_addr >> 32);
+	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_1, dma_addr & 0xffffffff);
+	dispc_vid_write(dispc, hw_plane, DISPC_VID_BA_EXT_1, (u64)dma_addr >> 32);
 
 	dispc_vid_write(dispc, hw_plane, DISPC_VID_PICTURE_SIZE,
 			(scale.in_w - 1) | ((scale.in_h - 1) << 16));
@@ -2064,15 +2066,11 @@ int dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
 	else
 		VID_REG_FLD_MOD(dispc, hw_plane, DISPC_VID_ATTRIBUTES, 0,
 				28, 28);
-
-	return 0;
 }
 
-int dispc_plane_enable(struct dispc_device *dispc, u32 hw_plane, bool enable)
+void dispc_plane_enable(struct dispc_device *dispc, u32 hw_plane, bool enable)
 {
 	VID_REG_FLD_MOD(dispc, hw_plane, DISPC_VID_ATTRIBUTES, !!enable, 0, 0);
-
-	return 0;
 }
 
 static u32 dispc_vid_get_fifo_size(struct dispc_device *dispc, u32 hw_plane)
@@ -2609,16 +2607,9 @@ void dispc_remove(struct tidss_device *tidss)
 static int dispc_iomap_resource(struct platform_device *pdev, const char *name,
 				void __iomem **base)
 {
-	struct resource *res;
 	void __iomem *b;
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, name);
-	if (!res) {
-		dev_err(&pdev->dev, "cannot get mem resource '%s'\n", name);
-		return -EINVAL;
-	}
-
-	b = devm_ioremap_resource(&pdev->dev, res);
+	b = devm_platform_ioremap_resource_byname(pdev, name);
 	if (IS_ERR(b)) {
 		dev_err(&pdev->dev, "cannot ioremap resource '%s'\n", name);
 		return PTR_ERR(b);
@@ -2645,6 +2636,33 @@ static int dispc_init_am65x_oldi_io_ctrl(struct device *dev,
 	return 0;
 }
 
+static void dispc_init_errata(struct dispc_device *dispc)
+{
+	static const struct soc_device_attribute am65x_sr10_soc_devices[] = {
+		{ .family = "AM65X", .revision = "SR1.0" },
+		{ /* sentinel */ }
+	};
+
+	if (soc_device_match(am65x_sr10_soc_devices)) {
+		dispc->errata.i2000 = true;
+		dev_info(dispc->dev, "WA for erratum i2000: YUV formats disabled\n");
+	}
+}
+
+static void dispc_softreset(struct dispc_device *dispc)
+{
+	u32 val;
+	int ret = 0;
+
+	/* Soft reset */
+	REG_FLD_MOD(dispc, DSS_SYSCONFIG, 1, 1, 1);
+	/* Wait for reset to complete */
+	ret = readl_poll_timeout(dispc->base_common + DSS_SYSSTATUS,
+				 val, val & 1, 100, 5000);
+	if (ret)
+		dev_warn(dispc->dev, "failed to reset dispc\n");
+}
+
 int dispc_init(struct tidss_device *tidss)
 {
 	struct device *dev = tidss->dev;
@@ -2664,9 +2682,17 @@ int dispc_init(struct tidss_device *tidss)
 			dev_warn(dev, "cannot set DMA masks to 48-bit\n");
 	}
 
+	dma_set_max_seg_size(dev, UINT_MAX);
+
 	dispc = devm_kzalloc(dev, sizeof(*dispc), GFP_KERNEL);
 	if (!dispc)
 		return -ENOMEM;
+
+	dispc->tidss = tidss;
+	dispc->dev = dev;
+	dispc->feat = feat;
+
+	dispc_init_errata(dispc);
 
 	dispc->fourccs = devm_kcalloc(dev, ARRAY_SIZE(dispc_color_formats),
 				      sizeof(*dispc->fourccs), GFP_KERNEL);
@@ -2675,15 +2701,14 @@ int dispc_init(struct tidss_device *tidss)
 
 	num_fourccs = 0;
 	for (i = 0; i < ARRAY_SIZE(dispc_color_formats); ++i) {
-		if (feat->errata.i2000 &&
-		    dispc_fourcc_is_yuv(dispc_color_formats[i].fourcc))
+		if (dispc->errata.i2000 &&
+		    dispc_fourcc_is_yuv(dispc_color_formats[i].fourcc)) {
 			continue;
+		}
 		dispc->fourccs[num_fourccs++] = dispc_color_formats[i].fourcc;
 	}
+
 	dispc->num_fourccs = num_fourccs;
-	dispc->tidss = tidss;
-	dispc->dev = dev;
-	dispc->feat = feat;
 
 	dispc_common_regmap = dispc->feat->common_regs;
 
@@ -2698,6 +2723,10 @@ int dispc_init(struct tidss_device *tidss)
 		if (r)
 			return r;
 	}
+
+	/* K2G display controller does not support soft reset */
+	if (feat->subrev != DISPC_K2G)
+		dispc_softreset(dispc);
 
 	for (i = 0; i < dispc->feat->num_vps; i++) {
 		u32 gamma_size = dispc->feat->vp_feat.color.gamma_size;

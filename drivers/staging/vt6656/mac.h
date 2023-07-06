@@ -3,8 +3,6 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
- * File: mac.h
- *
  * Purpose: MAC routines
  *
  * Author: Tevin Chen
@@ -174,20 +172,20 @@
 #define TFTCTL_TSFCNTREN	BIT(0)
 
 /* Bits in the EnhanceCFG_0 register */
-#define EnCFG_BBType_a		0x00
-#define EnCFG_BBType_b		BIT(0)
-#define EnCFG_BBType_g		BIT(1)
-#define EnCFG_BBType_MASK	(BIT(0) | BIT(1))
-#define EnCFG_ProtectMd		BIT(5)
+#define EN_CFG_BB_TYPE_A	0x00
+#define EN_CFG_BB_TYPE_B	BIT(0)
+#define EN_CFG_BB_TYPE_G	BIT(1)
+#define EN_CFG_BB_TYPE_MASK	(EN_CFG_BB_TYPE_B | EN_CFG_BB_TYPE_G)
+#define EN_CFG_PROTECT_MD	BIT(5)
 
 /* Bits in the EnhanceCFG_1 register */
-#define EnCFG_BcnSusInd		BIT(0)
-#define EnCFG_BcnSusClr		BIT(1)
+#define EN_CFG_BCN_SUS_IND	BIT(0)
+#define EN_CFG_BCN_SUS_CLR	BIT(1)
 
 /* Bits in the EnhanceCFG_2 register */
-#define EnCFG_NXTBTTCFPSTR	BIT(0)
-#define EnCFG_BarkerPream	BIT(1)
-#define EnCFG_PktBurstMode	BIT(2)
+#define EN_CFG_NXTBTTCFPSTR	BIT(0)
+#define EN_CFG_BARKER_PREAM	BIT(1)
+#define EN_CFG_PKT_BURST_MD	BIT(2)
 
 /* Bits in the CFG register */
 #define CFG_TKIPOPT		BIT(7)
@@ -335,7 +333,7 @@
 #define PKT_TYPE_ERROR_CRC	BIT(1)
 #define PKT_TYPE_BSSID		BIT(0)
 
-#define Default_BI              0x200
+#define DEFAULT_BI		0x200
 
 /* MiscFIFO Offset */
 #define MISCFIFO_KEYETRY0	32
@@ -355,21 +353,21 @@ struct vnt_mac_set_key {
 	u8 key[WLAN_KEY_LEN_CCMP];
 } __packed;
 
-void vnt_mac_set_filter(struct vnt_private *priv, u64 mc_filter);
-void vnt_mac_shutdown(struct vnt_private *priv);
-void vnt_mac_set_bb_type(struct vnt_private *priv, u8 type);
-void vnt_mac_disable_keyentry(struct vnt_private *priv, u8 entry_idx);
-void vnt_mac_set_keyentry(struct vnt_private *priv, u16 key_ctl, u32 entry_idx,
-			  u32 key_idx, u8 *addr, u8 *key);
+int vnt_mac_set_filter(struct vnt_private *priv, u64 mc_filter);
+int vnt_mac_shutdown(struct vnt_private *priv);
+int vnt_mac_set_bb_type(struct vnt_private *priv, u8 type);
+int vnt_mac_disable_keyentry(struct vnt_private *priv, u8 entry_idx);
+int vnt_mac_set_keyentry(struct vnt_private *priv, u16 key_ctl, u32 entry_idx,
+			 u32 key_idx, u8 *addr, u8 *key);
 int vnt_mac_reg_bits_off(struct vnt_private *priv, u8 reg_ofs, u8 bits);
 int vnt_mac_reg_bits_on(struct vnt_private *priv, u8 reg_ofs, u8 bits);
-void vnt_mac_write_word(struct vnt_private *priv, u8 reg_ofs, u16 word);
-void vnt_mac_set_bssid_addr(struct vnt_private *priv, u8 *addr);
-void vnt_mac_enable_protect_mode(struct vnt_private *priv);
-void vnt_mac_disable_protect_mode(struct vnt_private *priv);
-void vnt_mac_enable_barker_preamble_mode(struct vnt_private *priv);
-void vnt_mac_disable_barker_preamble_mode(struct vnt_private *priv);
-void vnt_mac_set_beacon_interval(struct vnt_private *priv, u16 interval);
+int vnt_mac_write_word(struct vnt_private *priv, u8 reg_ofs, u16 word);
+int vnt_mac_set_bssid_addr(struct vnt_private *priv, u8 *addr);
+int vnt_mac_enable_protect_mode(struct vnt_private *priv);
+int vnt_mac_disable_protect_mode(struct vnt_private *priv);
+int vnt_mac_enable_barker_preamble_mode(struct vnt_private *priv);
+int vnt_mac_disable_barker_preamble_mode(struct vnt_private *priv);
+int vnt_mac_set_beacon_interval(struct vnt_private *priv, u16 interval);
 int vnt_mac_set_led(struct vnt_private *privpriv, u8 state, u8 led);
 
 #endif /* __MAC_H__ */

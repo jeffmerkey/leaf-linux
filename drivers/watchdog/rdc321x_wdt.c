@@ -231,6 +231,8 @@ static int rdc321x_wdt_probe(struct platform_device *pdev)
 
 	rdc321x_wdt_device.sb_pdev = pdata->sb_pdev;
 	rdc321x_wdt_device.base_reg = r->start;
+	rdc321x_wdt_device.queue = 0;
+	rdc321x_wdt_device.default_ticks = ticks;
 
 	err = misc_register(&rdc321x_wdt_misc);
 	if (err < 0) {
@@ -245,20 +247,17 @@ static int rdc321x_wdt_probe(struct platform_device *pdev)
 				rdc321x_wdt_device.base_reg, RDC_WDT_RST);
 
 	init_completion(&rdc321x_wdt_device.stop);
-	rdc321x_wdt_device.queue = 0;
 
 	clear_bit(0, &rdc321x_wdt_device.inuse);
 
 	timer_setup(&rdc321x_wdt_device.timer, rdc321x_wdt_trigger, 0);
-
-	rdc321x_wdt_device.default_ticks = ticks;
 
 	dev_info(&pdev->dev, "watchdog init success\n");
 
 	return 0;
 }
 
-static int rdc321x_wdt_remove(struct platform_device *pdev)
+static void rdc321x_wdt_remove(struct platform_device *pdev)
 {
 	if (rdc321x_wdt_device.queue) {
 		rdc321x_wdt_device.queue = 0;
@@ -266,13 +265,11 @@ static int rdc321x_wdt_remove(struct platform_device *pdev)
 	}
 
 	misc_deregister(&rdc321x_wdt_misc);
-
-	return 0;
 }
 
 static struct platform_driver rdc321x_wdt_driver = {
 	.probe = rdc321x_wdt_probe,
-	.remove = rdc321x_wdt_remove,
+	.remove_new = rdc321x_wdt_remove,
 	.driver = {
 		.name = "rdc321x-wdt",
 	},

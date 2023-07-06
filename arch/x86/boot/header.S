@@ -80,10 +80,11 @@ bs_die:
 	ljmp	$0xf000,$0xfff0
 
 #ifdef CONFIG_EFI_STUB
-	.org	0x3c
+	.org	0x38
 	#
 	# Offset to the PE header.
 	#
+	.long	LINUX_PE_MAGIC
 	.long	pe_header
 #endif /* CONFIG_EFI_STUB */
 
@@ -163,7 +164,11 @@ extra_header_fields:
 	.long	0x200				# SizeOfHeaders
 	.long	0				# CheckSum
 	.word	IMAGE_SUBSYSTEM_EFI_APPLICATION	# Subsystem (EFI application)
+#ifdef CONFIG_EFI_DXE_MEM_ATTRIBUTES
+	.word	IMAGE_DLL_CHARACTERISTICS_NX_COMPAT	# DllCharacteristics
+#else
 	.word	0				# DllCharacteristics
+#endif
 #ifdef CONFIG_X86_32
 	.long	0				# SizeOfStackReserve
 	.long	0				# SizeOfStackCommit
@@ -316,7 +321,7 @@ start_sys_seg:	.word	SYSSEG		# obsolete and meaningless, but just
 
 type_of_loader:	.byte	0		# 0 means ancient bootloader, newer
 					# bootloaders know to change this.
-					# See Documentation/x86/boot.rst for
+					# See Documentation/arch/x86/boot.rst for
 					# assigned ids
 
 # flags, unused bits must be zero (RFU) bit within loadflags
@@ -402,7 +407,7 @@ xloadflags:
 # define XLF1 0
 #endif
 
-#ifdef CONFIG_EFI_STUB
+#ifdef CONFIG_EFI_HANDOVER_PROTOCOL
 # ifdef CONFIG_EFI_MIXED
 #  define XLF23 (XLF_EFI_HANDOVER_32|XLF_EFI_HANDOVER_64)
 # else
@@ -539,8 +544,14 @@ pref_address:		.quad LOAD_PHYSICAL_ADDR	# preferred load addr
 # the size-dependent part now grows so fast.
 #
 # extra_bytes = (uncompressed_size >> 8) + 65536
+#
+# ZSTD compressed data grows by at most 3 bytes per 128K, and only has a 22
+# byte fixed overhead but has a maximum block size of 128K, so it needs a
+# larger margin.
+#
+# extra_bytes = (uncompressed_size >> 8) + 131072
 
-#define ZO_z_extra_bytes	((ZO_z_output_len >> 8) + 65536)
+#define ZO_z_extra_bytes	((ZO_z_output_len >> 8) + 131072)
 #if ZO_z_output_len > ZO_z_input_len
 # define ZO_z_extract_offset	(ZO_z_output_len + ZO_z_extra_bytes - \
 				 ZO_z_input_len)

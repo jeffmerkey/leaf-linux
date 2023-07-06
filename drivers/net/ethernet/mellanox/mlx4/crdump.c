@@ -197,6 +197,7 @@ int mlx4_crdump_collect(struct mlx4_dev *dev)
 	err = devlink_region_snapshot_id_get(devlink, &id);
 	if (err) {
 		mlx4_err(dev, "crdump: devlink get snapshot id err %d\n", err);
+		iounmap(cr_space);
 		return err;
 	}
 
@@ -225,10 +226,10 @@ int mlx4_crdump_init(struct mlx4_dev *dev)
 
 	/* Create cr-space region */
 	crdump->region_crspace =
-		devlink_region_create(devlink,
-				      &region_cr_space_ops,
-				      MAX_NUM_OF_DUMPS_TO_STORE,
-				      pci_resource_len(pdev, 0));
+		devl_region_create(devlink,
+				   &region_cr_space_ops,
+				   MAX_NUM_OF_DUMPS_TO_STORE,
+				   pci_resource_len(pdev, 0));
 	if (IS_ERR(crdump->region_crspace))
 		mlx4_warn(dev, "crdump: create devlink region %s err %ld\n",
 			  region_cr_space_str,
@@ -236,10 +237,10 @@ int mlx4_crdump_init(struct mlx4_dev *dev)
 
 	/* Create fw-health region */
 	crdump->region_fw_health =
-		devlink_region_create(devlink,
-				      &region_fw_health_ops,
-				      MAX_NUM_OF_DUMPS_TO_STORE,
-				      HEALTH_BUFFER_SIZE);
+		devl_region_create(devlink,
+				   &region_fw_health_ops,
+				   MAX_NUM_OF_DUMPS_TO_STORE,
+				   HEALTH_BUFFER_SIZE);
 	if (IS_ERR(crdump->region_fw_health))
 		mlx4_warn(dev, "crdump: create devlink region %s err %ld\n",
 			  region_fw_health_str,
@@ -252,6 +253,6 @@ void mlx4_crdump_end(struct mlx4_dev *dev)
 {
 	struct mlx4_fw_crdump *crdump = &dev->persist->crdump;
 
-	devlink_region_destroy(crdump->region_fw_health);
-	devlink_region_destroy(crdump->region_crspace);
+	devl_region_destroy(crdump->region_fw_health);
+	devl_region_destroy(crdump->region_crspace);
 }

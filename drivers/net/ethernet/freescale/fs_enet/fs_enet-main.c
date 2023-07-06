@@ -40,9 +40,9 @@
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/of_net.h>
+#include <linux/pgtable.h>
 
 #include <linux/vmalloc.h>
-#include <asm/pgtable.h>
 #include <asm/irq.h>
 #include <linux/uaccess.h>
 
@@ -562,10 +562,13 @@ fs_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			BD_ENET_TX_TC);
 		CBDS_SC(bdp, BD_ENET_TX_READY);
 
-		if ((CBDR_SC(bdp) & BD_ENET_TX_WRAP) == 0)
-			bdp++, curidx++;
-		else
-			bdp = fep->tx_bd_base, curidx = 0;
+		if ((CBDR_SC(bdp) & BD_ENET_TX_WRAP) == 0) {
+			bdp++;
+			curidx++;
+		} else {
+			bdp = fep->tx_bd_base;
+			curidx = 0;
+		}
 
 		len = skb_frag_size(frag);
 		CBDW_BUFADDR(bdp, skb_frag_dma_map(fep->dev, frag, 0, len,
@@ -788,7 +791,7 @@ static int fs_enet_close(struct net_device *dev)
 static void fs_get_drvinfo(struct net_device *dev,
 			    struct ethtool_drvinfo *info)
 {
-	strlcpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
+	strscpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
 }
 
 static int fs_get_regs_len(struct net_device *dev)
@@ -880,9 +883,6 @@ static const struct ethtool_ops fs_ethtool_ops = {
 	.set_tunable = fs_set_tunable,
 };
 
-extern int fs_mii_connect(struct net_device *dev);
-extern void fs_mii_disconnect(struct net_device *dev);
-
 /**************************************************************************************/
 
 #ifdef CONFIG_FS_ENET_HAS_FEC
@@ -897,7 +897,7 @@ static const struct net_device_ops fs_enet_netdev_ops = {
 	.ndo_start_xmit		= fs_enet_start_xmit,
 	.ndo_tx_timeout		= fs_timeout,
 	.ndo_set_rx_mode	= fs_set_multicast_list,
-	.ndo_do_ioctl		= phy_do_ioctl_running,
+	.ndo_eth_ioctl		= phy_do_ioctl_running,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -915,7 +915,6 @@ static int fs_enet_probe(struct platform_device *ofdev)
 	const u32 *data;
 	struct clk *clk;
 	int err;
-	const u8 *mac_addr;
 	const char *phy_connection_type;
 	int privsize, len, ret = -ENODEV;
 
@@ -1003,9 +1002,7 @@ static int fs_enet_probe(struct platform_device *ofdev)
 	spin_lock_init(&fep->lock);
 	spin_lock_init(&fep->tx_lock);
 
-	mac_addr = of_get_mac_address(ofdev->dev.of_node);
-	if (!IS_ERR(mac_addr))
-		ether_addr_copy(ndev->dev_addr, mac_addr);
+	of_get_ethdev_address(ofdev->dev.of_node, ndev);
 
 	ret = fep->ops->allocate_bd(ndev);
 	if (ret)
@@ -1020,7 +1017,8 @@ static int fs_enet_probe(struct platform_device *ofdev)
 	ndev->netdev_ops = &fs_enet_netdev_ops;
 	ndev->watchdog_timeo = 2 * HZ;
 	INIT_WORK(&fep->timeout_work, fs_timeout_work);
-	netif_napi_add(ndev, &fep->napi, fs_enet_napi, fpi->napi_weight);
+	netif_napi_add_weight(ndev, &fep->napi, fs_enet_napi,
+			      fpi->napi_weight);
 
 	ndev->ethtool_ops = &fs_ethtool_ops;
 
@@ -1043,8 +1041,7 @@ out_cleanup_data:
 out_free_dev:
 	free_netdev(ndev);
 out_put:
-	if (fpi->clk_per)
-		clk_disable_unprepare(fpi->clk_per);
+	clk_disable_unprepare(fpi->clk_per);
 out_deregister_fixed_link:
 	of_node_put(fpi->phy_node);
 	if (of_phy_is_fixed_link(ofdev->dev.of_node))
@@ -1065,8 +1062,7 @@ static int fs_enet_remove(struct platform_device *ofdev)
 	fep->ops->cleanup_data(ndev);
 	dev_set_drvdata(fep->dev, NULL);
 	of_node_put(fep->fpi->phy_node);
-	if (fep->fpi->clk_per)
-		clk_disable_unprepare(fep->fpi->clk_per);
+	clk_disable_unprepare(fep->fpi->clk_per);
 	if (of_phy_is_fixed_link(ofdev->dev.of_node))
 		of_phy_deregister_fixed_link(ofdev->dev.of_node);
 	free_netdev(ndev);

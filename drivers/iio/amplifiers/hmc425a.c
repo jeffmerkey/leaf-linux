@@ -11,10 +11,10 @@
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <linux/kernel.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 #include <linux/regulator/consumer.h>
 #include <linux/sysfs.h>
@@ -34,7 +34,6 @@ struct hmc425a_chip_info {
 };
 
 struct hmc425a_state {
-	struct	regulator *reg;
 	struct	mutex lock; /* protect sensor state */
 	struct	hmc425a_chip_info *chip_info;
 	struct	gpio_descs *gpios;
@@ -162,13 +161,6 @@ static const struct of_device_id hmc425a_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, hmc425a_of_match);
 
-static void hmc425a_reg_disable(void *data)
-{
-	struct hmc425a_state *st = data;
-
-	regulator_disable(st->reg);
-}
-
 static struct hmc425a_chip_info hmc425a_chip_info_tbl[] = {
 	[ID_HMC425A] = {
 		.name = "hmc425a",
@@ -192,7 +184,7 @@ static int hmc425a_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	st = iio_priv(indio_dev);
-	st->type = (enum hmc425a_type)of_device_get_match_data(&pdev->dev);
+	st->type = (uintptr_t)device_get_match_data(&pdev->dev);
 
 	st->chip_info = &hmc425a_chip_info_tbl[st->type];
 	indio_dev->num_channels = st->chip_info->num_channels;
@@ -201,12 +193,9 @@ static int hmc425a_probe(struct platform_device *pdev)
 	st->gain = st->chip_info->default_gain;
 
 	st->gpios = devm_gpiod_get_array(&pdev->dev, "ctrl", GPIOD_OUT_LOW);
-	if (IS_ERR(st->gpios)) {
-		ret = PTR_ERR(st->gpios);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "failed to get gpios\n");
-		return ret;
-	}
+	if (IS_ERR(st->gpios))
+		return dev_err_probe(&pdev->dev, PTR_ERR(st->gpios),
+				     "failed to get gpios\n");
 
 	if (st->gpios->ndescs != st->chip_info->num_gpios) {
 		dev_err(&pdev->dev, "%d GPIOs needed to operate\n",
@@ -214,20 +203,12 @@ static int hmc425a_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	st->reg = devm_regulator_get(&pdev->dev, "vcc-supply");
-	if (IS_ERR(st->reg))
-		return PTR_ERR(st->reg);
-
-	ret = regulator_enable(st->reg);
-	if (ret)
-		return ret;
-	ret = devm_add_action_or_reset(&pdev->dev, hmc425a_reg_disable, st);
+	ret = devm_regulator_get_enable(&pdev->dev, "vcc-supply");
 	if (ret)
 		return ret;
 
 	mutex_init(&st->lock);
 
-	indio_dev->dev.parent = &pdev->dev;
 	indio_dev->info = &hmc425a_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 

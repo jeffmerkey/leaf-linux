@@ -208,7 +208,12 @@ static int send_ec_cmd(struct wilco_ec_device *ec, u8 sub_cmd, u8 *out_val)
  */
 static int h1_gpio_get(void *arg, u64 *val)
 {
-	return send_ec_cmd(arg, SUB_CMD_H1_GPIO, (u8 *)val);
+	int ret;
+
+	ret = send_ec_cmd(arg, SUB_CMD_H1_GPIO, (u8 *)val);
+	if (ret == 0)
+		*val &= 0xFF;
+	return ret;
 }
 
 DEFINE_DEBUGFS_ATTRIBUTE(fops_h1_gpio, h1_gpio_get, NULL, "0x%02llx\n");
@@ -246,8 +251,6 @@ static int wilco_ec_debugfs_probe(struct platform_device *pdev)
 		return 0;
 	debug_info->ec = ec;
 	debug_info->dir = debugfs_create_dir("wilco_ec", NULL);
-	if (!debug_info->dir)
-		return 0;
 	debugfs_create_file("raw", 0644, debug_info->dir, NULL, &fops_raw);
 	debugfs_create_file("h1_gpio", 0444, debug_info->dir, ec,
 			    &fops_h1_gpio);

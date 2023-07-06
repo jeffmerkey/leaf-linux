@@ -114,7 +114,6 @@ struct stm32_rtc_data {
 	void (*clear_events)(struct stm32_rtc *rtc, unsigned int flags);
 	bool has_pclk;
 	bool need_dbp;
-	bool has_wakeirq;
 };
 
 struct stm32_rtc {
@@ -127,7 +126,6 @@ struct stm32_rtc {
 	struct clk *rtc_ck;
 	const struct stm32_rtc_data *data;
 	int irq_alarm;
-	int wakeirq_alarm;
 };
 
 static void stm32_rtc_wpr_unlock(struct stm32_rtc *rtc)
@@ -209,7 +207,7 @@ static irqreturn_t stm32_rtc_alarm_irq(int irq, void *dev_id)
 	const struct stm32_rtc_events *evts = &rtc->data->events;
 	unsigned int status, cr;
 
-	mutex_lock(&rtc->rtc_dev->ops_lock);
+	rtc_lock(rtc->rtc_dev);
 
 	status = readl_relaxed(rtc->base + regs->sr);
 	cr = readl_relaxed(rtc->base + regs->cr);
@@ -226,7 +224,7 @@ static irqreturn_t stm32_rtc_alarm_irq(int irq, void *dev_id)
 		stm32_rtc_clear_event_flags(rtc, evts->alra);
 	}
 
-	mutex_unlock(&rtc->rtc_dev->ops_lock);
+	rtc_unlock(rtc->rtc_dev);
 
 	return IRQ_HANDLED;
 }
@@ -547,7 +545,6 @@ static void stm32_rtc_clear_events(struct stm32_rtc *rtc,
 static const struct stm32_rtc_data stm32_rtc_data = {
 	.has_pclk = false,
 	.need_dbp = true,
-	.has_wakeirq = false,
 	.regs = {
 		.tr = 0x00,
 		.dr = 0x04,
@@ -569,7 +566,6 @@ static const struct stm32_rtc_data stm32_rtc_data = {
 static const struct stm32_rtc_data stm32h7_rtc_data = {
 	.has_pclk = true,
 	.need_dbp = true,
-	.has_wakeirq = false,
 	.regs = {
 		.tr = 0x00,
 		.dr = 0x04,
@@ -600,7 +596,6 @@ static void stm32mp1_rtc_clear_events(struct stm32_rtc *rtc,
 static const struct stm32_rtc_data stm32mp1_data = {
 	.has_pclk = true,
 	.need_dbp = false,
-	.has_wakeirq = true,
 	.regs = {
 		.tr = 0x00,
 		.dr = 0x04,
@@ -754,7 +749,7 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 
 	ret = clk_prepare_enable(rtc->rtc_ck);
 	if (ret)
-		goto err;
+		goto err_no_rtc_ck;
 
 	if (rtc->data->need_dbp)
 		regmap_update_bits(rtc->dbp, rtc->dbp_reg,
@@ -779,19 +774,12 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 	}
 
 	ret = device_init_wakeup(&pdev->dev, true);
-	if (rtc->data->has_wakeirq) {
-		rtc->wakeirq_alarm = platform_get_irq(pdev, 1);
-		if (rtc->wakeirq_alarm > 0) {
-			ret = dev_pm_set_dedicated_wake_irq(&pdev->dev,
-							    rtc->wakeirq_alarm);
-		} else {
-			ret = rtc->wakeirq_alarm;
-			if (rtc->wakeirq_alarm == -EPROBE_DEFER)
-				goto err;
-		}
-	}
 	if (ret)
-		dev_warn(&pdev->dev, "alarm can't wake up the system: %d", ret);
+		goto err;
+
+	ret = dev_pm_set_wake_irq(&pdev->dev, rtc->irq_alarm);
+	if (ret)
+		goto err;
 
 	platform_set_drvdata(pdev, rtc);
 
@@ -830,10 +818,12 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 	}
 
 	return 0;
+
 err:
+	clk_disable_unprepare(rtc->rtc_ck);
+err_no_rtc_ck:
 	if (rtc->data->has_pclk)
 		clk_disable_unprepare(rtc->pclk);
-	clk_disable_unprepare(rtc->rtc_ck);
 
 	if (rtc->data->need_dbp)
 		regmap_update_bits(rtc->dbp, rtc->dbp_reg, rtc->dbp_mask, 0);
@@ -844,7 +834,7 @@ err:
 	return ret;
 }
 
-static int stm32_rtc_remove(struct platform_device *pdev)
+static void stm32_rtc_remove(struct platform_device *pdev)
 {
 	struct stm32_rtc *rtc = platform_get_drvdata(pdev);
 	const struct stm32_rtc_registers *regs = &rtc->data->regs;
@@ -867,8 +857,6 @@ static int stm32_rtc_remove(struct platform_device *pdev)
 
 	dev_pm_clear_wake_irq(&pdev->dev);
 	device_init_wakeup(&pdev->dev, false);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -878,9 +866,6 @@ static int stm32_rtc_suspend(struct device *dev)
 
 	if (rtc->data->has_pclk)
 		clk_disable_unprepare(rtc->pclk);
-
-	if (device_may_wakeup(dev))
-		return enable_irq_wake(rtc->irq_alarm);
 
 	return 0;
 }
@@ -903,9 +888,6 @@ static int stm32_rtc_resume(struct device *dev)
 		return ret;
 	}
 
-	if (device_may_wakeup(dev))
-		return disable_irq_wake(rtc->irq_alarm);
-
 	return ret;
 }
 #endif
@@ -915,7 +897,7 @@ static SIMPLE_DEV_PM_OPS(stm32_rtc_pm_ops,
 
 static struct platform_driver stm32_rtc_driver = {
 	.probe		= stm32_rtc_probe,
-	.remove		= stm32_rtc_remove,
+	.remove_new	= stm32_rtc_remove,
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.pm	= &stm32_rtc_pm_ops,

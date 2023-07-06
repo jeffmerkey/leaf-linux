@@ -167,8 +167,7 @@ static const struct regmap_config max9768_i2c_regmap_config = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static int max9768_i2c_probe(struct i2c_client *client,
-			     const struct i2c_device_id *id)
+static int max9768_i2c_probe(struct i2c_client *client)
 {
 	struct max9768 *max9768;
 	struct max9768_pdata *pdata = client->dev.platform_data;
@@ -220,6 +219,6 @@ static struct i2c_driver max9768_i2c_driver = {
 };
 module_i2c_driver(max9768_i2c_driver);
 
-MODULE_AUTHOR("Wolfram Sang <w.sang@pengutronix.de>");
+MODULE_AUTHOR("Wolfram Sang <kernel@pengutronix.de>");
 MODULE_DESCRIPTION("ASoC MAX9768 amplifier driver");
 MODULE_LICENSE("GPL v2");

@@ -87,7 +87,7 @@ int qdio_allocate_dbf(struct qdio_irq *irq_ptr)
 			debug_unregister(irq_ptr->debug_area);
 			return -ENOMEM;
 		}
-		strlcpy(new_entry->dbf_name, text, QDIO_DBF_NAME_LEN);
+		strscpy(new_entry->dbf_name, text, QDIO_DBF_NAME_LEN);
 		new_entry->dbf_info = irq_ptr->debug_area;
 		mutex_lock(&qdio_dbf_list_mutex);
 		list_add(&new_entry->dbf_list, &qdio_dbf_list);
@@ -105,13 +105,14 @@ static int qstat_show(struct seq_file *m, void *v)
 	if (!q)
 		return 0;
 
-	seq_printf(m, "Timestamp: %Lx  Last AI: %Lx\n",
-		   q->timestamp, last_ai_time);
+	seq_printf(m, "Timestamp: %llx\n", q->timestamp);
+	seq_printf(m, "Last Data IRQ: %llx  Last AI: %llx\n",
+		   q->irq_ptr->last_data_irq_time, last_ai_time);
 	seq_printf(m, "nr_used: %d  ftc: %d\n",
 		   atomic_read(&q->nr_buf_used), q->first_to_check);
 	if (q->is_input_q) {
-		seq_printf(m, "ack start: %d  ack count: %d\n",
-			   q->u.in.ack_start, q->u.in.ack_count);
+		seq_printf(m, "batch start: %u  batch count: %u\n",
+			   q->u.in.batch_start, q->u.in.batch_count);
 		seq_printf(m, "DSCI: %x   IRQs disabled: %u\n",
 			   *(u8 *)q->irq_ptr->dsci,
 			   test_bit(QDIO_IRQ_DISABLED,
@@ -165,7 +166,7 @@ static int qstat_show(struct seq_file *m, void *v)
 	}
 
 	seq_printf(m, "\n1          2..        4..        8..        "
-		   "16..       32..       64..       127\n");
+		   "16..       32..       64..       128\n");
 	for (i = 0; i < ARRAY_SIZE(q->q_stats.nr_sbals); i++)
 		seq_printf(m, "%-10u ", q->q_stats.nr_sbals[i]);
 	seq_printf(m, "\nError      NOP        Total\n%-10u %-10u %-10u\n\n",
@@ -196,20 +197,13 @@ DEFINE_SHOW_ATTRIBUTE(ssqd);
 static char *qperf_names[] = {
 	"Assumed adapter interrupts",
 	"QDIO interrupts",
-	"Requested PCIs",
-	"Inbound tasklet runs",
-	"Inbound tasklet resched",
-	"Inbound tasklet resched2",
-	"Outbound tasklet runs",
 	"SIGA read",
 	"SIGA write",
 	"SIGA sync",
 	"Inbound calls",
-	"Inbound handler",
 	"Inbound stop_polling",
 	"Inbound queue full",
 	"Outbound calls",
-	"Outbound handler",
 	"Outbound queue full",
 	"Outbound fast_requeue",
 	"Outbound target_full",

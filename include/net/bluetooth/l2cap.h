@@ -207,6 +207,7 @@ struct l2cap_hdr {
 	__le16     len;
 	__le16     cid;
 } __packed;
+#define L2CAP_LEN_SIZE		2
 #define L2CAP_HDR_SIZE		4
 #define L2CAP_ENH_HDR_SIZE	6
 #define L2CAP_EXT_HDR_SIZE	8
@@ -493,13 +494,14 @@ struct l2cap_le_credits {
 
 #define L2CAP_ECRED_MIN_MTU		64
 #define L2CAP_ECRED_MIN_MPS		64
+#define L2CAP_ECRED_MAX_CID		5
 
 struct l2cap_ecred_conn_req {
 	__le16 psm;
 	__le16 mtu;
 	__le16 mps;
 	__le16 credits;
-	__le16 scid[0];
+	__le16 scid[];
 } __packed;
 
 struct l2cap_ecred_conn_rsp {
@@ -507,13 +509,13 @@ struct l2cap_ecred_conn_rsp {
 	__le16 mps;
 	__le16 credits;
 	__le16 result;
-	__le16 dcid[0];
+	__le16 dcid[];
 };
 
 struct l2cap_ecred_reconf_req {
 	__le16 mtu;
 	__le16 mps;
-	__le16 scid[0];
+	__le16 scid[];
 } __packed;
 
 #define L2CAP_RECONF_SUCCESS		0x0000
@@ -665,6 +667,8 @@ struct l2cap_ops {
 	struct sk_buff		*(*alloc_skb) (struct l2cap_chan *chan,
 					       unsigned long hdr_len,
 					       unsigned long len, int nb);
+	int			(*filter) (struct l2cap_chan * chan,
+					   struct sk_buff *skb);
 };
 
 struct l2cap_conn {
@@ -690,7 +694,7 @@ struct l2cap_conn {
 	struct sk_buff_head	pending_rx;
 	struct work_struct	pending_rx_work;
 
-	struct work_struct	id_addr_update_work;
+	struct delayed_work	id_addr_timer;
 
 	__u8			disc_reason;
 
@@ -843,6 +847,7 @@ enum {
 };
 
 void l2cap_chan_hold(struct l2cap_chan *c);
+struct l2cap_chan *l2cap_chan_hold_unless_zero(struct l2cap_chan *c);
 void l2cap_chan_put(struct l2cap_chan *c);
 
 static inline void l2cap_chan_lock(struct l2cap_chan *chan)

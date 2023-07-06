@@ -12,13 +12,10 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/highmem.h>	/* pte_offset_map => kmap_atomic */
-#include <linux/dma-mapping.h>
+#include <linux/dma-map-ops.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 
-#include <asm/pgalloc.h>
-#include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/mxcc.h>
 #include <asm/mbus.h>
@@ -259,7 +256,7 @@ static int __sbus_iommu_map_sg(struct device *dev, struct scatterlist *sgl,
 		sg->dma_address =__sbus_iommu_map_page(dev, sg_page(sg),
 				sg->offset, sg->length, per_page_flush);
 		if (sg->dma_address == DMA_MAPPING_ERROR)
-			return 0;
+			return -EIO;
 		sg->dma_length = sg->length;
 	}
 
@@ -350,9 +347,6 @@ static void *sbus_iommu_alloc(struct device *dev, size_t len,
 	while(addr < end) {
 		page = va;
 		{
-			pgd_t *pgdp;
-			p4d_t *p4dp;
-			pud_t *pudp;
 			pmd_t *pmdp;
 			pte_t *ptep;
 
@@ -363,11 +357,8 @@ static void *sbus_iommu_alloc(struct device *dev, size_t len,
 			else
 				__flush_page_to_ram(page);
 
-			pgdp = pgd_offset(&init_mm, addr);
-			p4dp = p4d_offset(pgdp, addr);
-			pudp = pud_offset(p4dp, addr);
-			pmdp = pmd_offset(pudp, addr);
-			ptep = pte_offset_map(pmdp, addr);
+			pmdp = pmd_off_k(addr);
+			ptep = pte_offset_kernel(pmdp, addr);
 
 			set_pte(ptep, mk_pte(virt_to_page(page), dvma_prot));
 		}

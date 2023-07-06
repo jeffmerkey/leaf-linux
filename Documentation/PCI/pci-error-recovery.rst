@@ -79,19 +79,20 @@ This structure has the form::
 
 	struct pci_error_handlers
 	{
-		int (*error_detected)(struct pci_dev *dev, enum pci_channel_state);
+		int (*error_detected)(struct pci_dev *dev, pci_channel_state_t);
 		int (*mmio_enabled)(struct pci_dev *dev);
 		int (*slot_reset)(struct pci_dev *dev);
 		void (*resume)(struct pci_dev *dev);
+		void (*cor_error_detected)(struct pci_dev *dev);
 	};
 
 The possible channel states are::
 
-	enum pci_channel_state {
+	typedef enum {
 		pci_channel_io_normal,  /* I/O channel is in normal state */
 		pci_channel_io_frozen,  /* I/O to channel is blocked */
 		pci_channel_io_perm_failure, /* PCI card is dead */
-	};
+	} pci_channel_state_t;
 
 Possible return values are::
 
@@ -248,7 +249,7 @@ STEP 4: Slot Reset
 ------------------
 
 In response to a return value of PCI_ERS_RESULT_NEED_RESET, the
-the platform will perform a slot reset on the requesting PCI device(s).
+platform will perform a slot reset on the requesting PCI device(s).
 The actual steps taken by a platform to perform a slot reset
 will be platform-dependent. Upon completion of slot reset, the
 platform will call the device slot_reset() callback.
@@ -295,7 +296,7 @@ and let the driver restart normal I/O processing.
 A driver can still return a critical failure for this function if
 it can't get the device operational after reset.  If the platform
 previously tried a soft reset, it might now try a hard reset (power
-cycle) and then call slot_reset() again.  It the device still can't
+cycle) and then call slot_reset() again.  If the device still can't
 be recovered, there is nothing more that can be done;  the platform
 will typically report a "permanent failure" in such a case.  The
 device will be considered "dead" in this case.
@@ -348,7 +349,7 @@ STEP 6: Permanent Failure
 -------------------------
 A "permanent failure" has occurred, and the platform cannot recover
 the device.  The platform will call error_detected() with a
-pci_channel_state value of pci_channel_io_perm_failure.
+pci_channel_state_t value of pci_channel_io_perm_failure.
 
 The device driver should, at this point, assume the worst. It should
 cancel all pending I/O, refuse all new I/O, returning -EIO to
@@ -363,7 +364,7 @@ Note, however, not all failures are truly "permanent". Some are
 caused by over-heating, some by a poorly seated card. Many
 PCI error events are caused by software bugs, e.g. DMA's to
 wild addresses or bogus split transactions due to programming
-errors. See the discussion in powerpc/eeh-pci-error-recovery.txt
+errors. See the discussion in Documentation/powerpc/eeh-pci-error-recovery.rst
 for additional detail on real-life experience of the causes of
 software errors.
 
@@ -417,10 +418,15 @@ That is, the recovery API only requires that:
    - drivers/next/e100.c
    - drivers/net/e1000
    - drivers/net/e1000e
-   - drivers/net/ixgb
    - drivers/net/ixgbe
    - drivers/net/cxgb3
    - drivers/net/s2io.c
+
+   The cor_error_detected() callback is invoked in handle_error_source() when
+   the error severity is "correctable". The callback is optional and allows
+   additional logging to be done if desired. See example:
+
+   - drivers/cxl/pci.c
 
 The End
 -------

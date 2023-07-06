@@ -243,7 +243,7 @@ static inline int omap_rproc_get_timer_irq(struct omap_rproc_timer *timer)
  * omap_rproc_ack_timer_irq() - acknowledge a timer irq
  * @timer: handle to a OMAP rproc timer
  *
- * This function is used to clear the irq associated with a watchdog timer. The
+ * This function is used to clear the irq associated with a watchdog timer.
  * The function is called by the OMAP remoteproc upon a watchdog event on the
  * remote processor to clear the interrupt status of the watchdog timer.
  */
@@ -303,7 +303,7 @@ static irqreturn_t omap_rproc_watchdog_isr(int irq, void *data)
  * @configure: boolean flag used to acquire and configure the timer handle
  *
  * This function is used primarily to enable the timers associated with
- * a remoteproc. The configure flag is provided to allow the driver to
+ * a remoteproc. The configure flag is provided to allow the driver
  * to either acquire and start a timer (during device initialization) or
  * to just start a timer (during a resume operation).
  *
@@ -443,7 +443,7 @@ free_timers:
  * @configure: boolean flag used to release the timer handle
  *
  * This function is used primarily to disable the timers associated with
- * a remoteproc. The configure flag is provided to allow the driver to
+ * a remoteproc. The configure flag is provided to allow the driver
  * to either stop and release a timer (during device shutdown) or to just
  * stop a timer (during a suspend operation).
  *
@@ -511,7 +511,6 @@ static void omap_rproc_mbox_callback(struct mbox_client *client, void *data)
 		dev_info(dev, "received echo reply from %s\n", name);
 		break;
 	case RP_MBOX_SUSPEND_ACK:
-		/* Fall through */
 	case RP_MBOX_SUSPEND_CANCEL:
 		oproc->suspend_acked = msg == RP_MBOX_SUSPEND_ACK;
 		complete(&oproc->pm_comp);
@@ -729,7 +728,7 @@ out:
  * Return: translated virtual address in kernel memory space on success,
  *         or NULL on failure.
  */
-static void *omap_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len)
+static void *omap_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len, bool *is_iomem)
 {
 	struct omap_rproc *oproc = rproc->priv;
 	int i;
@@ -902,8 +901,7 @@ out:
 
 static int __maybe_unused omap_rproc_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct rproc *rproc = platform_get_drvdata(pdev);
+	struct rproc *rproc = dev_get_drvdata(dev);
 	struct omap_rproc *oproc = rproc->priv;
 	int ret = 0;
 
@@ -939,8 +937,7 @@ out:
 
 static int __maybe_unused omap_rproc_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct rproc *rproc = platform_get_drvdata(pdev);
+	struct rproc *rproc = dev_get_drvdata(dev);
 	struct omap_rproc *oproc = rproc->priv;
 	int ret = 0;
 
@@ -1366,15 +1363,13 @@ free_rproc:
 	return ret;
 }
 
-static int omap_rproc_remove(struct platform_device *pdev)
+static void omap_rproc_remove(struct platform_device *pdev)
 {
 	struct rproc *rproc = platform_get_drvdata(pdev);
 
 	rproc_del(rproc);
 	rproc_free(rproc);
 	of_reserved_mem_device_release(&pdev->dev);
-
-	return 0;
 }
 
 static const struct dev_pm_ops omap_rproc_pm_ops = {
@@ -1385,7 +1380,7 @@ static const struct dev_pm_ops omap_rproc_pm_ops = {
 
 static struct platform_driver omap_rproc_driver = {
 	.probe = omap_rproc_probe,
-	.remove = omap_rproc_remove,
+	.remove_new = omap_rproc_remove,
 	.driver = {
 		.name = "omap-rproc",
 		.pm = &omap_rproc_pm_ops,

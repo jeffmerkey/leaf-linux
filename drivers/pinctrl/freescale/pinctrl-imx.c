@@ -11,15 +11,18 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/mfd/syscon.h>
+#include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/regmap.h>
+#include <linux/seq_file.h>
+#include <linux/slab.h>
+
 #include <linux/pinctrl/machine.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
-#include <linux/slab.h>
-#include <linux/regmap.h>
 
 #include "../core.h"
 #include "../pinconf.h"
@@ -289,62 +292,6 @@ struct pinmux_ops imx_pmx_ops = {
 	.set_mux = imx_pmx_set,
 };
 
-/* decode generic config into raw register values */
-static u32 imx_pinconf_decode_generic_config(struct imx_pinctrl *ipctl,
-					      unsigned long *configs,
-					      unsigned int num_configs)
-{
-	const struct imx_pinctrl_soc_info *info = ipctl->info;
-	const struct imx_cfg_params_decode *decode;
-	enum pin_config_param param;
-	u32 raw_config = 0;
-	u32 param_val;
-	int i, j;
-
-	WARN_ON(num_configs > info->num_decodes);
-
-	for (i = 0; i < num_configs; i++) {
-		param = pinconf_to_config_param(configs[i]);
-		param_val = pinconf_to_config_argument(configs[i]);
-		decode = info->decodes;
-		for (j = 0; j < info->num_decodes; j++) {
-			if (param == decode->param) {
-				if (decode->invert)
-					param_val = !param_val;
-				raw_config |= (param_val << decode->shift)
-					      & decode->mask;
-				break;
-			}
-			decode++;
-		}
-	}
-
-	if (info->fixup)
-		info->fixup(configs, num_configs, &raw_config);
-
-	return raw_config;
-}
-
-static u32 imx_pinconf_parse_generic_config(struct device_node *np,
-					    struct imx_pinctrl *ipctl)
-{
-	const struct imx_pinctrl_soc_info *info = ipctl->info;
-	struct pinctrl_dev *pctl = ipctl->pctl;
-	unsigned int num_configs;
-	unsigned long *configs;
-	int ret;
-
-	if (!info->generic_pinconf)
-		return 0;
-
-	ret = pinconf_generic_parse_dt_config(np, pctl, &configs,
-					      &num_configs);
-	if (ret)
-		return 0;
-
-	return imx_pinconf_decode_generic_config(ipctl, configs, num_configs);
-}
-
 static int imx_pinconf_get_mmio(struct pinctrl_dev *pctldev, unsigned pin_id,
 				unsigned long *config)
 {
@@ -373,7 +320,7 @@ static int imx_pinconf_get(struct pinctrl_dev *pctldev,
 	const struct imx_pinctrl_soc_info *info = ipctl->info;
 
 	if (info->flags & IMX_USE_SCU)
-		return imx_pinconf_get_scu(pctldev, pin_id, config);
+		return info->imx_pinconf_get(pctldev, pin_id, config);
 	else
 		return imx_pinconf_get_mmio(pctldev, pin_id, config);
 }
@@ -423,7 +370,7 @@ static int imx_pinconf_set(struct pinctrl_dev *pctldev,
 	const struct imx_pinctrl_soc_info *info = ipctl->info;
 
 	if (info->flags & IMX_USE_SCU)
-		return imx_pinconf_set_scu(pctldev, pin_id,
+		return info->imx_pinconf_set(pctldev, pin_id,
 					   configs, num_configs);
 	else
 		return imx_pinconf_set_mmio(pctldev, pin_id,
@@ -440,7 +387,7 @@ static void imx_pinconf_dbg_show(struct pinctrl_dev *pctldev,
 	int ret;
 
 	if (info->flags & IMX_USE_SCU) {
-		ret = imx_pinconf_get_scu(pctldev, pin_id, &config);
+		ret = info->imx_pinconf_get(pctldev, pin_id, &config);
 		if (ret) {
 			dev_err(ipctl->dev, "failed to get %s pinconf\n",
 				pin_get_name(pctldev, pin_id));
@@ -497,7 +444,6 @@ static const struct pinconf_ops imx_pinconf_ops = {
 /*
  * Each pin represented in fsl,pins consists of a number of u32 PIN_FUNC_ID
  * and 1 u32 CONFIG, the total size is PIN_FUNC_ID + CONFIG for each pin.
- * For generic_pinconf case, there's no extra u32 CONFIG.
  *
  * PIN_FUNC_ID format:
  * Default:
@@ -545,18 +491,12 @@ static void imx_pinctrl_parse_pin_mmio(struct imx_pinctrl *ipctl,
 	pin_mmio->mux_mode = be32_to_cpu(*list++);
 	pin_mmio->input_val = be32_to_cpu(*list++);
 
-	if (info->generic_pinconf) {
-		/* generic pin config decoded */
-		pin_mmio->config = imx_pinconf_parse_generic_config(np, ipctl);
-	} else {
-		/* legacy pin config read from devicetree */
-		config = be32_to_cpu(*list++);
+	config = be32_to_cpu(*list++);
 
-		/* SION bit is in mux register */
-		if (config & IMX_PAD_SION)
-			pin_mmio->mux_mode |= IOMUXC_CONFIG_SION;
-		pin_mmio->config = config & ~IMX_PAD_SION;
-	}
+	/* SION bit is in mux register */
+	if (config & IMX_PAD_SION)
+		pin_mmio->mux_mode |= IOMUXC_CONFIG_SION;
+	pin_mmio->config = config & ~IMX_PAD_SION;
 
 	*list_p = list;
 
@@ -583,9 +523,6 @@ static int imx_pinctrl_parse_groups(struct device_node *np,
 		pin_size = FSL_PIN_SHARE_SIZE;
 	else
 		pin_size = FSL_PIN_SIZE;
-
-	if (info->generic_pinconf)
-		pin_size -= 4;
 
 	/* Initialise group */
 	grp->name = np->name;
@@ -629,7 +566,7 @@ static int imx_pinctrl_parse_groups(struct device_node *np,
 	for (i = 0; i < grp->num_pins; i++) {
 		pin = &((struct imx_pin *)(grp->data))[i];
 		if (info->flags & IMX_USE_SCU)
-			imx_pinctrl_parse_pin_scu(ipctl, &grp->pins[i],
+			info->imx_pinctrl_parse_pin(ipctl, &grp->pins[i],
 						  pin, &list);
 		else
 			imx_pinctrl_parse_pin_mmio(ipctl, &grp->pins[i],
@@ -647,7 +584,8 @@ static int imx_pinctrl_parse_functions(struct device_node *np,
 	struct device_node *child;
 	struct function_desc *func;
 	struct group_desc *grp;
-	u32 i = 0;
+	const char **group_names;
+	u32 i;
 
 	dev_dbg(pctl->dev, "parse function(%d): %pOFn\n", index, np);
 
@@ -659,17 +597,21 @@ static int imx_pinctrl_parse_functions(struct device_node *np,
 	func->name = np->name;
 	func->num_group_names = of_get_child_count(np);
 	if (func->num_group_names == 0) {
-		dev_err(ipctl->dev, "no groups defined in %pOF\n", np);
+		dev_info(ipctl->dev, "no groups defined in %pOF\n", np);
 		return -EINVAL;
 	}
-	func->group_names = devm_kcalloc(ipctl->dev, func->num_group_names,
-					 sizeof(char *), GFP_KERNEL);
-	if (!func->group_names)
+
+	group_names = devm_kcalloc(ipctl->dev, func->num_group_names,
+				   sizeof(char *), GFP_KERNEL);
+	if (!group_names)
 		return -ENOMEM;
+	i = 0;
+	for_each_child_of_node(np, child)
+		group_names[i++] = child->name;
+	func->group_names = group_names;
 
+	i = 0;
 	for_each_child_of_node(np, child) {
-		func->group_names[i] = child->name;
-
 		grp = devm_kzalloc(ipctl->dev, sizeof(struct group_desc),
 				   GFP_KERNEL);
 		if (!grp) {
@@ -774,16 +716,6 @@ static int imx_pinctrl_probe_dt(struct platform_device *pdev,
 	return 0;
 }
 
-/*
- * imx_free_resources() - free memory used by this driver
- * @info: info driver instance
- */
-static void imx_free_resources(struct imx_pinctrl *ipctl)
-{
-	if (ipctl->pctl)
-		pinctrl_unregister(ipctl->pctl);
-}
-
 int imx_pinctrl_probe(struct platform_device *pdev,
 		      const struct imx_pinctrl_soc_info *info)
 {
@@ -857,10 +789,6 @@ int imx_pinctrl_probe(struct platform_device *pdev,
 	imx_pinctrl_desc->confops = &imx_pinconf_ops;
 	imx_pinctrl_desc->owner = THIS_MODULE;
 
-	/* for generic pinconf */
-	imx_pinctrl_desc->custom_params = info->custom_params;
-	imx_pinctrl_desc->num_custom_params = info->num_custom_params;
-
 	/* platform specific callback */
 	imx_pmx_ops.gpio_set_direction = info->gpio_set_direction;
 
@@ -874,24 +802,20 @@ int imx_pinctrl_probe(struct platform_device *pdev,
 					     &ipctl->pctl);
 	if (ret) {
 		dev_err(&pdev->dev, "could not register IMX pinctrl driver\n");
-		goto free;
+		return ret;
 	}
 
 	ret = imx_pinctrl_probe_dt(pdev, ipctl);
 	if (ret) {
 		dev_err(&pdev->dev, "fail to probe dt properties\n");
-		goto free;
+		return ret;
 	}
 
 	dev_info(&pdev->dev, "initialized IMX pinctrl driver\n");
 
 	return pinctrl_enable(ipctl->pctl);
-
-free:
-	imx_free_resources(ipctl);
-
-	return ret;
 }
+EXPORT_SYMBOL_GPL(imx_pinctrl_probe);
 
 static int __maybe_unused imx_pinctrl_suspend(struct device *dev)
 {
@@ -911,3 +835,8 @@ const struct dev_pm_ops imx_pinctrl_pm_ops = {
 	SET_LATE_SYSTEM_SLEEP_PM_OPS(imx_pinctrl_suspend,
 					imx_pinctrl_resume)
 };
+EXPORT_SYMBOL_GPL(imx_pinctrl_pm_ops);
+
+MODULE_AUTHOR("Dong Aisheng <aisheng.dong@nxp.com>");
+MODULE_DESCRIPTION("NXP i.MX common pinctrl driver");
+MODULE_LICENSE("GPL v2");

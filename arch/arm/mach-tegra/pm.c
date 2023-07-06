@@ -216,6 +216,8 @@ int tegra_pm_enter_lp2(void)
 	restore_cpu_complex();
 	cpu_cluster_pm_exit();
 
+	call_firmware_op(prepare_idle, TF_PM_MODE_NONE);
+
 	return err;
 }
 
@@ -391,6 +393,8 @@ static int tegra_suspend_enter(suspend_state_t state)
 
 	local_fiq_enable();
 
+	call_firmware_op(prepare_idle, TF_PM_MODE_NONE);
+
 	return 0;
 }
 
@@ -399,7 +403,7 @@ static const struct platform_suspend_ops tegra_suspend_ops = {
 	.enter		= tegra_suspend_enter,
 };
 
-void __init tegra_init_suspend(void)
+void tegra_pm_init_suspend(void)
 {
 	enum tegra_suspend_mode mode = tegra_pmc_get_suspend_mode();
 

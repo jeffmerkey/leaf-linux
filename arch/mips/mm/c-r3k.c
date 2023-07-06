@@ -16,7 +16,6 @@
 #include <linux/mm.h>
 
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/mmu_context.h>
 #include <asm/isadep.h>
 #include <asm/io.h>
@@ -240,9 +239,6 @@ static void r3k_flush_cache_page(struct vm_area_struct *vma,
 	unsigned long kaddr = KSEG0ADDR(pfn << PAGE_SHIFT);
 	int exec = vma->vm_flags & VM_EXEC;
 	struct mm_struct *mm = vma->vm_mm;
-	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
 
@@ -253,11 +249,8 @@ static void r3k_flush_cache_page(struct vm_area_struct *vma,
 	if (cpu_context(smp_processor_id(), mm) == 0)
 		return;
 
-	pgdp = pgd_offset(mm, addr);
-	p4dp = p4d_offset(pgdp, addr);
-	pudp = pud_offset(p4dp, addr);
-	pmdp = pmd_offset(pudp, addr);
-	ptep = pte_offset(pmdp, addr);
+	pmdp = pmd_off(mm, addr);
+	ptep = pte_offset_kernel(pmdp, addr);
 
 	/* Invalid => no such page in the cache.  */
 	if (!(pte_val(*ptep) & _PAGE_PRESENT))
@@ -266,10 +259,6 @@ static void r3k_flush_cache_page(struct vm_area_struct *vma,
 	r3k_flush_dcache_range(kaddr, kaddr + PAGE_SIZE);
 	if (exec)
 		r3k_flush_icache_range(kaddr, kaddr + PAGE_SIZE);
-}
-
-static void local_r3k_flush_data_cache_page(void *addr)
-{
 }
 
 static void r3k_flush_data_cache_page(unsigned long addr)
@@ -309,7 +298,6 @@ void r3k_cache_init(void)
 
 	__flush_kernel_vmap_range = r3k_flush_kernel_vmap_range;
 
-	local_flush_data_cache_page = local_r3k_flush_data_cache_page;
 	flush_data_cache_page = r3k_flush_data_cache_page;
 
 	_dma_cache_wback_inv = r3k_dma_cache_wback_inv;

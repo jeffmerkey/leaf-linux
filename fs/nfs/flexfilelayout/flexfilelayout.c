@@ -30,14 +30,20 @@
 #define FF_LAYOUT_POLL_RETRY_MAX     (15*HZ)
 #define FF_LAYOUTRETURN_MAXERR 20
 
+enum nfs4_ff_op_type {
+	NFS4_FF_OP_LAYOUTSTATS,
+	NFS4_FF_OP_LAYOUTRETURN,
+};
+
 static unsigned short io_maxretrans;
 
 static const struct pnfs_commit_ops ff_layout_commit_ops;
 static void ff_layout_read_record_layoutstats_done(struct rpc_task *task,
 		struct nfs_pgio_header *hdr);
-static int ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
+static int
+ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			       struct nfs42_layoutstat_devinfo *devinfo,
-			       int dev_limit);
+			       int dev_limit, enum nfs4_ff_op_type type);
 static void ff_layout_encode_ff_layoutupdate(struct xdr_stream *xdr,
 			      const struct nfs42_layoutstat_devinfo *devinfo,
 			      struct nfs4_ff_layout_mirror *mirror);
@@ -106,7 +112,7 @@ static int decode_nfs_fh(struct xdr_stream *xdr, struct nfs_fh *fh)
 	if (unlikely(!p))
 		return -ENOBUFS;
 	fh->size = be32_to_cpup(p++);
-	if (fh->size > sizeof(struct nfs_fh)) {
+	if (fh->size > NFS_MAXFHSIZE) {
 		printk(KERN_ERR "NFS flexfiles: Too big fh received %d\n",
 		       fh->size);
 		return -EOVERFLOW;
@@ -378,7 +384,7 @@ ff_layout_alloc_lseg(struct pnfs_layout_hdr *lh,
 
 	xdr_init_decode_pages(&stream, &buf, lgr->layoutp->pages,
 			      lgr->layoutp->len);
-	xdr_set_scratch_buffer(&stream, page_address(scratch), PAGE_SIZE);
+	xdr_set_scratch_page(&stream, scratch);
 
 	/* stripe unit and mirror_array_cnt */
 	rc = -EIO;
@@ -487,10 +493,10 @@ ff_layout_alloc_lseg(struct pnfs_layout_hdr *lh,
 		gid = make_kgid(&init_user_ns, id);
 
 		if (gfp_flags & __GFP_FS)
-			kcred = prepare_kernel_cred(NULL);
+			kcred = prepare_kernel_cred(&init_task);
 		else {
 			unsigned int nofs_flags = memalloc_nofs_save();
-			kcred = prepare_kernel_cred(NULL);
+			kcred = prepare_kernel_cred(&init_task);
 			memalloc_nofs_restore(nofs_flags);
 		}
 		rc = -ENOMEM;
@@ -663,7 +669,7 @@ nfs4_ff_layout_stat_io_start_read(struct inode *inode,
 	spin_unlock(&mirror->lock);
 
 	if (report)
-		pnfs_report_layoutstat(inode, GFP_KERNEL);
+		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
 
 static void
@@ -694,7 +700,7 @@ nfs4_ff_layout_stat_io_start_write(struct inode *inode,
 	spin_unlock(&mirror->lock);
 
 	if (report)
-		pnfs_report_layoutstat(inode, GFP_NOIO);
+		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
 
 static void
@@ -715,7 +721,7 @@ nfs4_ff_layout_stat_io_end_write(struct rpc_task *task,
 }
 
 static void
-ff_layout_mark_ds_unreachable(struct pnfs_layout_segment *lseg, int idx)
+ff_layout_mark_ds_unreachable(struct pnfs_layout_segment *lseg, u32 idx)
 {
 	struct nfs4_deviceid_node *devid = FF_LAYOUT_DEVID_NODE(lseg, idx);
 
@@ -724,7 +730,7 @@ ff_layout_mark_ds_unreachable(struct pnfs_layout_segment *lseg, int idx)
 }
 
 static void
-ff_layout_mark_ds_reachable(struct pnfs_layout_segment *lseg, int idx)
+ff_layout_mark_ds_reachable(struct pnfs_layout_segment *lseg, u32 idx)
 {
 	struct nfs4_deviceid_node *devid = FF_LAYOUT_DEVID_NODE(lseg, idx);
 
@@ -734,22 +740,18 @@ ff_layout_mark_ds_reachable(struct pnfs_layout_segment *lseg, int idx)
 
 static struct nfs4_pnfs_ds *
 ff_layout_choose_ds_for_read(struct pnfs_layout_segment *lseg,
-			     int start_idx, int *best_idx,
+			     u32 start_idx, u32 *best_idx,
 			     bool check_device)
 {
 	struct nfs4_ff_layout_segment *fls = FF_LAYOUT_LSEG(lseg);
 	struct nfs4_ff_layout_mirror *mirror;
 	struct nfs4_pnfs_ds *ds;
-	bool fail_return = false;
-	int idx;
+	u32 idx;
 
 	/* mirrors are initially sorted by efficiency */
 	for (idx = start_idx; idx < fls->mirror_array_cnt; idx++) {
-		if (idx+1 == fls->mirror_array_cnt)
-			fail_return = !check_device;
-
 		mirror = FF_LAYOUT_COMP(lseg, idx);
-		ds = nfs4_ff_layout_prepare_ds(lseg, mirror, fail_return);
+		ds = nfs4_ff_layout_prepare_ds(lseg, mirror, false);
 		if (!ds)
 			continue;
 
@@ -766,21 +768,21 @@ ff_layout_choose_ds_for_read(struct pnfs_layout_segment *lseg,
 
 static struct nfs4_pnfs_ds *
 ff_layout_choose_any_ds_for_read(struct pnfs_layout_segment *lseg,
-				 int start_idx, int *best_idx)
+				 u32 start_idx, u32 *best_idx)
 {
 	return ff_layout_choose_ds_for_read(lseg, start_idx, best_idx, false);
 }
 
 static struct nfs4_pnfs_ds *
 ff_layout_choose_valid_ds_for_read(struct pnfs_layout_segment *lseg,
-				   int start_idx, int *best_idx)
+				   u32 start_idx, u32 *best_idx)
 {
 	return ff_layout_choose_ds_for_read(lseg, start_idx, best_idx, true);
 }
 
 static struct nfs4_pnfs_ds *
 ff_layout_choose_best_ds_for_read(struct pnfs_layout_segment *lseg,
-				  int start_idx, int *best_idx)
+				  u32 start_idx, u32 *best_idx)
 {
 	struct nfs4_pnfs_ds *ds;
 
@@ -790,19 +792,30 @@ ff_layout_choose_best_ds_for_read(struct pnfs_layout_segment *lseg,
 	return ff_layout_choose_any_ds_for_read(lseg, start_idx, best_idx);
 }
 
+static struct nfs4_pnfs_ds *
+ff_layout_get_ds_for_read(struct nfs_pageio_descriptor *pgio,
+			  u32 *best_idx)
+{
+	struct pnfs_layout_segment *lseg = pgio->pg_lseg;
+	struct nfs4_pnfs_ds *ds;
+
+	ds = ff_layout_choose_best_ds_for_read(lseg, pgio->pg_mirror_idx,
+					       best_idx);
+	if (ds || !pgio->pg_mirror_idx)
+		return ds;
+	return ff_layout_choose_best_ds_for_read(lseg, 0, best_idx);
+}
+
 static void
 ff_layout_pg_get_read(struct nfs_pageio_descriptor *pgio,
 		      struct nfs_page *req,
 		      bool strict_iomode)
 {
 	pnfs_put_lseg(pgio->pg_lseg);
-	pgio->pg_lseg = pnfs_update_layout(pgio->pg_inode,
-					   nfs_req_openctx(req),
-					   req_offset(req),
-					   req->wb_bytes,
-					   IOMODE_READ,
-					   strict_iomode,
-					   GFP_KERNEL);
+	pgio->pg_lseg =
+		pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
+				   req_offset(req), req->wb_bytes, IOMODE_READ,
+				   strict_iomode, nfs_io_gfp_mask());
 	if (IS_ERR(pgio->pg_lseg)) {
 		pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 		pgio->pg_lseg = NULL;
@@ -824,7 +837,7 @@ ff_layout_pg_init_read(struct nfs_pageio_descriptor *pgio,
 	struct nfs_pgio_mirror *pgm;
 	struct nfs4_ff_layout_mirror *mirror;
 	struct nfs4_pnfs_ds *ds;
-	int ds_idx;
+	u32 ds_idx;
 
 retry:
 	ff_layout_pg_check_layout(pgio, req);
@@ -840,24 +853,21 @@ retry:
 			goto out_nolseg;
 	}
 
-	ds = ff_layout_choose_best_ds_for_read(pgio->pg_lseg, 0, &ds_idx);
+	ds = ff_layout_get_ds_for_read(pgio, &ds_idx);
 	if (!ds) {
 		if (!ff_layout_no_fallback_to_mds(pgio->pg_lseg))
 			goto out_mds;
-		pnfs_put_lseg(pgio->pg_lseg);
-		pgio->pg_lseg = NULL;
+		pnfs_generic_pg_cleanup(pgio);
 		/* Sleep for 1 second before retrying */
 		ssleep(1);
 		goto retry;
 	}
 
 	mirror = FF_LAYOUT_COMP(pgio->pg_lseg, ds_idx);
-
-	pgio->pg_mirror_idx = ds_idx;
-
-	/* read always uses only one mirror - idx 0 for pgio layer */
 	pgm = &pgio->pg_mirrors[0];
 	pgm->pg_bsize = mirror->mirror_ds->ds_versions[0].rsize;
+
+	pgio->pg_mirror_idx = ds_idx;
 
 	if (NFS_SERVER(pgio->pg_inode)->flags &
 			(NFS_MOUNT_SOFT|NFS_MOUNT_SOFTERR))
@@ -871,8 +881,6 @@ out_mds:
 			0, NFS4_MAX_UINT64, IOMODE_READ,
 			NFS_I(pgio->pg_inode)->layout,
 			pgio->pg_lseg);
-	pnfs_put_lseg(pgio->pg_lseg);
-	pgio->pg_lseg = NULL;
 	pgio->pg_maxretrans = 0;
 	nfs_pageio_reset_read_mds(pgio);
 }
@@ -884,18 +892,15 @@ ff_layout_pg_init_write(struct nfs_pageio_descriptor *pgio,
 	struct nfs4_ff_layout_mirror *mirror;
 	struct nfs_pgio_mirror *pgm;
 	struct nfs4_pnfs_ds *ds;
-	int i;
+	u32 i;
 
 retry:
 	ff_layout_pg_check_layout(pgio, req);
 	if (!pgio->pg_lseg) {
-		pgio->pg_lseg = pnfs_update_layout(pgio->pg_inode,
-						   nfs_req_openctx(req),
-						   req_offset(req),
-						   req->wb_bytes,
-						   IOMODE_RW,
-						   false,
-						   GFP_NOFS);
+		pgio->pg_lseg =
+			pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
+					   req_offset(req), req->wb_bytes,
+					   IOMODE_RW, false, nfs_io_gfp_mask());
 		if (IS_ERR(pgio->pg_lseg)) {
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
@@ -907,9 +912,8 @@ retry:
 		goto out_mds;
 
 	/* Use a direct mapping of ds_idx to pgio mirror_idx */
-	if (WARN_ON_ONCE(pgio->pg_mirror_count !=
-	    FF_LAYOUT_MIRROR_COUNT(pgio->pg_lseg)))
-		goto out_mds;
+	if (pgio->pg_mirror_count != FF_LAYOUT_MIRROR_COUNT(pgio->pg_lseg))
+		goto out_eagain;
 
 	for (i = 0; i < pgio->pg_mirror_count; i++) {
 		mirror = FF_LAYOUT_COMP(pgio->pg_lseg, i);
@@ -917,8 +921,7 @@ retry:
 		if (!ds) {
 			if (!ff_layout_no_fallback_to_mds(pgio->pg_lseg))
 				goto out_mds;
-			pnfs_put_lseg(pgio->pg_lseg);
-			pgio->pg_lseg = NULL;
+			pnfs_generic_pg_cleanup(pgio);
 			/* Sleep for 1 second before retrying */
 			ssleep(1);
 			goto retry;
@@ -931,16 +934,18 @@ retry:
 			(NFS_MOUNT_SOFT|NFS_MOUNT_SOFTERR))
 		pgio->pg_maxretrans = io_maxretrans;
 	return;
-
+out_eagain:
+	pnfs_generic_pg_cleanup(pgio);
+	pgio->pg_error = -EAGAIN;
+	return;
 out_mds:
 	trace_pnfs_mds_fallback_pg_init_write(pgio->pg_inode,
 			0, NFS4_MAX_UINT64, IOMODE_RW,
 			NFS_I(pgio->pg_inode)->layout,
 			pgio->pg_lseg);
-	pnfs_put_lseg(pgio->pg_lseg);
-	pgio->pg_lseg = NULL;
 	pgio->pg_maxretrans = 0;
 	nfs_pageio_reset_write_mds(pgio);
+	pgio->pg_error = -EAGAIN;
 }
 
 static unsigned int
@@ -948,13 +953,10 @@ ff_layout_pg_get_mirror_count_write(struct nfs_pageio_descriptor *pgio,
 				    struct nfs_page *req)
 {
 	if (!pgio->pg_lseg) {
-		pgio->pg_lseg = pnfs_update_layout(pgio->pg_inode,
-						   nfs_req_openctx(req),
-						   0,
-						   NFS4_MAX_UINT64,
-						   IOMODE_RW,
-						   false,
-						   GFP_NOFS);
+		pgio->pg_lseg =
+			pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
+					   req_offset(req), req->wb_bytes,
+					   IOMODE_RW, false, nfs_io_gfp_mask());
 		if (IS_ERR(pgio->pg_lseg)) {
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
@@ -974,6 +976,21 @@ out:
 	return 1;
 }
 
+static u32
+ff_layout_pg_set_mirror_write(struct nfs_pageio_descriptor *desc, u32 idx)
+{
+	u32 old = desc->pg_mirror_idx;
+
+	desc->pg_mirror_idx = idx;
+	return old;
+}
+
+static struct nfs_pgio_mirror *
+ff_layout_pg_get_mirror_write(struct nfs_pageio_descriptor *desc, u32 idx)
+{
+	return &desc->pg_mirrors[idx];
+}
+
 static const struct nfs_pageio_ops ff_layout_pg_read_ops = {
 	.pg_init = ff_layout_pg_init_read,
 	.pg_test = pnfs_generic_pg_test,
@@ -987,6 +1004,8 @@ static const struct nfs_pageio_ops ff_layout_pg_write_ops = {
 	.pg_doio = pnfs_generic_pg_writepages,
 	.pg_get_mirror_count = ff_layout_pg_get_mirror_count_write,
 	.pg_cleanup = pnfs_generic_pg_cleanup,
+	.pg_get_mirror = ff_layout_pg_get_mirror_write,
+	.pg_set_mirror = ff_layout_pg_set_mirror_write,
 };
 
 static void ff_layout_reset_write(struct nfs_pgio_header *hdr, bool retry_pnfs)
@@ -1025,11 +1044,24 @@ static void ff_layout_reset_write(struct nfs_pgio_header *hdr, bool retry_pnfs)
 	}
 }
 
+static void ff_layout_resend_pnfs_read(struct nfs_pgio_header *hdr)
+{
+	u32 idx = hdr->pgio_mirror_idx + 1;
+	u32 new_idx = 0;
+
+	if (ff_layout_choose_any_ds_for_read(hdr->lseg, idx, &new_idx))
+		ff_layout_send_layouterror(hdr->lseg);
+	else
+		pnfs_error_mark_layout_for_return(hdr->inode, hdr->lseg);
+	pnfs_read_resend_pnfs(hdr, new_idx);
+}
+
 static void ff_layout_reset_read(struct nfs_pgio_header *hdr)
 {
 	struct rpc_task *task = &hdr->task;
 
 	pnfs_layoutcommit_inode(hdr->inode, false);
+	pnfs_error_mark_layout_for_return(hdr->inode, hdr->lseg);
 
 	if (!test_and_set_bit(NFS_IOHDR_REDO, &hdr->flags)) {
 		dprintk("%s Reset task %5u for i/o through MDS "
@@ -1052,7 +1084,7 @@ static int ff_layout_async_handle_error_v4(struct rpc_task *task,
 					   struct nfs4_state *state,
 					   struct nfs_client *clp,
 					   struct pnfs_layout_segment *lseg,
-					   int idx)
+					   u32 idx)
 {
 	struct pnfs_layout_hdr *lo = lseg->pls_layout;
 	struct inode *inode = lo->plh_inode;
@@ -1105,12 +1137,14 @@ static int ff_layout_async_handle_error_v4(struct rpc_task *task,
 	case -EIO:
 	case -ETIMEDOUT:
 	case -EPIPE:
+	case -EPROTO:
+	case -ENODEV:
 		dprintk("%s DS connection error %d\n", __func__,
 			task->tk_status);
 		nfs4_delete_deviceid(devid->ld, devid->nfs_client,
 				&devid->deviceid);
 		rpc_wake_up(&tbl->slot_tbl_waitq);
-		/* fall through */
+		fallthrough;
 	default:
 		if (ff_layout_avoid_mds_available_ds(lseg))
 			return -NFS4ERR_RESET_TO_PNFS;
@@ -1126,7 +1160,7 @@ reset:
 /* Retry all errors through either pNFS or MDS except for -EJUKEBOX */
 static int ff_layout_async_handle_error_v3(struct rpc_task *task,
 					   struct pnfs_layout_segment *lseg,
-					   int idx)
+					   u32 idx)
 {
 	struct nfs4_deviceid_node *devid = FF_LAYOUT_DEVID_NODE(lseg, idx);
 
@@ -1161,7 +1195,7 @@ static int ff_layout_async_handle_error(struct rpc_task *task,
 					struct nfs4_state *state,
 					struct nfs_client *clp,
 					struct pnfs_layout_segment *lseg,
-					int idx)
+					u32 idx)
 {
 	int vers = clp->cl_nfs_mod->rpc_vers->number;
 
@@ -1188,7 +1222,7 @@ static int ff_layout_async_handle_error(struct rpc_task *task,
 }
 
 static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
-					int idx, u64 offset, u64 length,
+					u32 idx, u64 offset, u64 length,
 					u32 *op_status, int opnum, int error)
 {
 	struct nfs4_ff_layout_mirror *mirror;
@@ -1210,6 +1244,8 @@ static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
 		case -ENOBUFS:
 		case -EPIPE:
 		case -EPERM:
+		case -EPROTO:
+		case -ENODEV:
 			*op_status = status = NFS4ERR_NXIO;
 			break;
 		case -EACCES:
@@ -1223,7 +1259,7 @@ static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
 	mirror = FF_LAYOUT_COMP(lseg, idx);
 	err = ff_layout_track_ds_error(FF_LAYOUT_FROM_HDR(lseg->pls_layout),
 				       mirror, offset, length, status, opnum,
-				       GFP_NOIO);
+				       nfs_io_gfp_mask());
 
 	switch (status) {
 	case NFS4ERR_DELAY:
@@ -1231,7 +1267,13 @@ static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
 		break;
 	case NFS4ERR_NXIO:
 		ff_layout_mark_ds_unreachable(lseg, idx);
-		/* Fallthrough */
+		/*
+		 * Don't return the layout if this is a read and we still
+		 * have layouts to try
+		 */
+		if (opnum == OP_READ)
+			break;
+		fallthrough;
 	default:
 		pnfs_error_mark_layout_for_return(lseg->pls_layout->plh_inode,
 						  lseg);
@@ -1244,7 +1286,6 @@ static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
 static int ff_layout_read_done_cb(struct rpc_task *task,
 				struct nfs_pgio_header *hdr)
 {
-	int new_idx = hdr->pgio_mirror_idx;
 	int err;
 
 	if (task->tk_status < 0) {
@@ -1264,10 +1305,6 @@ static int ff_layout_read_done_cb(struct rpc_task *task,
 	clear_bit(NFS_IOHDR_RESEND_MDS, &hdr->flags);
 	switch (err) {
 	case -NFS4ERR_RESET_TO_PNFS:
-		if (ff_layout_choose_best_ds_for_read(hdr->lseg,
-					hdr->pgio_mirror_idx + 1,
-					&new_idx))
-			goto out_layouterror;
 		set_bit(NFS_IOHDR_RESEND_PNFS, &hdr->flags);
 		return task->tk_status;
 	case -NFS4ERR_RESET_TO_MDS:
@@ -1278,10 +1315,6 @@ static int ff_layout_read_done_cb(struct rpc_task *task,
 	}
 
 	return 0;
-out_layouterror:
-	ff_layout_read_record_layoutstats_done(task, hdr);
-	ff_layout_send_layouterror(hdr->lseg);
-	hdr->pgio_mirror_idx = new_idx;
 out_eagain:
 	rpc_restart_call_prepare(task);
 	return -EAGAIN;
@@ -1346,6 +1379,11 @@ static int ff_layout_read_prepare_common(struct rpc_task *task,
 		return -EIO;
 	}
 
+	if (!pnfs_is_valid_lseg(hdr->lseg)) {
+		rpc_exit(task, -EAGAIN);
+		return -EAGAIN;
+	}
+
 	ff_layout_read_record_layoutstats_start(task, hdr);
 	return 0;
 }
@@ -1382,8 +1420,6 @@ static void ff_layout_read_call_done(struct rpc_task *task, void *data)
 {
 	struct nfs_pgio_header *hdr = data;
 
-	dprintk("--> %s task->tk_status %d\n", __func__, task->tk_status);
-
 	if (test_bit(NFS_IOHDR_REDO, &hdr->flags) &&
 	    task->tk_status == 0) {
 		nfs4_sequence_done(task, &hdr->res.seq_res);
@@ -1408,10 +1444,9 @@ static void ff_layout_read_release(void *data)
 	struct nfs_pgio_header *hdr = data;
 
 	ff_layout_read_record_layoutstats_done(&hdr->task, hdr);
-	if (test_bit(NFS_IOHDR_RESEND_PNFS, &hdr->flags)) {
-		ff_layout_send_layouterror(hdr->lseg);
-		pnfs_read_resend_pnfs(hdr);
-	} else if (test_bit(NFS_IOHDR_RESEND_MDS, &hdr->flags))
+	if (test_bit(NFS_IOHDR_RESEND_PNFS, &hdr->flags))
+		ff_layout_resend_pnfs_read(hdr);
+	else if (test_bit(NFS_IOHDR_RESEND_MDS, &hdr->flags))
 		ff_layout_reset_read(hdr);
 	pnfs_generic_rw_release(data);
 }
@@ -1529,6 +1564,11 @@ static int ff_layout_write_prepare_common(struct rpc_task *task,
 		return -EIO;
 	}
 
+	if (!pnfs_is_valid_lseg(hdr->lseg)) {
+		rpc_exit(task, -EAGAIN);
+		return -EAGAIN;
+	}
+
 	ff_layout_write_record_layoutstats_start(task, hdr);
 	return 0;
 }
@@ -1621,15 +1661,23 @@ static void ff_layout_commit_record_layoutstats_done(struct rpc_task *task,
 	set_bit(NFS_LSEG_LAYOUTRETURN, &cdata->lseg->pls_flags);
 }
 
-static void ff_layout_commit_prepare_common(struct rpc_task *task,
-		struct nfs_commit_data *cdata)
+static int ff_layout_commit_prepare_common(struct rpc_task *task,
+					   struct nfs_commit_data *cdata)
 {
+	if (!pnfs_is_valid_lseg(cdata->lseg)) {
+		rpc_exit(task, -EAGAIN);
+		return -EAGAIN;
+	}
+
 	ff_layout_commit_record_layoutstats_start(task, cdata);
+	return 0;
 }
 
 static void ff_layout_commit_prepare_v3(struct rpc_task *task, void *data)
 {
-	ff_layout_commit_prepare_common(task, data);
+	if (ff_layout_commit_prepare_common(task, data))
+		return;
+
 	rpc_call_start(task);
 }
 
@@ -1790,7 +1838,7 @@ ff_layout_write_pagelist(struct nfs_pgio_header *hdr, int sync)
 	loff_t offset = hdr->args.offset;
 	int vers;
 	struct nfs_fh *fh;
-	int idx = hdr->pgio_mirror_idx;
+	u32 idx = hdr->pgio_mirror_idx;
 
 	mirror = FF_LAYOUT_COMP(lseg, idx);
 	ds = nfs4_ff_layout_prepare_ds(lseg, mirror, true);
@@ -1925,6 +1973,65 @@ ff_layout_commit_pagelist(struct inode *inode, struct list_head *mds_pages,
 					    ff_layout_initiate_commit);
 }
 
+static bool ff_layout_match_rw(const struct rpc_task *task,
+			       const struct nfs_pgio_header *hdr,
+			       const struct pnfs_layout_segment *lseg)
+{
+	return hdr->lseg == lseg;
+}
+
+static bool ff_layout_match_commit(const struct rpc_task *task,
+				   const struct nfs_commit_data *cdata,
+				   const struct pnfs_layout_segment *lseg)
+{
+	return cdata->lseg == lseg;
+}
+
+static bool ff_layout_match_io(const struct rpc_task *task, const void *data)
+{
+	const struct rpc_call_ops *ops = task->tk_ops;
+
+	if (ops == &ff_layout_read_call_ops_v3 ||
+	    ops == &ff_layout_read_call_ops_v4 ||
+	    ops == &ff_layout_write_call_ops_v3 ||
+	    ops == &ff_layout_write_call_ops_v4)
+		return ff_layout_match_rw(task, task->tk_calldata, data);
+	if (ops == &ff_layout_commit_call_ops_v3 ||
+	    ops == &ff_layout_commit_call_ops_v4)
+		return ff_layout_match_commit(task, task->tk_calldata, data);
+	return false;
+}
+
+static void ff_layout_cancel_io(struct pnfs_layout_segment *lseg)
+{
+	struct nfs4_ff_layout_segment *flseg = FF_LAYOUT_LSEG(lseg);
+	struct nfs4_ff_layout_mirror *mirror;
+	struct nfs4_ff_layout_ds *mirror_ds;
+	struct nfs4_pnfs_ds *ds;
+	struct nfs_client *ds_clp;
+	struct rpc_clnt *clnt;
+	u32 idx;
+
+	for (idx = 0; idx < flseg->mirror_array_cnt; idx++) {
+		mirror = flseg->mirror_array[idx];
+		mirror_ds = mirror->mirror_ds;
+		if (!mirror_ds)
+			continue;
+		ds = mirror->mirror_ds->ds;
+		if (!ds)
+			continue;
+		ds_clp = ds->ds_clp;
+		if (!ds_clp)
+			continue;
+		clnt = ds_clp->cl_rpcclient;
+		if (!clnt)
+			continue;
+		if (!rpc_cancel_tasks(clnt, -EAGAIN, ff_layout_match_io, lseg))
+			continue;
+		rpc_clnt_disconnect(clnt);
+	}
+}
+
 static struct pnfs_ds_commit_info *
 ff_layout_get_ds_info(struct inode *inode)
 {
@@ -1944,7 +2051,8 @@ ff_layout_setup_ds_info(struct pnfs_ds_commit_info *fl_cinfo,
 	struct inode *inode = lseg->pls_layout->plh_inode;
 	struct pnfs_commit_array *array, *new;
 
-	new = pnfs_alloc_commit_array(flseg->mirror_array_cnt, GFP_NOIO);
+	new = pnfs_alloc_commit_array(flseg->mirror_array_cnt,
+				      nfs_io_gfp_mask());
 	if (new) {
 		spin_lock(&inode->i_lock);
 		array = pnfs_add_commit_array(fl_cinfo, new, lseg);
@@ -2123,10 +2231,10 @@ ff_layout_prepare_layoutreturn(struct nfs4_layoutreturn_args *args)
 	struct nfs4_flexfile_layoutreturn_args *ff_args;
 	struct nfs4_flexfile_layout *ff_layout = FF_LAYOUT_FROM_HDR(args->layout);
 
-	ff_args = kmalloc(sizeof(*ff_args), GFP_KERNEL);
+	ff_args = kmalloc(sizeof(*ff_args), nfs_io_gfp_mask());
 	if (!ff_args)
 		goto out_nomem;
-	ff_args->pages[0] = alloc_page(GFP_KERNEL);
+	ff_args->pages[0] = alloc_page(nfs_io_gfp_mask());
 	if (!ff_args->pages[0])
 		goto out_nomem_free;
 
@@ -2136,8 +2244,9 @@ ff_layout_prepare_layoutreturn(struct nfs4_layoutreturn_args *args)
 			FF_LAYOUTRETURN_MAXERR);
 
 	spin_lock(&args->inode->i_lock);
-	ff_args->num_dev = ff_layout_mirror_prepare_stats(&ff_layout->generic_hdr,
-			&ff_args->devinfo[0], ARRAY_SIZE(ff_args->devinfo));
+	ff_args->num_dev = ff_layout_mirror_prepare_stats(
+		&ff_layout->generic_hdr, &ff_args->devinfo[0],
+		ARRAY_SIZE(ff_args->devinfo), NFS4_FF_OP_LAYOUTRETURN);
 	spin_unlock(&args->inode->i_lock);
 
 	args->ld_private->ops = &layoutreturn_ops;
@@ -2163,8 +2272,8 @@ ff_layout_send_layouterror(struct pnfs_layout_segment *lseg)
 	if (list_empty(&head))
 		return;
 
-	errors = kmalloc_array(NFS42_LAYOUTERROR_MAX,
-			sizeof(*errors), GFP_NOFS);
+	errors = kmalloc_array(NFS42_LAYOUTERROR_MAX, sizeof(*errors),
+			       nfs_io_gfp_mask());
 	if (errors != NULL) {
 		const struct nfs4_ff_layout_ds_err *pos;
 		size_t n = 0;
@@ -2249,7 +2358,6 @@ ff_layout_encode_netaddr(struct xdr_stream *xdr, struct nfs4_pnfs_ds_addr *da)
 	struct sockaddr *sap = (struct sockaddr *)&da->da_addr;
 	char portbuf[RPCBIND_MAXUADDRPLEN];
 	char addrbuf[RPCBIND_MAXUADDRLEN];
-	char *netid;
 	unsigned short port;
 	int len, netid_len;
 	__be32 *p;
@@ -2259,18 +2367,13 @@ ff_layout_encode_netaddr(struct xdr_stream *xdr, struct nfs4_pnfs_ds_addr *da)
 		if (ff_layout_ntop4(sap, addrbuf, sizeof(addrbuf)) == 0)
 			return;
 		port = ntohs(((struct sockaddr_in *)sap)->sin_port);
-		netid = "tcp";
-		netid_len = 3;
 		break;
 	case AF_INET6:
 		if (ff_layout_ntop6_noscopeid(sap, addrbuf, sizeof(addrbuf)) == 0)
 			return;
 		port = ntohs(((struct sockaddr_in6 *)sap)->sin6_port);
-		netid = "tcp6";
-		netid_len = 4;
 		break;
 	default:
-		/* we only support tcp and tcp6 */
 		WARN_ON_ONCE(1);
 		return;
 	}
@@ -2278,8 +2381,9 @@ ff_layout_encode_netaddr(struct xdr_stream *xdr, struct nfs4_pnfs_ds_addr *da)
 	snprintf(portbuf, sizeof(portbuf), ".%u.%u", port >> 8, port & 0xff);
 	len = strlcat(addrbuf, portbuf, sizeof(addrbuf));
 
+	netid_len = strlen(da->da_netid);
 	p = xdr_reserve_space(xdr, 4 + netid_len);
-	xdr_encode_opaque(p, netid, netid_len);
+	xdr_encode_opaque(p, da->da_netid, netid_len);
 
 	p = xdr_reserve_space(xdr, 4 + len);
 	xdr_encode_opaque(p, addrbuf, len);
@@ -2376,7 +2480,7 @@ static const struct nfs4_xdr_opaque_ops layoutstat_ops = {
 static int
 ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			       struct nfs42_layoutstat_devinfo *devinfo,
-			       int dev_limit)
+			       int dev_limit, enum nfs4_ff_op_type type)
 {
 	struct nfs4_flexfile_layout *ff_layout = FF_LAYOUT_FROM_HDR(lo);
 	struct nfs4_ff_layout_mirror *mirror;
@@ -2388,7 +2492,9 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			break;
 		if (IS_ERR_OR_NULL(mirror->mirror_ds))
 			continue;
-		if (!test_and_clear_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags))
+		if (!test_and_clear_bit(NFS4_FF_MIRROR_STAT_AVAIL,
+					&mirror->flags) &&
+		    type != NFS4_FF_OP_LAYOUTRETURN)
 			continue;
 		/* mirror refcount put in cleanup_layoutstats */
 		if (!refcount_inc_not_zero(&mirror->ref))
@@ -2420,14 +2526,17 @@ ff_layout_prepare_layoutstats(struct nfs42_layoutstat_args *args)
 	const int dev_count = PNFS_LAYOUTSTATS_MAXDEV;
 
 	/* For now, send at most PNFS_LAYOUTSTATS_MAXDEV statistics */
-	args->devinfo = kmalloc_array(dev_count, sizeof(*args->devinfo), GFP_NOIO);
+	args->devinfo = kmalloc_array(dev_count, sizeof(*args->devinfo),
+				      nfs_io_gfp_mask());
 	if (!args->devinfo)
 		return -ENOMEM;
 
 	spin_lock(&args->inode->i_lock);
 	ff_layout = FF_LAYOUT_FROM_HDR(NFS_I(args->inode)->layout);
 	args->num_dev = ff_layout_mirror_prepare_stats(&ff_layout->generic_hdr,
-			&args->devinfo[0], dev_count);
+						       &args->devinfo[0],
+						       dev_count,
+						       NFS4_FF_OP_LAYOUTSTATS);
 	spin_unlock(&args->inode->i_lock);
 	if (!args->num_dev) {
 		kfree(args->devinfo);
@@ -2480,6 +2589,7 @@ static struct pnfs_layoutdriver_type flexfilelayout_type = {
 	.prepare_layoutreturn   = ff_layout_prepare_layoutreturn,
 	.sync			= pnfs_nfs_generic_sync,
 	.prepare_layoutstats	= ff_layout_prepare_layoutstats,
+	.cancel_io		= ff_layout_cancel_io,
 };
 
 static int __init nfs4flexfilelayout_init(void)

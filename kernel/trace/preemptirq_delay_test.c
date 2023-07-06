@@ -16,24 +16,32 @@
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <linux/sysfs.h>
+#include <linux/completion.h>
 
 static ulong delay = 100;
 static char test_mode[12] = "irq";
 static uint burst_size = 1;
+static int  cpu_affinity = -1;
 
 module_param_named(delay, delay, ulong, 0444);
 module_param_string(test_mode, test_mode, 12, 0444);
 module_param_named(burst_size, burst_size, uint, 0444);
+module_param_named(cpu_affinity, cpu_affinity, int, 0444);
 MODULE_PARM_DESC(delay, "Period in microseconds (100 us default)");
 MODULE_PARM_DESC(test_mode, "Mode of the test such as preempt, irq, or alternate (default irq)");
 MODULE_PARM_DESC(burst_size, "The size of a burst (default 1)");
+MODULE_PARM_DESC(cpu_affinity, "Cpu num test is running on");
+
+static struct completion done;
 
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
 static void busy_wait(ulong time)
 {
 	u64 start, end;
+
 	start = trace_clock_local();
+
 	do {
 		end = trace_clock_local();
 		if (kthread_should_stop())
@@ -44,6 +52,7 @@ static void busy_wait(ulong time)
 static __always_inline void irqoff_test(void)
 {
 	unsigned long flags;
+
 	local_irq_save(flags);
 	busy_wait(delay);
 	local_irq_restore(flags);
@@ -110,9 +119,19 @@ static int preemptirq_delay_run(void *data)
 {
 	int i;
 	int s = MIN(burst_size, NR_TEST_FUNCS);
+	struct cpumask cpu_mask;
+
+	if (cpu_affinity > -1) {
+		cpumask_clear(&cpu_mask);
+		cpumask_set_cpu(cpu_affinity, &cpu_mask);
+		if (set_cpus_allowed_ptr(current, &cpu_mask))
+			pr_err("cpu_affinity:%d, failed\n", cpu_affinity);
+	}
 
 	for (i = 0; i < s; i++)
 		(testfuncs[i])(i);
+
+	complete(&done);
 
 	set_current_state(TASK_INTERRUPTIBLE);
 	while (!kthread_should_stop()) {
@@ -128,15 +147,18 @@ static int preemptirq_delay_run(void *data)
 static int preemptirq_run_test(void)
 {
 	struct task_struct *task;
-
 	char task_name[50];
+
+	init_completion(&done);
 
 	snprintf(task_name, sizeof(task_name), "%s_test", test_mode);
 	task =  kthread_run(preemptirq_delay_run, NULL, task_name);
 	if (IS_ERR(task))
 		return PTR_ERR(task);
-	if (task)
+	if (task) {
+		wait_for_completion(&done);
 		kthread_stop(task);
+	}
 	return 0;
 }
 

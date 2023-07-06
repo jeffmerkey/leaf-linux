@@ -10,6 +10,28 @@
 #include "intel_display_types.h"
 #include "intel_global_state.h"
 
+static void __intel_atomic_global_state_free(struct kref *kref)
+{
+	struct intel_global_state *obj_state =
+		container_of(kref, struct intel_global_state, ref);
+	struct intel_global_obj *obj = obj_state->obj;
+
+	obj->funcs->atomic_destroy_state(obj, obj_state);
+}
+
+static void intel_atomic_global_state_put(struct intel_global_state *obj_state)
+{
+	kref_put(&obj_state->ref, __intel_atomic_global_state_free);
+}
+
+static struct intel_global_state *
+intel_atomic_global_state_get(struct intel_global_state *obj_state)
+{
+	kref_get(&obj_state->ref);
+
+	return obj_state;
+}
+
 void intel_atomic_global_obj_init(struct drm_i915_private *dev_priv,
 				  struct intel_global_obj *obj,
 				  struct intel_global_state *state,
@@ -17,18 +39,24 @@ void intel_atomic_global_obj_init(struct drm_i915_private *dev_priv,
 {
 	memset(obj, 0, sizeof(*obj));
 
+	state->obj = obj;
+
+	kref_init(&state->ref);
+
 	obj->state = state;
 	obj->funcs = funcs;
-	list_add_tail(&obj->head, &dev_priv->global_obj_list);
+	list_add_tail(&obj->head, &dev_priv->display.global.obj_list);
 }
 
 void intel_atomic_global_obj_cleanup(struct drm_i915_private *dev_priv)
 {
 	struct intel_global_obj *obj, *next;
 
-	list_for_each_entry_safe(obj, next, &dev_priv->global_obj_list, head) {
+	list_for_each_entry_safe(obj, next, &dev_priv->display.global.obj_list, head) {
 		list_del(&obj->head);
-		obj->funcs->atomic_destroy_state(obj, obj->state);
+
+		drm_WARN_ON(&dev_priv->drm, kref_read(&obj->state->ref) != 1);
+		intel_atomic_global_state_put(obj->state);
 	}
 }
 
@@ -64,13 +92,14 @@ static void assert_global_state_read_locked(struct intel_atomic_state *state)
 			return;
 	}
 
-	WARN(1, "Global state not read locked\n");
+	drm_WARN(&dev_priv->drm, 1, "Global state not read locked\n");
 }
 
 struct intel_global_state *
 intel_atomic_get_global_obj_state(struct intel_atomic_state *state,
 				  struct intel_global_obj *obj)
 {
+	struct drm_i915_private *i915 = to_i915(state->base.dev);
 	int index, num_objs, i;
 	size_t size;
 	struct __intel_global_objs_state *arr;
@@ -96,18 +125,22 @@ intel_atomic_get_global_obj_state(struct intel_atomic_state *state,
 	if (!obj_state)
 		return ERR_PTR(-ENOMEM);
 
+	obj_state->obj = obj;
 	obj_state->changed = false;
 
+	kref_init(&obj_state->ref);
+
 	state->global_objs[index].state = obj_state;
-	state->global_objs[index].old_state = obj->state;
+	state->global_objs[index].old_state =
+		intel_atomic_global_state_get(obj->state);
 	state->global_objs[index].new_state = obj_state;
 	state->global_objs[index].ptr = obj;
 	obj_state->state = state;
 
 	state->num_global_objs = num_objs;
 
-	DRM_DEBUG_ATOMIC("Added new global object %p state %p to %p\n",
-			 obj, obj_state, state);
+	drm_dbg_atomic(&i915->drm, "Added new global object %p state %p to %p\n",
+		       obj, obj_state, state);
 
 	return obj_state;
 }
@@ -147,7 +180,7 @@ void intel_atomic_swap_global_state(struct intel_atomic_state *state)
 
 	for_each_oldnew_global_obj_in_state(state, obj, old_obj_state,
 					    new_obj_state, i) {
-		WARN_ON(obj->state != old_obj_state);
+		drm_WARN_ON(&dev_priv->drm, obj->state != old_obj_state);
 
 		/*
 		 * If the new state wasn't modified (and properly
@@ -162,7 +195,9 @@ void intel_atomic_swap_global_state(struct intel_atomic_state *state)
 		new_obj_state->state = NULL;
 
 		state->global_objs[i].state = old_obj_state;
-		obj->state = new_obj_state;
+
+		intel_atomic_global_state_put(obj->state);
+		obj->state = intel_atomic_global_state_get(new_obj_state);
 	}
 }
 
@@ -171,10 +206,9 @@ void intel_atomic_clear_global_state(struct intel_atomic_state *state)
 	int i;
 
 	for (i = 0; i < state->num_global_objs; i++) {
-		struct intel_global_obj *obj = state->global_objs[i].ptr;
+		intel_atomic_global_state_put(state->global_objs[i].old_state);
+		intel_atomic_global_state_put(state->global_objs[i].new_state);
 
-		obj->funcs->atomic_destroy_state(obj,
-						 state->global_objs[i].state);
 		state->global_objs[i].ptr = NULL;
 		state->global_objs[i].state = NULL;
 		state->global_objs[i].old_state = NULL;
@@ -220,4 +254,16 @@ int intel_atomic_serialize_global_state(struct intel_global_state *obj_state)
 	obj_state->changed = true;
 
 	return 0;
+}
+
+bool
+intel_atomic_global_state_is_serialized(struct intel_atomic_state *state)
+{
+	struct drm_i915_private *i915 = to_i915(state->base.dev);
+	struct intel_crtc *crtc;
+
+	for_each_intel_crtc(&i915->drm, crtc)
+		if (!intel_atomic_get_new_crtc_state(state, crtc))
+			return false;
+	return true;
 }

@@ -854,6 +854,36 @@ static int codec_vp9_stop(struct amvdec_session *sess)
 	return 0;
 }
 
+/*
+ * Program LAST & GOLDEN frames into the motion compensation reference cache
+ * controller
+ */
+static void codec_vp9_set_mcrcc(struct amvdec_session *sess)
+{
+	struct amvdec_core *core = sess->core;
+	struct codec_vp9 *vp9 = sess->priv;
+	u32 val;
+
+	/* Reset mcrcc */
+	amvdec_write_dos(core, HEVCD_MCRCC_CTL1, 0x2);
+	/* Disable on I-frame */
+	if (vp9->cur_frame->type == KEY_FRAME || vp9->cur_frame->intra_only) {
+		amvdec_write_dos(core, HEVCD_MCRCC_CTL1, 0x0);
+		return;
+	}
+
+	amvdec_write_dos(core, HEVCD_MPP_ANC_CANVAS_ACCCONFIG_ADDR, BIT(1));
+	val = amvdec_read_dos(core, HEVCD_MPP_ANC_CANVAS_DATA_ADDR) & 0xffff;
+	val |= (val << 16);
+	amvdec_write_dos(core, HEVCD_MCRCC_CTL2, val);
+	val = amvdec_read_dos(core, HEVCD_MPP_ANC_CANVAS_DATA_ADDR) & 0xffff;
+	val |= (val << 16);
+	amvdec_write_dos(core, HEVCD_MCRCC_CTL3, val);
+
+	/* Enable mcrcc progressive-mode */
+	amvdec_write_dos(core, HEVCD_MCRCC_CTL1, 0xff0);
+}
+
 static void codec_vp9_set_sao(struct amvdec_session *sess,
 			      struct vb2_buffer *vb)
 {
@@ -1267,6 +1297,7 @@ static void codec_vp9_process_frame(struct amvdec_session *sess)
 
 	amvdec_write_dos(core, HEVC_PARSER_PICTURE_SIZE,
 			 (vp9->height << 16) | vp9->width);
+	codec_vp9_set_mcrcc(sess);
 	codec_vp9_set_sao(sess, &vp9->cur_frame->vbuf->vb2_buf);
 
 	vp9_loop_filter_frame_init(core, &vp9->seg_4lf,
@@ -1428,7 +1459,7 @@ static void vp9_tree_merge_probs(unsigned int *prev_prob,
 	if (den == 0) {
 		new_prob = pre_prob;
 	} else {
-		m_count = den < MODE_MV_COUNT_SAT ? den : MODE_MV_COUNT_SAT;
+		m_count = min(den, MODE_MV_COUNT_SAT);
 		get_prob =
 			clip_prob(div_r32(((int64_t)tree_left * 256 +
 					   (den >> 1)),
@@ -1482,7 +1513,7 @@ static void adapt_coef_probs_cxt(unsigned int *prev_prob,
 			/* get binary prob */
 			num = branch_ct[node][0];
 			den = branch_ct[node][0] + branch_ct[node][1];
-			m_count = den < count_sat ? den : count_sat;
+			m_count = min(den, count_sat);
 
 			get_prob = (den == 0) ?
 					128u :
@@ -1618,8 +1649,7 @@ static void adapt_coef_probs(int prev_kf, int cur_kf, int pre_fc,
 			else if (coef_count_node_start ==
 					VP9_MV_BITS_1_COUNT_START)
 				coef_node_start = VP9_MV_BITS_1_START;
-			else if (coef_count_node_start ==
-					VP9_MV_CLASS0_HP_0_COUNT_START)
+			else /* node_start == VP9_MV_CLASS0_HP_0_COUNT_START */
 				coef_node_start = VP9_MV_CLASS0_HP_0_START;
 
 			den = count[coef_count_node_start] +
@@ -1633,8 +1663,7 @@ static void adapt_coef_probs(int prev_kf, int cur_kf, int pre_fc,
 			if (den == 0) {
 				new_prob = pre_prob;
 			} else {
-				m_count = den < MODE_MV_COUNT_SAT ?
-						den : MODE_MV_COUNT_SAT;
+				m_count = min(den, MODE_MV_COUNT_SAT);
 				get_prob =
 				clip_prob(div_r32(((int64_t)
 					count[coef_count_node_start] * 256 +

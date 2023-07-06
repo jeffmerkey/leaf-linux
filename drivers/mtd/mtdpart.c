@@ -17,6 +17,7 @@
 #include <linux/mtd/partitions.h>
 #include <linux/err.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
 
 #include "mtdcore.h"
 
@@ -35,9 +36,12 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 					   const struct mtd_partition *part,
 					   int partno, uint64_t cur_offset)
 {
-	int wr_alignment = (parent->flags & MTD_NO_ERASE) ? parent->writesize :
-							    parent->erasesize;
-	struct mtd_info *child, *master = mtd_get_master(parent);
+	struct mtd_info *master = mtd_get_master(parent);
+	int wr_alignment = (parent->flags & MTD_NO_ERASE) ?
+			   master->writesize : master->erasesize;
+	u64 parent_size = mtd_is_partition(parent) ?
+			  parent->part.size : parent->size;
+	struct mtd_info *child;
 	u32 remainder;
 	char *name;
 	u64 tmp;
@@ -56,8 +60,9 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 	/* set up the MTD object for this partition */
 	child->type = parent->type;
 	child->part.flags = parent->flags & ~part->mask_flags;
+	child->part.flags |= part->add_flags;
 	child->flags = child->part.flags;
-	child->size = part->size;
+	child->part.size = part->size;
 	child->writesize = parent->writesize;
 	child->writebufsize = parent->writebufsize;
 	child->oobsize = parent->oobsize;
@@ -98,29 +103,29 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 	}
 	if (child->part.offset == MTDPART_OFS_RETAIN) {
 		child->part.offset = cur_offset;
-		if (parent->size - child->part.offset >= child->size) {
-			child->size = parent->size - child->part.offset -
-				      child->size;
+		if (parent_size - child->part.offset >= child->part.size) {
+			child->part.size = parent_size - child->part.offset -
+					   child->part.size;
 		} else {
 			printk(KERN_ERR "mtd partition \"%s\" doesn't have enough space: %#llx < %#llx, disabled\n",
-				part->name, parent->size - child->part.offset,
-				child->size);
+				part->name, parent_size - child->part.offset,
+				child->part.size);
 			/* register to preserve ordering */
 			goto out_register;
 		}
 	}
-	if (child->size == MTDPART_SIZ_FULL)
-		child->size = parent->size - child->part.offset;
+	if (child->part.size == MTDPART_SIZ_FULL)
+		child->part.size = parent_size - child->part.offset;
 
 	printk(KERN_NOTICE "0x%012llx-0x%012llx : \"%s\"\n",
-	       child->part.offset, child->part.offset + child->size,
+	       child->part.offset, child->part.offset + child->part.size,
 	       child->name);
 
 	/* let's do some sanity checks */
-	if (child->part.offset >= parent->size) {
+	if (child->part.offset >= parent_size) {
 		/* let's register it anyway to preserve ordering */
 		child->part.offset = 0;
-		child->size = 0;
+		child->part.size = 0;
 
 		/* Initialize ->erasesize to make add_mtd_device() happy. */
 		child->erasesize = parent->erasesize;
@@ -128,15 +133,16 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 			part->name);
 		goto out_register;
 	}
-	if (child->part.offset + child->size > parent->size) {
-		child->size = parent->size - child->part.offset;
+	if (child->part.offset + child->part.size > parent->size) {
+		child->part.size = parent_size - child->part.offset;
 		printk(KERN_WARNING"mtd: partition \"%s\" extends beyond the end of device \"%s\" -- size truncated to %#llx\n",
-			part->name, parent->name, child->size);
+			part->name, parent->name, child->part.size);
 	}
+
 	if (parent->numeraseregions > 1) {
 		/* Deal with variable erase size stuff */
 		int i, max = parent->numeraseregions;
-		u64 end = child->part.offset + child->size;
+		u64 end = child->part.offset + child->part.size;
 		struct mtd_erase_region_info *regions = parent->eraseregions;
 
 		/* Find the first erase regions which is part of this
@@ -156,7 +162,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 		BUG_ON(child->erasesize == 0);
 	} else {
 		/* Single erase size */
-		child->erasesize = parent->erasesize;
+		child->erasesize = master->erasesize;
 	}
 
 	/*
@@ -178,7 +184,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 			part->name);
 	}
 
-	tmp = mtd_get_master_ofs(child, 0) + child->size;
+	tmp = mtd_get_master_ofs(child, 0) + child->part.size;
 	remainder = do_div(tmp, wr_alignment);
 	if ((child->flags & MTD_WRITEABLE) && remainder) {
 		child->flags &= ~MTD_WRITEABLE;
@@ -186,6 +192,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 			part->name);
 	}
 
+	child->size = child->part.size;
 	child->ecc_step_size = parent->ecc_step_size;
 	child->ecc_strength = parent->ecc_strength;
 	child->bitflip_threshold = parent->bitflip_threshold;
@@ -193,7 +200,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 	if (master->_block_isbad) {
 		uint64_t offs = 0;
 
-		while (offs < child->size) {
+		while (offs < child->part.size) {
 			if (mtd_block_isreserved(child, offs))
 				child->ecc_stats.bbtblocks++;
 			else if (mtd_block_isbad(child, offs))
@@ -206,15 +213,14 @@ out_register:
 	return child;
 }
 
-static ssize_t mtd_partition_offset_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+static ssize_t offset_show(struct device *dev,
+			   struct device_attribute *attr, char *buf)
 {
 	struct mtd_info *mtd = dev_get_drvdata(dev);
 
-	return snprintf(buf, PAGE_SIZE, "%lld\n", mtd->part.offset);
+	return sysfs_emit(buf, "%lld\n", mtd->part.offset);
 }
-
-static DEVICE_ATTR(offset, S_IRUGO, mtd_partition_offset_show, NULL);
+static DEVICE_ATTR_RO(offset);	/* mtd partition offset */
 
 static const struct attribute *mtd_partition_attrs[] = {
 	&dev_attr_offset.attr,
@@ -234,6 +240,8 @@ int mtd_add_partition(struct mtd_info *parent, const char *name,
 		      long long offset, long long length)
 {
 	struct mtd_info *master = mtd_get_master(parent);
+	u64 parent_size = mtd_is_partition(parent) ?
+			  parent->part.size : parent->size;
 	struct mtd_partition part;
 	struct mtd_info *child;
 	int ret = 0;
@@ -244,7 +252,7 @@ int mtd_add_partition(struct mtd_info *parent, const char *name,
 		return -EINVAL;
 
 	if (length == MTDPART_SIZ_FULL)
-		length = parent->size - offset;
+		length = parent_size - offset;
 
 	if (length <= 0)
 		return -EINVAL;
@@ -284,7 +292,7 @@ EXPORT_SYMBOL_GPL(mtd_add_partition);
 /**
  * __mtd_del_partition - delete MTD partition
  *
- * @priv: MTD structure to be deleted
+ * @mtd: MTD structure to be deleted
  *
  * This function must be called with the partitions mutex locked.
  */
@@ -305,7 +313,7 @@ static int __mtd_del_partition(struct mtd_info *mtd)
 	if (err)
 		return err;
 
-	list_del(&child->part.node);
+	list_del(&mtd->part.node);
 	free_partition(mtd);
 
 	return 0;
@@ -318,12 +326,11 @@ static int __mtd_del_partition(struct mtd_info *mtd)
 static int __del_mtd_partitions(struct mtd_info *mtd)
 {
 	struct mtd_info *child, *next;
-	LIST_HEAD(tmp_list);
 	int ret, err = 0;
 
 	list_for_each_entry_safe(child, next, &mtd->partitions, part.node) {
 		if (mtd_has_partitions(child))
-			del_mtd_partitions(child);
+			__del_mtd_partitions(child);
 
 		pr_info("Deleting %s MTD partition\n", child->name);
 		ret = del_mtd_device(child);
@@ -419,7 +426,7 @@ int add_mtd_partitions(struct mtd_info *parent,
 		/* Look for subpartitions */
 		parse_mtd_partitions(child, parts[i].types, NULL);
 
-		cur_offset = child->part.offset + child->size;
+		cur_offset = child->part.offset + child->part.size;
 	}
 
 	return 0;
@@ -569,10 +576,17 @@ static int mtd_part_of_parse(struct mtd_info *master,
 {
 	struct mtd_part_parser *parser;
 	struct device_node *np;
+	struct device_node *child;
 	struct property *prop;
+	struct device *dev;
 	const char *compat;
 	const char *fixed = "fixed-partitions";
 	int ret, err = 0;
+
+	dev = &master->dev;
+	/* Use parent device (controller) if the top level MTD is not registered */
+	if (!IS_ENABLED(CONFIG_MTD_PARTITIONED_MASTER) && !mtd_is_partition(master))
+		dev = master->dev.parent;
 
 	np = mtd_get_of_node(master);
 	if (mtd_is_partition(master))
@@ -580,12 +594,22 @@ static int mtd_part_of_parse(struct mtd_info *master,
 	else
 		np = of_get_child_by_name(np, "partitions");
 
+	/*
+	 * Don't create devices that are added to a bus but will never get
+	 * probed. That'll cause fw_devlink to block probing of consumers of
+	 * this partition until the partition device is probed.
+	 */
+	for_each_child_of_node(np, child)
+		if (of_device_is_compatible(child, "nvmem-cells"))
+			of_node_set_flag(child, OF_POPULATED);
+
 	of_property_for_each_string(np, "compatible", prop, compat) {
 		parser = mtd_part_get_compatible_parser(compat);
 		if (!parser)
 			continue;
 		ret = mtd_part_do_parse(parser, master, pparts, NULL);
 		if (ret > 0) {
+			of_platform_populate(np, NULL, NULL, dev);
 			of_node_put(np);
 			return ret;
 		}
@@ -593,6 +617,7 @@ static int mtd_part_of_parse(struct mtd_info *master,
 		if (ret < 0 && !err)
 			err = ret;
 	}
+	of_platform_populate(np, NULL, NULL, dev);
 	of_node_put(np);
 
 	/*

@@ -28,6 +28,7 @@
 #include <linux/sched.h>
 #include <linux/writeback.h>
 #include <linux/blkdev.h>
+#include <linux/buffer_head.h>
 
 #include "ext4.h"
 #include "ext4_jbd2.h"
@@ -44,30 +45,28 @@
  */
 static int ext4_sync_parent(struct inode *inode)
 {
-	struct dentry *dentry = NULL;
-	struct inode *next;
+	struct dentry *dentry, *next;
 	int ret = 0;
 
 	if (!ext4_test_inode_state(inode, EXT4_STATE_NEWENTRY))
 		return 0;
-	inode = igrab(inode);
+	dentry = d_find_any_alias(inode);
+	if (!dentry)
+		return 0;
 	while (ext4_test_inode_state(inode, EXT4_STATE_NEWENTRY)) {
 		ext4_clear_inode_state(inode, EXT4_STATE_NEWENTRY);
-		dentry = d_find_any_alias(inode);
-		if (!dentry)
-			break;
-		next = igrab(d_inode(dentry->d_parent));
+
+		next = dget_parent(dentry);
 		dput(dentry);
-		if (!next)
-			break;
-		iput(inode);
-		inode = next;
+		dentry = next;
+		inode = dentry->d_inode;
+
 		/*
 		 * The directory inode may have gone through rmdir by now. But
 		 * the inode itself and its blocks are still allocated (we hold
-		 * a reference to the inode so it didn't go through
-		 * ext4_evict_inode()) and so we are safe to flush metadata
-		 * blocks and the inode.
+		 * a reference to the inode via its dentry), so it didn't go
+		 * through ext4_evict_inode()) and so we are safe to flush
+		 * metadata blocks and the inode.
 		 */
 		ret = sync_mapping_buffers(inode->i_mapping);
 		if (ret)
@@ -76,25 +75,17 @@ static int ext4_sync_parent(struct inode *inode)
 		if (ret)
 			break;
 	}
-	iput(inode);
+	dput(dentry);
 	return ret;
 }
 
-static int ext4_fsync_nojournal(struct inode *inode, bool datasync,
-				bool *needs_barrier)
+static int ext4_fsync_nojournal(struct file *file, loff_t start, loff_t end,
+				int datasync, bool *needs_barrier)
 {
-	int ret, err;
+	struct inode *inode = file->f_inode;
+	int ret;
 
-	ret = sync_mapping_buffers(inode->i_mapping);
-	if (!(inode->i_state & I_DIRTY_ALL))
-		return ret;
-	if (datasync && !(inode->i_state & I_DIRTY_DATASYNC))
-		return ret;
-
-	err = sync_inode_metadata(inode, 1);
-	if (!ret)
-		ret = err;
-
+	ret = generic_buffers_fsync_noflush(file, start, end, datasync);
 	if (!ret)
 		ret = ext4_sync_parent(inode);
 	if (test_opt(inode->i_sb, BARRIER))
@@ -110,11 +101,18 @@ static int ext4_fsync_journal(struct inode *inode, bool datasync,
 	journal_t *journal = EXT4_SB(inode->i_sb)->s_journal;
 	tid_t commit_tid = datasync ? ei->i_datasync_tid : ei->i_sync_tid;
 
+	/*
+	 * Fastcommit does not really support fsync on directories or other
+	 * special files. Force a full commit.
+	 */
+	if (!S_ISREG(inode->i_mode))
+		return ext4_force_commit(inode->i_sb);
+
 	if (journal->j_flags & JBD2_BARRIER &&
 	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
 		*needs_barrier = true;
 
-	return jbd2_complete_transaction(journal, commit_tid);
+	return ext4_fc_commit(journal, commit_tid);
 }
 
 /*
@@ -138,45 +136,40 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	if (unlikely(ext4_forced_shutdown(sbi)))
 		return -EIO;
 
-	J_ASSERT(ext4_journal_current_handle() == NULL);
+	ASSERT(ext4_journal_current_handle() == NULL);
 
 	trace_ext4_sync_file_enter(file, datasync);
 
 	if (sb_rdonly(inode->i_sb)) {
 		/* Make sure that we read updated s_mount_flags value */
 		smp_rmb();
-		if (sbi->s_mount_flags & EXT4_MF_FS_ABORTED)
+		if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FS_ABORTED))
 			ret = -EROFS;
+		goto out;
+	}
+
+	if (!sbi->s_journal) {
+		ret = ext4_fsync_nojournal(file, start, end, datasync,
+					   &needs_barrier);
+		if (needs_barrier)
+			goto issue_flush;
 		goto out;
 	}
 
 	ret = file_write_and_wait_range(file, start, end);
 	if (ret)
-		return ret;
+		goto out;
 
 	/*
-	 * data=writeback,ordered:
 	 *  The caller's filemap_fdatawrite()/wait will sync the data.
 	 *  Metadata is in the journal, we wait for proper transaction to
 	 *  commit here.
-	 *
-	 * data=journal:
-	 *  filemap_fdatawrite won't do anything (the buffers are clean).
-	 *  ext4_force_commit will write the file data into the journal and
-	 *  will wait on that.
-	 *  filemap_fdatawait() will encounter a ton of newly-dirtied pages
-	 *  (they were dirtied by commit).  But that's OK - the blocks are
-	 *  safe in-journal, which is all fsync() needs to ensure.
 	 */
-	if (!sbi->s_journal)
-		ret = ext4_fsync_nojournal(inode, datasync, &needs_barrier);
-	else if (ext4_should_journal_data(inode))
-		ret = ext4_force_commit(inode->i_sb);
-	else
-		ret = ext4_fsync_journal(inode, datasync, &needs_barrier);
+	ret = ext4_fsync_journal(inode, datasync, &needs_barrier);
 
+issue_flush:
 	if (needs_barrier) {
-		err = blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
+		err = blkdev_issue_flush(inode->i_sb->s_bdev);
 		if (!ret)
 			ret = err;
 	}

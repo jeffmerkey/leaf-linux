@@ -5,11 +5,6 @@
  * core.c - Top level support
  *
  * Copyright 2017 IBM Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -26,7 +21,6 @@
 #include <linux/clk.h>
 #include <linux/usb/gadget.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/dma-mapping.h>
 
@@ -36,17 +30,18 @@ void ast_vhub_done(struct ast_vhub_ep *ep, struct ast_vhub_req *req,
 		   int status)
 {
 	bool internal = req->internal;
+	struct ast_vhub *vhub = ep->vhub;
 
 	EPVDBG(ep, "completing request @%p, status %d\n", req, status);
 
 	list_del_init(&req->queue);
 
-	if (req->req.status == -EINPROGRESS)
+	if ((req->req.status == -EINPROGRESS) ||  (status == -EOVERFLOW))
 		req->req.status = status;
 
 	if (req->req.dma) {
 		if (!WARN_ON(!ep->dev))
-			usb_gadget_unmap_request(&ep->dev->gadget,
+			usb_gadget_unmap_request_by_dev(&vhub->pdev->dev,
 						 &req->req, ep->epn.is_in);
 		req->req.dma = 0;
 	}
@@ -134,11 +129,11 @@ static irqreturn_t ast_vhub_irq(int irq, void *data)
 	}
 
 	/* Handle device interrupts */
-	for (i = 0; i < vhub->max_ports; i++) {
-		u32 dev_mask = VHUB_IRQ_DEVICE1 << i;
-
-		if (istat & dev_mask)
-			ast_vhub_dev_irq(&vhub->ports[i].dev);
+	if (istat & vhub->port_irq_mask) {
+		for (i = 0; i < vhub->max_ports; i++) {
+			if (istat & VHUB_DEV_IRQ(i))
+				ast_vhub_dev_irq(&vhub->ports[i].dev);
+		}
 	}
 
 	/* Handle top-level vHub EP0 interrupts */
@@ -258,14 +253,14 @@ void ast_vhub_init_hw(struct ast_vhub *vhub)
 	       vhub->regs + AST_VHUB_IER);
 }
 
-static int ast_vhub_remove(struct platform_device *pdev)
+static void ast_vhub_remove(struct platform_device *pdev)
 {
 	struct ast_vhub *vhub = platform_get_drvdata(pdev);
 	unsigned long flags;
 	int i;
 
 	if (!vhub || !vhub->regs)
-		return 0;
+		return;
 
 	/* Remove devices */
 	for (i = 0; i < vhub->max_ports; i++)
@@ -294,8 +289,6 @@ static int ast_vhub_remove(struct platform_device *pdev)
 				  vhub->ep0_bufs,
 				  vhub->ep0_bufs_dma);
 	vhub->ep0_bufs = NULL;
-
-	return 0;
 }
 
 static int ast_vhub_probe(struct platform_device *pdev)
@@ -332,6 +325,8 @@ static int ast_vhub_probe(struct platform_device *pdev)
 
 	spin_lock_init(&vhub->lock);
 	vhub->pdev = pdev;
+	vhub->port_irq_mask = GENMASK(VHUB_IRQ_DEV1_BIT + vhub->max_ports - 1,
+				      VHUB_IRQ_DEV1_BIT);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	vhub->regs = devm_ioremap_resource(&pdev->dev, res);
@@ -402,7 +397,9 @@ static int ast_vhub_probe(struct platform_device *pdev)
 		goto err;
 
 	/* Init hub emulation */
-	ast_vhub_init_hub(vhub);
+	rc = ast_vhub_init_hub(vhub);
+	if (rc)
+		goto err;
 
 	/* Initialize HW */
 	ast_vhub_init_hw(vhub);
@@ -432,7 +429,7 @@ MODULE_DEVICE_TABLE(of, ast_vhub_dt_ids);
 
 static struct platform_driver ast_vhub_driver = {
 	.probe		= ast_vhub_probe,
-	.remove		= ast_vhub_remove,
+	.remove_new	= ast_vhub_remove,
 	.driver		= {
 		.name	= KBUILD_MODNAME,
 		.of_match_table	= ast_vhub_dt_ids,

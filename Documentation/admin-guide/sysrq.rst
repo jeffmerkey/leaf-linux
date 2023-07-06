@@ -72,12 +72,14 @@ On PowerPC
 
 On other
 	If you know of the key combos for other architectures, please
-        let me know so I can add them to this section.
+	submit a patch to be included in this section.
 
 On all
 	Write a character to /proc/sysrq-trigger.  e.g.::
 
 		echo t > /proc/sysrq-trigger
+
+The :kbd:`<command key>` is case sensitive.
 
 What are the 'command' keys?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -88,8 +90,8 @@ Command	    Function
 ``b``	    Will immediately reboot the system without syncing or unmounting
             your disks.
 
-``c``	    Will perform a system crash by a NULL pointer dereference.
-            A crashdump will be taken if configured.
+``c``	    Will perform a system crash and a crashdump will be taken
+            if configured.
 
 ``d``	    Shows all locks that are held.
 
@@ -136,7 +138,7 @@ Command	    Function
 ``v``	    Forcefully restores framebuffer console
 ``v``	    Causes ETM buffer dump [ARM-specific]
 
-``w``	    Dumps tasks that are in uninterruptable (blocked) state.
+``w``	    Dumps tasks that are in uninterruptible (blocked) state.
 
 ``x``	    Used by xmon interface on ppc/powerpc platforms.
             Show global PMU Registers on sparc64.
@@ -203,10 +205,12 @@ frozen (probably root) filesystem via the FIFREEZE ioctl.
 Sometimes SysRq seems to get 'stuck' after using it, what can I do?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-That happens to me, also. I've found that tapping shift, alt, and control
-on both sides of the keyboard, and hitting an invalid sysrq sequence again
-will fix the problem. (i.e., something like :kbd:`alt-sysrq-z`). Switching to
-another virtual console (:kbd:`ALT+Fn`) and then back again should also help.
+When this happens, try tapping shift, alt and control on both sides of the
+keyboard, and hitting an invalid sysrq sequence again. (i.e., something like
+:kbd:`alt-sysrq-z`).
+
+Switching to another virtual console (:kbd:`ALT+Fn`) and then back again
+should also help.
 
 I hit SysRq, but nothing seems to happen, what's wrong?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -231,13 +235,13 @@ prints help, and C) an action_msg string, that will print right before your
 handler is called. Your handler must conform to the prototype in 'sysrq.h'.
 
 After the ``sysrq_key_op`` is created, you can call the kernel function
-``register_sysrq_key(int key, struct sysrq_key_op *op_p);`` this will
+``register_sysrq_key(int key, const struct sysrq_key_op *op_p);`` this will
 register the operation pointed to by ``op_p`` at table key 'key',
 if that slot in the table is blank. At module unload time, you must call
-the function ``unregister_sysrq_key(int key, struct sysrq_key_op *op_p)``, which
-will remove the key op pointed to by 'op_p' from the key 'key', if and only if
-it is currently registered in that slot. This is in case the slot has been
-overwritten since you registered it.
+the function ``unregister_sysrq_key(int key, const struct sysrq_key_op *op_p)``,
+which will remove the key op pointed to by 'op_p' from the key 'key', if and
+only if it is currently registered in that slot. This is in case the slot has
+been overwritten since you registered it.
 
 The Magic SysRQ system works by registering key operations against a key op
 lookup table, which is defined in 'drivers/tty/sysrq.c'. This key table has

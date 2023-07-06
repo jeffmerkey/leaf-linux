@@ -18,6 +18,7 @@
 #include <linux/err.h>
 #include <linux/pm_runtime.h>
 #include <linux/of.h>
+#include <linux/reset.h>
 
 /* BCM 6338/6348 SPI core */
 #define SPI_6348_RSET_SIZE		64
@@ -156,16 +157,6 @@ static inline u8 bcm_spi_readb(struct bcm63xx_spi *bs,
 	return readb(bs->regs + bs->reg_offsets[offset]);
 }
 
-static inline u16 bcm_spi_readw(struct bcm63xx_spi *bs,
-				unsigned int offset)
-{
-#ifdef CONFIG_CPU_BIG_ENDIAN
-	return ioread16be(bs->regs + bs->reg_offsets[offset]);
-#else
-	return readw(bs->regs + bs->reg_offsets[offset]);
-#endif
-}
-
 static inline void bcm_spi_writeb(struct bcm63xx_spi *bs,
 				  u8 value, unsigned int offset)
 {
@@ -291,7 +282,7 @@ static int bcm63xx_txrx_bufs(struct spi_device *spi, struct spi_transfer *first,
 	/* Issue the transfer */
 	cmd = SPI_CMD_START_IMMEDIATE;
 	cmd |= (prepend_len << SPI_CMD_PREPEND_BYTE_CNT_SHIFT);
-	cmd |= (spi->chip_select << SPI_CMD_DEVICE_ID_SHIFT);
+	cmd |= (spi_get_chipselect(spi, 0) << SPI_CMD_DEVICE_ID_SHIFT);
 	bcm_spi_writew(bs, cmd, SPI_CMD);
 
 	/* Enable the CMD_DONE interrupt */
@@ -368,7 +359,7 @@ static int bcm63xx_spi_transfer_one(struct spi_master *master,
 		}
 
 		/* CS will be deasserted directly after transfer */
-		if (t->delay_usecs || t->delay.value) {
+		if (t->delay.value) {
 			dev_err(&spi->dev, "unable to keep CS asserted after transfer\n");
 			status = -EINVAL;
 			goto exit;
@@ -493,6 +484,7 @@ static int bcm63xx_spi_probe(struct platform_device *pdev)
 	struct bcm63xx_spi *bs;
 	int ret;
 	u32 num_cs = BCM63XX_SPI_MAX_CS;
+	struct reset_control *reset;
 
 	if (dev->of_node) {
 		const struct of_device_id *match;
@@ -529,6 +521,10 @@ static int bcm63xx_spi_probe(struct platform_device *pdev)
 		return PTR_ERR(clk);
 	}
 
+	reset = devm_reset_control_get_optional_exclusive(dev, NULL);
+	if (IS_ERR(reset))
+		return PTR_ERR(reset);
+
 	master = spi_alloc_master(dev, sizeof(*bs));
 	if (!master) {
 		dev_err(dev, "out of memory\n");
@@ -541,8 +537,7 @@ static int bcm63xx_spi_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, master);
 	bs->pdev = pdev;
 
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	bs->regs = devm_ioremap_resource(&pdev->dev, r);
+	bs->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &r);
 	if (IS_ERR(bs->regs)) {
 		ret = PTR_ERR(bs->regs);
 		goto out_err;
@@ -579,13 +574,21 @@ static int bcm63xx_spi_probe(struct platform_device *pdev)
 	if (ret)
 		goto out_err;
 
+	ret = reset_control_reset(reset);
+	if (ret) {
+		dev_err(dev, "unable to reset device: %d\n", ret);
+		goto out_clk_disable;
+	}
+
 	bcm_spi_writeb(bs, SPI_INTR_CLEAR_ALL, SPI_INT_STATUS);
+
+	pm_runtime_enable(&pdev->dev);
 
 	/* register and we are done */
 	ret = devm_spi_register_master(dev, master);
 	if (ret) {
 		dev_err(dev, "spi register failed\n");
-		goto out_clk_disable;
+		goto out_pm_disable;
 	}
 
 	dev_info(dev, "at %pr (irq %d, FIFOs size %d)\n",
@@ -593,6 +596,8 @@ static int bcm63xx_spi_probe(struct platform_device *pdev)
 
 	return 0;
 
+out_pm_disable:
+	pm_runtime_disable(&pdev->dev);
 out_clk_disable:
 	clk_disable_unprepare(clk);
 out_err:
@@ -600,7 +605,7 @@ out_err:
 	return ret;
 }
 
-static int bcm63xx_spi_remove(struct platform_device *pdev)
+static void bcm63xx_spi_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct bcm63xx_spi *bs = spi_master_get_devdata(master);
@@ -610,11 +615,8 @@ static int bcm63xx_spi_remove(struct platform_device *pdev)
 
 	/* HW shutdown */
 	clk_disable_unprepare(bs->clk);
-
-	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int bcm63xx_spi_suspend(struct device *dev)
 {
 	struct spi_master *master = dev_get_drvdata(dev);
@@ -641,11 +643,8 @@ static int bcm63xx_spi_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
-static const struct dev_pm_ops bcm63xx_spi_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(bcm63xx_spi_suspend, bcm63xx_spi_resume)
-};
+static DEFINE_SIMPLE_DEV_PM_OPS(bcm63xx_spi_pm_ops, bcm63xx_spi_suspend, bcm63xx_spi_resume);
 
 static struct platform_driver bcm63xx_spi_driver = {
 	.driver = {
@@ -655,7 +654,7 @@ static struct platform_driver bcm63xx_spi_driver = {
 	},
 	.id_table	= bcm63xx_spi_dev_match,
 	.probe		= bcm63xx_spi_probe,
-	.remove		= bcm63xx_spi_remove,
+	.remove_new	= bcm63xx_spi_remove,
 };
 
 module_platform_driver(bcm63xx_spi_driver);

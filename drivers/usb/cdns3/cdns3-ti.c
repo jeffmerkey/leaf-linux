@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
-/**
+/*
  * cdns3-ti.c - TI specific Glue layer for Cadence USB Controller
  *
- * Copyright (C) 2019 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2019 Texas Instruments Incorporated - https://www.ti.com
  */
 
 #include <linux/bits.h>
@@ -138,7 +138,7 @@ static int cdns_ti_probe(struct platform_device *pdev)
 	error = pm_runtime_get_sync(dev);
 	if (error < 0) {
 		dev_err(dev, "pm_runtime_get_sync failed: %d\n", error);
-		goto err_get;
+		goto err;
 	}
 
 	/* assert RESET */
@@ -185,7 +185,6 @@ static int cdns_ti_probe(struct platform_device *pdev)
 
 err:
 	pm_runtime_put_sync(data->dev);
-err_get:
 	pm_runtime_disable(data->dev);
 
 	return error;
@@ -200,7 +199,7 @@ static int cdns_ti_remove_core(struct device *dev, void *c)
 	return 0;
 }
 
-static int cdns_ti_remove(struct platform_device *pdev)
+static void cdns_ti_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 
@@ -209,19 +208,18 @@ static int cdns_ti_remove(struct platform_device *pdev)
 	pm_runtime_disable(dev);
 
 	platform_set_drvdata(pdev, NULL);
-
-	return 0;
 }
 
 static const struct of_device_id cdns_ti_of_match[] = {
 	{ .compatible = "ti,j721e-usb", },
+	{ .compatible = "ti,am64-usb", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, cdns_ti_of_match);
 
 static struct platform_driver cdns_ti_driver = {
 	.probe		= cdns_ti_probe,
-	.remove		= cdns_ti_remove,
+	.remove_new	= cdns_ti_remove,
 	.driver		= {
 		.name	= "cdns3-ti",
 		.of_match_table	= cdns_ti_of_match,

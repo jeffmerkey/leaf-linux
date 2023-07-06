@@ -28,6 +28,8 @@ properties:
     const: 1
 
   ranges:
+    minItems: 1
+    maxItems: 4
     description: |
       Reflects the memory layout with four integer values per bank. Format:
       <bank-number> 0 <parent address of bank> <size>
@@ -36,6 +38,7 @@ properties:
 patternProperties:
   "^.*@[0-3],[a-f0-9]+$":
     type: object
+    additionalProperties: true
     description:
       The actual device nodes should be added as subnodes to the SROMc node.
       These subnodes, in addition to regular device specification, should
@@ -51,9 +54,7 @@ patternProperties:
         maxItems: 1
 
       reg-io-width:
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [1, 2]
+        enum: [1, 2]
         description:
           Data width in bytes (1 or 2). If omitted, default of 1 is used.
 
@@ -64,11 +65,10 @@ patternProperties:
         type: boolean
 
       samsung,srom-timing:
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32-array
-          - items:
-              minItems: 6
-              maxItems: 6
+        $ref: /schemas/types.yaml#/definitions/uint32-array
+        items:
+          minItems: 6
+          maxItems: 6
         description: |
           Array of 6 integers, specifying bank timings in the following order:
           Tacp, Tcah, Tcoh, Tacc, Tcos, Tacs.

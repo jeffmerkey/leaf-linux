@@ -12,8 +12,8 @@ maintainers:
 description: |
   Analog Devices ADXL345/ADXL375 3-Axis Digital Accelerometers that supports
   both I2C & SPI interfaces.
-    http://www.analog.com/en/products/mems/accelerometers/adxl345.html
-    http://www.analog.com/en/products/sensors-mems/accelerometers/adxl375.html
+    https://www.analog.com/en/products/mems/accelerometers/adxl345.html
+    https://www.analog.com/en/products/sensors-mems/accelerometers/adxl375.html
 
 properties:
   compatible:
@@ -40,18 +40,23 @@ required:
   - reg
   - interrupts
 
+allOf:
+  - $ref: /schemas/spi/spi-peripheral-props.yaml#
+
+unevaluatedProperties: false
+
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
     #include <dt-bindings/interrupt-controller/irq.h>
-    i2c0 {
+    i2c {
         #address-cells = <1>;
         #size-cells = <0>;
 
         /* Example for a I2C device node */
         accelerometer@2a {
             compatible = "adi,adxl345";
-            reg = <0x53>;
+            reg = <0x2a>;
             interrupt-parent = <&gpio0>;
             interrupts = <0 IRQ_TYPE_LEVEL_HIGH>;
         };
@@ -59,7 +64,7 @@ examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
     #include <dt-bindings/interrupt-controller/irq.h>
-    spi0 {
+    spi {
         #address-cells = <1>;
         #size-cells = <0>;
 

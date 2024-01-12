@@ -197,7 +197,7 @@ static int vmlfb_alloc_vram(struct vml_info *vinfo,
 		va = &vinfo->vram[i];
 		order = 0;
 
-		while (requested > (PAGE_SIZE << order) && order <= MAX_ORDER)
+		while (requested > (PAGE_SIZE << order) && order <= MAX_PAGE_ORDER)
 			order++;
 
 		err = vmlfb_alloc_vram_area(va, order, 0);
@@ -997,6 +997,8 @@ static int vmlfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
 	int ret;
 	unsigned long prot;
+
+	vma->vm_page_prot = pgprot_decrypted(vma->vm_page_prot);
 
 	ret = vmlfb_vram_offset(vinfo, offset);
 	if (ret)

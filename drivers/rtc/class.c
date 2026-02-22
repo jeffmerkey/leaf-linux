@@ -208,7 +208,7 @@ static struct rtc_device *rtc_allocate_device(void)
 {
 	struct rtc_device *rtc;
 
-	rtc = kzalloc(sizeof(*rtc), GFP_KERNEL);
+	rtc = kzalloc_obj(*rtc);
 	if (!rtc)
 		return NULL;
 

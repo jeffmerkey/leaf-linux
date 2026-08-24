@@ -1043,6 +1043,14 @@ L:	linux-sound@vger.kernel.org
 S:	Supported
 F:	sound/soc/amd/
 
+AMD AXI I3C MASTER DRIVER
+M:	Shubhrajyoti Datta <shubhrajyoti.datta@amd.com>
+M:	Shubham Patil <shubhamsanjay.patil@amd.com>
+L:	linux-i3c@lists.infradead.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/i3c/xlnx,axi-i3c-1.0.yaml
+F:	drivers/i3c/master/amd-i3c-master.c
+
 AMD AXI W1 DRIVER
 M:	Kris Chaplin <kris.chaplin@amd.com>
 R:	Thomas Delev <thomas.delev@amd.com>
@@ -5637,7 +5645,8 @@ S:	Maintained
 W:	https://btrfs.readthedocs.io
 Q:	https://patchwork.kernel.org/project/linux-btrfs/list/
 C:	irc://irc.libera.chat/btrfs
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kdave/linux.git
+T:	git https://github.com/btrfs/linux.git for-next
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kdave/linux.git for-next
 F:	Documentation/filesystems/btrfs.rst
 F:	fs/btrfs/
 F:	include/linux/btrfs*
@@ -6854,6 +6863,13 @@ L:	linux-pm@vger.kernel.org
 L:	linux-riscv@lists.infradead.org
 S:	Maintained
 F:	drivers/cpuidle/cpuidle-riscv-sbi.c
+
+CPUIDLE DRIVER - S390
+M:	Mete Durlu <meted@linux.ibm.com>
+L:	linux-pm@vger.kernel.org
+L:	linux-s390@vger.kernel.org
+S:	Maintained
+F:	drivers/cpuidle/cpuidle-s390.c
 
 CPUMASK API [RUST]
 M:	Viresh Kumar <viresh.kumar@linaro.org>
@@ -14182,9 +14198,11 @@ M:	Steve French <smfrench@gmail.com>
 M:	Steve French <sfrench@samba.org>
 R:	Sergey Senozhatsky <senozhatsky@chromium.org>
 R:	Tom Talpey <tom@talpey.com>
+R:	ChenXiaoSong <chenxiaosong@chenxiaosong.com>
+R:	ChenXiaoSong <chenxiaosong@kylinos.cn>
 L:	linux-cifs@vger.kernel.org
 S:	Maintained
-T:	git https://git.samba.org/ksmbd.git ksmbd-for-next
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/linkinjeon/smb.git ksmbd-for-next
 F:	Documentation/filesystems/smb/ksmbd.rst
 F:	fs/smb/common/
 F:	fs/smb/server/
@@ -14378,6 +14396,7 @@ S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
 F:	Documentation/admin-guide/mm/kho.rst
 F:	Documentation/core-api/kho/*
+F:	include/asm-generic/kexec_handover.h
 F:	include/linux/kexec_handover.h
 F:	include/linux/kho/
 F:	include/linux/kho_block.h
@@ -15476,7 +15495,9 @@ M:	Yang Xu <xuyang2018.jy@fujitsu.com>
 M:	Xiao Yang <yangx.jy@fujitsu.com>
 L:	ltp@lists.linux.it (subscribers-only)
 S:	Maintained
+C:	irc://irc.libera.chat/ltp
 W:	https://linux-test-project.readthedocs.io/
+Q:	https://patchwork.kernel.org/project/ltp/list/
 T:	git https://github.com/linux-test-project/ltp.git
 
 LTR390 AMBIENT/UV LIGHT SENSOR DRIVER
@@ -20806,8 +20827,8 @@ M:	Thierry Reding <thierry.reding@kernel.org>
 L:	linux-tegra@vger.kernel.org
 L:	linux-pci@vger.kernel.org
 S:	Supported
-F:	Documentation/devicetree/bindings/pci/nvidia,tegra20-pcie.txt
-F:	drivers/pci/controller/pci-tegra.c
+F:	Documentation/devicetree/bindings/pci/*tegra*
+F:	drivers/pci/controller/*tegra*
 
 PCI DRIVER FOR NXP LAYERSCAPE GEN4 CONTROLLER
 M:	Hou Zhiqiang <Zhiqiang.Hou@nxp.com>
@@ -20948,6 +20969,7 @@ B:	https://bugzilla.kernel.org
 C:	irc://irc.oftc.net/linux-pci
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/pci/pci.git
 F:	Documentation/ABI/testing/debugfs-pcie-ptm
+F:	Documentation/PCI/controller/
 F:	Documentation/devicetree/bindings/pci/
 F:	Documentation/trace/events-pci-controller.rst
 F:	drivers/pci/controller/
@@ -21110,6 +21132,7 @@ M:	Manivannan Sadhasivam <mani@kernel.org>
 L:	linux-pci@vger.kernel.org
 L:	linux-arm-msm@vger.kernel.org
 S:	Maintained
+F:	Documentation/devicetree/bindings/pci/qcom,*.yaml
 F:	drivers/pci/controller/dwc/pcie-qcom-common.c
 F:	drivers/pci/controller/dwc/pcie-qcom.c
 
@@ -23922,6 +23945,7 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/s390/linux.git
 F:	Documentation/driver-api/s390-drivers.rst
 F:	Documentation/arch/s390/
 F:	arch/s390/
+F:	drivers/cpuidle/cpuidle-s390.c
 F:	drivers/s390/
 F:	drivers/watchdog/diag288_wdt.c
 
@@ -25059,6 +25083,7 @@ SLEEPABLE READ-COPY UPDATE (SRCU)
 M:	Lai Jiangshan <jiangshanlai@gmail.com>
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 M:	Josh Triplett <josh@joshtriplett.org>
+M:	Onur Özkan <work@onurozkan.dev> (RUST)
 R:	Steven Rostedt <rostedt@goodmis.org>
 R:	Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
 L:	rcu@vger.kernel.org
@@ -25067,6 +25092,8 @@ W:	http://www.rdrop.com/users/paulmck/RCU/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rcu/linux.git rcu/dev
 F:	include/linux/srcu*.h
 F:	kernel/rcu/srcu*.c
+F:	rust/helpers/srcu.c
+F:	rust/kernel/sync/srcu.rs
 
 SMACK SECURITY MODULE
 M:	Casey Schaufler <casey@schaufler-ca.com>
